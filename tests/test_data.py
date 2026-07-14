@@ -1,9 +1,20 @@
 """Solver-free tests for data.py helpers (the micom path is covered by slow tests)."""
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from surrogate_mgem.data import GenomeModel, _member_exchange_rows, read_roster
+from surrogate_mgem.data import (
+    GenomeModel,
+    _member_exchange_rows,
+    medium_to_member_exchange,
+    read_roster,
+)
+
+
+def test_medium_to_member_exchange():
+    assert medium_to_member_exchange("EX_glc__D_m") == "EX_glc__D_e"
+    assert medium_to_member_exchange("EX_weird") == "EX_weird"  # non-_m left as-is
 
 
 def test_taxon_id_sanitises_ids():
@@ -30,6 +41,7 @@ def test_member_exchange_rows_keeps_only_signed_exchanges():
         {
             "EX_glc__D_e": [-5.0, 2.0],
             "EX_ac_e": [1e-12, 3.0],  # below eps for taxon 0 -> dropped
+            "EX_o2_e": [np.nan, 4.0],  # NaN for taxon 0 (no such reaction) -> dropped
             "PGI": [10.0, -4.0],  # internal, never an exchange
         },
         index=["t1", "t2"],
@@ -40,4 +52,5 @@ def test_member_exchange_rows_keeps_only_signed_exchanges():
         ("g1", "EX_glc__D_e"): -5.0,
         ("g2", "EX_glc__D_e"): 2.0,
         ("g2", "EX_ac_e"): 3.0,
+        ("g2", "EX_o2_e"): 4.0,
     }

@@ -130,7 +130,9 @@ def _member_exchange_rows(sample_id: int, taxon_to_genome: dict[str, str], fluxe
             if not (name.startswith("EX_") and name.endswith("_e")):
                 continue
             flux = float(member[col])
-            if abs(flux) < _FLUX_EPS:
+            # NaN: this taxon has no such reaction (pivoted frame gap). Skip it
+            # and near-zero fluxes (numerical noise, not a real exchange).
+            if not np.isfinite(flux) or abs(flux) < _FLUX_EPS:
                 continue
             rows.append(
                 {
@@ -224,20 +226,30 @@ def _run_subset(
 # ---------------------------------------------------------------------------
 
 
+def medium_to_member_exchange(medium_id: str) -> str:
+    """Map a community pool exchange id (``EX_<met>_m``) to its member id (``EX_<met>_e``).
+
+    micom couples each member's ``EX_<met>_e`` to a shared medium-pool exchange
+    ``EX_<met>_m``; the member reactions are renamed with a taxon suffix in the
+    merged community, so the pool ids are the stable way to enumerate the
+    member-exchange coordinate system. Non-``_m`` ids are returned unchanged.
+    """
+    return f"{medium_id[:-2]}_e" if medium_id.endswith("_m") else medium_id
+
+
 def build_exchange_universe(roster: list[GenomeModel], solver: str) -> dict[str, list[str]]:
     """Return the union of medium (``EX_*_m``) and member (``EX_*_e``) exchange ids.
 
     Built once from the full-roster community so training can align every
     sample's long rows to a fixed coordinate system regardless of membership.
+    Member ids are derived from the medium pool (see
+    ``medium_to_member_exchange``), since the merged community renames the raw
+    ``EX_*_e`` reactions with a taxon suffix.
     """
     community = _build_community(roster, solver)
     medium = sorted(rxn.id for rxn in community.exchanges)
-    member = sorted(
-        str(rxn.id)
-        for rxn in community.reactions
-        if str(rxn.id).startswith("EX_") and str(rxn.id).endswith("_e")
-    )
-    return {"medium_exchanges": medium, "member_exchanges": sorted(set(member))}
+    member = sorted({medium_to_member_exchange(ex) for ex in medium if ex.endswith("_m")})
+    return {"medium_exchanges": medium, "member_exchanges": member}
 
 
 # ---------------------------------------------------------------------------
