@@ -207,37 +207,61 @@ def make_fixed_community_evaluator(
     return evaluate, active_mask
 
 
-def _run_subset(
+def _make_design(config: GenerateConfig, dim: int, seed: int) -> np.ndarray:
+    """Generate the full ``(media_per_community, dim)`` medium design for a community.
+
+    Deterministic in ``seed``, so a media shard can be regenerated identically in
+    any worker and sliced -- no need to ship the array between processes.
+    """
+    if config.sampler == "dirichlet":
+        return sampling.dirichlet_sample(config.media_per_community, dim, config.max_uptake, seed)
+    if config.sampler == "lhs":
+        return sampling.latin_hypercube(config.media_per_community, dim, config.max_uptake, seed)
+    if config.sampler == "sparse":
+        return sampling.sparse_media(
+            config.media_per_community, dim, config.n_active, config.max_uptake, seed
+        )
+    base = np.full(dim, config.max_uptake, dtype=float)  # perturb the full environment
+    return sampling.perturb_media(config.media_per_community, base, seed)
+
+
+def _shard_ranges(total: int, workers: int) -> list[tuple[int, int]]:
+    """Split ``total`` media draws into ``workers`` contiguous ``(start, count)`` ranges."""
+    n = max(1, min(workers, total))
+    size, rem = divmod(total, n)
+    ranges, start = [], 0
+    for i in range(n):
+        count = size + (1 if i < rem else 0)
+        if count:
+            ranges.append((start, count))
+            start += count
+    return ranges
+
+
+def _run_media_shard(
     members: list[GenomeModel],
     community_index: int,
     config: GenerateConfig,
+    start: int,
+    count: int,
 ) -> dict[str, list[dict]]:
-    """Solve all media draws for one community subset; return long-format rows.
+    """Solve ``count`` media (from ``start``) of one community; return long-format rows.
 
-    Runs in a worker process, so it (re)builds its own community and returns
-    plain dict rows (picklable) rather than a live community object.
+    Runs in a worker process: rebuilds its own community, regenerates the
+    deterministic design and takes its ``[start:start+count]`` slice, so media
+    *within* a single community parallelise across workers (not just whole
+    communities).
     """
     community = _build_community(members, config.solver)
     med_ex = _medium_exchanges(community)
-    dim = len(med_ex)
     taxon_to_genome = {m.taxon_id: m.genome_id for m in members}
     community_id = "+".join(sorted(m.genome_id for m in members))
     seed = config.seed + community_index * 1000
-
-    if config.sampler == "dirichlet":
-        design = sampling.dirichlet_sample(config.media_per_community, dim, config.max_uptake, seed)
-    elif config.sampler == "lhs":
-        design = sampling.latin_hypercube(config.media_per_community, dim, config.max_uptake, seed)
-    elif config.sampler == "sparse":
-        design = sampling.sparse_media(
-            config.media_per_community, dim, config.n_active, config.max_uptake, seed
-        )
-    else:  # perturb: drop/scale components of the full (growth-supporting) environment
-        base = np.full(dim, config.max_uptake, dtype=float)
-        design = sampling.perturb_media(config.media_per_community, base, seed)
+    design = _make_design(config, len(med_ex), seed)[start : start + count]
 
     out = {"samples": [], "membership": [], "media": [], "member_growth": [], "member_exchange": []}
-    for draw, vector in enumerate(design):
+    for local, vector in enumerate(design):
+        draw = start + local
         sample_id = community_index * config.media_per_community + draw
         uptake = {ex: float(b) for ex, b in zip(med_ex, vector, strict=True)}
         solution = _solve_sample(community, uptake, config.tradeoff)
@@ -271,7 +295,7 @@ def _run_subset(
             _member_exchange_rows(sample_id, taxon_to_genome, solution.fluxes)
         )
     LOGGER.info(
-        "Community %d (%d members): %d media solved.", community_index, len(members), len(design)
+        "Community %d media [%d:%d]: %d solved.", community_index, start, start + count, len(design)
     )
     return out
 
@@ -323,11 +347,22 @@ def generate(roster: list[GenomeModel], config: GenerateConfig) -> dict[str, Pat
         len(roster), config.n_communities, config.size_range, config.seed
     )
     member_subsets = [[roster[i] for i in idx] for idx in subsets]
+    # Work unit = one media shard of one community, so media within a single
+    # community parallelise (not just whole communities). Each community's media
+    # are split into `workers` shards; all shards across all communities are then
+    # distributed over the pool.
+    tasks = [
+        (members, ci, start, count)
+        for ci, members in enumerate(member_subsets)
+        for start, count in _shard_ranges(config.media_per_community, config.workers)
+    ]
     LOGGER.info(
-        "Solving %d communities x %d media (%s sampler)...",
+        "Solving %d communities x %d media (%s sampler) as %d shards over %d workers...",
         len(member_subsets),
         config.media_per_community,
         config.sampler,
+        len(tasks),
+        config.workers,
     )
 
     collected = {
@@ -339,14 +374,14 @@ def generate(roster: list[GenomeModel], config: GenerateConfig) -> dict[str, Pat
             collected[key].extend(rows)
 
     if config.workers <= 1:
-        for i, members in enumerate(member_subsets):
-            absorb(_run_subset(members, i, config))
+        for members, ci, start, count in tasks:
+            absorb(_run_media_shard(members, ci, config, start, count))
     else:
         with ProcessPoolExecutor(max_workers=config.workers) as executor:
-            futures = {
-                executor.submit(_run_subset, members, i, config): i
-                for i, members in enumerate(member_subsets)
-            }
+            futures = [
+                executor.submit(_run_media_shard, members, ci, config, start, count)
+                for members, ci, start, count in tasks
+            ]
             for future in as_completed(futures):
                 absorb(future.result())
 

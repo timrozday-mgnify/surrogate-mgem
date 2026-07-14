@@ -7,9 +7,31 @@ import pytest
 from surrogate_mgem.data import (
     GenomeModel,
     _member_exchange_rows,
+    _shard_ranges,
     medium_to_member_exchange,
     read_roster,
 )
+
+
+def test_shard_ranges_partition_media_evenly():
+    # 100 media over 8 workers: contiguous, non-overlapping, covers everything.
+    ranges = _shard_ranges(100, 8)
+    assert len(ranges) == 8
+    assert ranges[0][0] == 0
+    total = sum(count for _, count in ranges)
+    assert total == 100
+    # contiguity: each start == previous start + previous count
+    for (s0, c0), (s1, _c1) in zip(ranges, ranges[1:], strict=False):
+        assert s1 == s0 + c0
+    # remainder distributed to the first shards (sizes differ by at most 1)
+    counts = [c for _, c in ranges]
+    assert max(counts) - min(counts) <= 1
+
+
+def test_shard_ranges_more_workers_than_media():
+    ranges = _shard_ranges(3, 8)
+    assert sum(c for _, c in ranges) == 3
+    assert all(c >= 1 for _, c in ranges)  # no empty shards
 
 
 def test_medium_to_member_exchange():
