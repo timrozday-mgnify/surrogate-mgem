@@ -1,0 +1,28 @@
+nextflow_pipeline {
+    name "Pipeline stub: generate -> merge -> active -> sweep -> leaderboard"
+    script "../main.nf"
+    tag "pipeline"
+
+    test("stub wires the full DAG") {
+        options "-stub"
+        when {
+            params {
+                roster                = "$projectDir/tests/roster.csv"
+                outdir                = "$outputDir"
+                num_shards            = 2
+                n_communities_augment = 1
+                active_rounds         = 1
+                hidden_configs        = '64,64'
+                n_models_list         = '2'
+                train_sizes           = '40'
+            }
+        }
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert path("$outputDir/leaderboard.csv").exists() },
+                { assert path("$outputDir/models").list().size() >= 1 },
+            )
+        }
+    }
+}
