@@ -23,6 +23,7 @@ dependencies = [
 data = [
     "micom>=0.33",
     "cobra>=0.29",
+    "highspy>=1.7",  # HiGHS backs the default "hybrid" solver (no CPLEX/Gurobi licence)
 ]
 dev = [
     "pytest>=7.4",

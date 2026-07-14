@@ -43,6 +43,18 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--solver", default="hybrid")
     gen.add_argument("--seed", type=int, default=0)
     gen.add_argument("--workers", type=int, default=1)
+    gen.add_argument(
+        "--num-shards",
+        type=int,
+        default=1,
+        help="Total HPC shards; this run solves communities where ci %% num_shards == shard_index.",
+    )
+    gen.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="This shard's index in [0, num_shards). Shard 0 also writes exchange_universe.json.",
+    )
 
     tr = subparsers.add_parser("train", help="Train a fixed-community growth-surrogate ensemble.")
     tr.add_argument(
@@ -55,8 +67,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--community-id", default=None, help="Community to train on (default: most-sampled)."
     )
     tr.add_argument("--n-models", type=int, default=5, help="Ensemble size.")
+    tr.add_argument(
+        "--hidden",
+        default="256,256",
+        help="MLP hidden layers as comma-separated widths (e.g. '512,512,512').",
+    )
     tr.add_argument("--epochs", type=int, default=300)
     tr.add_argument("--test-size", type=float, default=0.2)
+    tr.add_argument(
+        "--n-train",
+        type=int,
+        default=None,
+        help="Cap the training split to this many rows (learning-curve sweeps).",
+    )
     tr.add_argument("--seed", type=int, default=0)
     # Active learning (off unless --active-rounds > 0).
     tr.add_argument(
@@ -85,6 +108,29 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--tradeoff", type=float, default=0.35)
     tr.add_argument("--solver", default="hybrid")
 
+    ar = subparsers.add_parser(
+        "active-round",
+        help="Run one active-learning round for a community; write augmented tables.",
+    )
+    ar.add_argument("--data-dir", type=Path, required=True, help="Current dataset dir.")
+    ar.add_argument("--community-id", required=True, help="Community to augment.")
+    ar.add_argument("--roster", type=Path, required=True, help="Roster CSV (solver oracle).")
+    ar.add_argument("--out", type=Path, required=True, help="Output augmented dataset dir.")
+    ar.add_argument("--round", type=int, default=0, help="Round index (seeds proposals).")
+    ar.add_argument("--batch-size", type=int, default=16, help="Real solves this round.")
+    ar.add_argument("--n-candidates", type=int, default=2000, help="Media proposed this round.")
+    ar.add_argument(
+        "--sampler", choices=["perturb", "sparse", "dirichlet", "lhs"], default="perturb"
+    )
+    ar.add_argument("--n-active", type=int, default=20)
+    ar.add_argument("--n-models", type=int, default=5, help="Acquisition ensemble size.")
+    ar.add_argument("--hidden", default="256,256", help="Acquisition MLP hidden widths.")
+    ar.add_argument("--epochs", type=int, default=300)
+    ar.add_argument("--max-uptake", type=float, default=1000.0)
+    ar.add_argument("--tradeoff", type=float, default=0.35)
+    ar.add_argument("--solver", default="hybrid")
+    ar.add_argument("--seed", type=int, default=0)
+
     rp = subparsers.add_parser(
         "report", help="Render the Quarto performance report for a train run."
     )
@@ -96,6 +142,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("validate", help="validate (not yet implemented)")
     subparsers.add_parser("search", help="search (not yet implemented)")
     return parser
+
+
+def _parse_hidden(spec: str) -> tuple[int, ...]:
+    """Parse a ``"256,256"`` hidden-layer spec into a tuple of widths."""
+    return tuple(int(w) for w in spec.split(",") if w.strip())
 
 
 def _run_generate(args: argparse.Namespace) -> int:
@@ -114,6 +165,8 @@ def _run_generate(args: argparse.Namespace) -> int:
         solver=args.solver,
         seed=args.seed,
         workers=args.workers,
+        shard_index=args.shard_index,
+        num_shards=args.num_shards,
     )
     generate(read_roster(args.roster), config)
     return 0
@@ -133,8 +186,10 @@ def _run_train(args: argparse.Namespace) -> int:
             dataset,
             args.out,
             n_models=args.n_models,
+            hidden=_parse_hidden(args.hidden),
             epochs=args.epochs,
             test_size=args.test_size,
+            n_train=args.n_train,
             seed=args.seed,
         )
         return 0
@@ -165,6 +220,35 @@ def _run_train(args: argparse.Namespace) -> int:
         tradeoff=args.tradeoff,
         test_size=args.test_size,
         seed=args.seed,
+    )
+    return 0
+
+
+def _run_active_round(args: argparse.Namespace) -> int:
+    """Dispatch the ``active-round`` subcommand (one round, augment the tables)."""
+    from surrogate_mgem.active import ActiveConfig
+    from surrogate_mgem.train import run_active_round
+
+    config = ActiveConfig(
+        batch_size=args.batch_size,
+        n_candidates=args.n_candidates,
+        max_uptake=args.max_uptake,
+        sampler=args.sampler,
+        n_active=args.n_active,
+        n_models=args.n_models,
+        hidden=_parse_hidden(args.hidden),
+        epochs=args.epochs,
+        seed=args.seed,
+    )
+    run_active_round(
+        args.data_dir,
+        args.community_id,
+        args.roster,
+        args.out,
+        active_config=config,
+        solver=args.solver,
+        tradeoff=args.tradeoff,
+        round_index=args.round,
     )
     return 0
 
@@ -200,6 +284,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_generate(args)
     if args.command == "train":
         return _run_train(args)
+    if args.command == "active-round":
+        return _run_active_round(args)
     if args.command == "report":
         return _run_report(args)
     raise SystemExit(f"'{args.command}' is not implemented yet.")

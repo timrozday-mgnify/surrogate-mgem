@@ -45,6 +45,7 @@ class ActiveConfig:
     sampler: str = "perturb"  # candidate proposal distribution
     n_active: int = 20  # sparse proposer: active components per candidate
     n_models: int = 5
+    hidden: tuple[int, ...] = (256, 256)  # acquisition-ensemble architecture
     epochs: int = 300
     pool_factor: int = 4  # diversity pool = pool_factor * batch_size
     seed: int = 0
@@ -114,6 +115,57 @@ def _metrics(ensemble: GrowthEnsemble, X_test, Y_test) -> dict[str, float]:
     return {"r2": float(r2_score(Y_test, pred)), "mae": float(mean_absolute_error(Y_test, pred))}
 
 
+def active_round(
+    X: np.ndarray,
+    Y: np.ndarray,
+    evaluate: Evaluator,
+    active_mask: np.ndarray,
+    config: ActiveConfig,
+    round_index: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run one active-learning round; return the newly-solved feasible ``(X_new, Y_new)``.
+
+    Trains an ensemble on ``(X, Y)``, proposes cheap candidate media, scores them
+    by ensemble disagreement, selects a diverse high-uncertainty batch, and solves
+    *only that batch* with ``evaluate``. This is the loop body of
+    :func:`active_learning_loop` factored out so a pipeline can drive rounds as
+    discrete steps (each round appends its results to the training tables and the
+    next round refits on the enlarged set). ``round_index`` seeds the proposal RNG
+    so successive rounds explore fresh candidates.
+    """
+    X = np.asarray(X, dtype=np.float32)
+    Y = np.asarray(Y, dtype=np.float32)
+    ensemble = GrowthEnsemble(
+        X.shape[1], Y.shape[1], n_models=config.n_models, hidden=config.hidden
+    )
+    ensemble.fit(X, Y, base_seed=config.seed, epochs=config.epochs)
+
+    candidates = propose_candidates(
+        active_mask,
+        config.n_candidates,
+        config.max_uptake,
+        config.sampler,
+        config.seed + round_index + 1,
+        config.n_active,
+    )
+    _, std = ensemble.predict_with_uncertainty(candidates)
+    picks = diverse_topk(candidates, std.mean(axis=1), config.batch_size, config.pool_factor)
+
+    new_X, new_Y = [], []
+    for i in picks:
+        y = evaluate(candidates[i])
+        if y is not None:
+            new_X.append(candidates[i])
+            new_Y.append(np.asarray(y, dtype=np.float32))
+    LOGGER.info("Active round %d: %d/%d picks feasible.", round_index, len(new_X), len(picks))
+    if not new_X:
+        return (
+            np.empty((0, X.shape[1]), dtype=np.float32),
+            np.empty((0, Y.shape[1]), dtype=np.float32),
+        )
+    return np.stack(new_X), np.stack(new_Y)
+
+
 def active_learning_loop(
     X0: np.ndarray,
     Y0: np.ndarray,
@@ -135,7 +187,7 @@ def active_learning_loop(
     history: list[dict[str, float]] = []
 
     def train() -> GrowthEnsemble:
-        ens = GrowthEnsemble(X.shape[1], n_out, n_models=config.n_models)
+        ens = GrowthEnsemble(X.shape[1], n_out, n_models=config.n_models, hidden=config.hidden)
         ens.fit(X, Y, base_seed=config.seed, epochs=config.epochs)
         return ens
 

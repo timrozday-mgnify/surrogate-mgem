@@ -54,5 +54,41 @@ src/surrogate_mgem/
   validate.py  # validation suite (accuracy, composition, direction, fidelity)
   infer.py     # inference + verify-shortlist helper
   search.py    # surrogate-driven media search with verify-in-loop
-  cli.py       # `surrogate-mgem {generate,train,validate,search}`
+  cli.py       # `surrogate-mgem {generate,train,active-round,validate,search}`
 ```
+
+## HPC training pipeline (Nextflow)
+
+`main.nf` scales the whole flow across a cluster: generate a large seed dataset,
+supplement it with active learning, and sweep model configurations — collecting a
+leaderboard of held-out metrics. See [`CLAUDE.md`](CLAUDE.md) for the DAG and
+module layout.
+
+```
+generate (sharded)  ->  merge  ->  pick top communities
+   -> active-learning supplementation (N discrete rounds / community)
+   -> model sweep (architecture x ensemble-size x train-size)
+   -> leaderboard.csv
+```
+
+Swept dimensions (comma-separated lists; `;` separates architecture specs):
+
+- `--hidden_configs '256,256;512,512,512'` — MLP architectures (layers x width)
+- `--n_models_list '3,5'` — ensemble sizes
+- `--train_sizes '200,500,1000'` — `train --n-train` caps (a learning curve on a
+  fixed dataset)
+
+```bash
+# stub run (no solver, no containers) — checks the wiring
+nf-test test tests/default.nf.test
+
+# real run
+nextflow run main.nf -profile docker --roster roster.csv --outdir results \
+    --n_communities 200 --num_shards 20 --active_rounds 5
+```
+
+Two container images (built out-of-repo, referenced by GHCR convention —
+`ghcr.io/timrozday-mgnify/surrogate-mgem-{train,data}`): a light `train` image
+(torch + sklearn) and a heavy `data` image (micom + cobra + HiGHS). Build with
+`docker/{train,data}.Dockerfile`. HPC executor/queue is layered via an external
+`-c site.config` (no slurm profile ships in-repo).

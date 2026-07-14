@@ -25,6 +25,7 @@ class GrowthSurrogate(nn.Module):
         super().__init__()
         self.n_in = n_in
         self.n_out = n_out
+        self.hidden = tuple(hidden)
         layers: list[nn.Module] = []
         width = n_in
         for h in hidden:
@@ -108,12 +109,26 @@ class GrowthSurrogate(nn.Module):
 
     def save(self, path: Path) -> None:
         """Save weights, buffers, and shape/architecture to a checkpoint."""
-        torch.save({"state_dict": self.state_dict(), "n_in": self.n_in, "n_out": self.n_out}, path)
+        torch.save(
+            {
+                "state_dict": self.state_dict(),
+                "n_in": self.n_in,
+                "n_out": self.n_out,
+                "hidden": list(self.hidden),
+            },
+            path,
+        )
 
     @classmethod
-    def load(cls, path: Path, hidden: tuple[int, ...] = (256, 256)) -> GrowthSurrogate:
-        """Load a checkpoint saved by :meth:`save`."""
+    def load(cls, path: Path, hidden: tuple[int, ...] | None = None) -> GrowthSurrogate:
+        """Load a checkpoint saved by :meth:`save`.
+
+        Architecture is read from the checkpoint (older checkpoints without it
+        fall back to ``(256, 256)``); pass ``hidden`` only to override.
+        """
         blob = torch.load(path, weights_only=True)
+        if hidden is None:
+            hidden = tuple(blob.get("hidden", (256, 256)))
         model = cls(blob["n_in"], blob["n_out"], hidden=hidden)
         model.load_state_dict(blob["state_dict"])
         model.eval()

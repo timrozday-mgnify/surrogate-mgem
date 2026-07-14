@@ -59,6 +59,12 @@ class GenerateConfig:
     seed: int = 0
     workers: int = 1
     knockouts: bool = False  # also record single-member-drop growth changes
+    # HPC fan-out: solve only communities with `ci % num_shards == shard_index`.
+    # Membership sampling is deterministic in `seed`, so every shard derives the
+    # same full community list and takes its own slice. The shared exchange
+    # universe is written only by shard 0 (the merge step reuses it).
+    shard_index: int = 0
+    num_shards: int = 1
     extra: dict = field(default_factory=dict)
 
 
@@ -339,9 +345,12 @@ def build_exchange_universe(roster: list[GenomeModel], solver: str) -> dict[str,
 def generate(roster: list[GenomeModel], config: GenerateConfig) -> dict[str, Path]:
     """Generate training tables for a roster; return the written file paths."""
     config.out_dir.mkdir(parents=True, exist_ok=True)
-    LOGGER.info("Building exchange universe from %d genomes...", len(roster))
-    universe = build_exchange_universe(roster, config.solver)
-    (config.out_dir / "exchange_universe.json").write_text(json.dumps(universe, indent=2))
+    # The exchange universe is the shared coordinate system for every shard; only
+    # shard 0 builds+writes it (a full-roster community build), the merge reuses it.
+    if config.shard_index == 0:
+        LOGGER.info("Building exchange universe from %d genomes...", len(roster))
+        universe = build_exchange_universe(roster, config.solver)
+        (config.out_dir / "exchange_universe.json").write_text(json.dumps(universe, indent=2))
 
     subsets = sampling.sample_membership(
         len(roster), config.n_communities, config.size_range, config.seed
@@ -350,10 +359,13 @@ def generate(roster: list[GenomeModel], config: GenerateConfig) -> dict[str, Pat
     # Work unit = one media shard of one community, so media within a single
     # community parallelise (not just whole communities). Each community's media
     # are split into `workers` shards; all shards across all communities are then
-    # distributed over the pool.
+    # distributed over the pool. Across HPC shards, community `ci` is solved only
+    # by the shard it belongs to (`ci % num_shards`); the original `ci` is kept
+    # (not renumbered) so seeds and sample_ids stay globally consistent.
     tasks = [
         (members, ci, start, count)
         for ci, members in enumerate(member_subsets)
+        if ci % config.num_shards == config.shard_index
         for start, count in _shard_ranges(config.media_per_community, config.workers)
     ]
     LOGGER.info(
@@ -390,7 +402,8 @@ def generate(roster: list[GenomeModel], config: GenerateConfig) -> dict[str, Pat
         path = config.out_dir / f"{name}.csv"
         pd.DataFrame(rows).to_csv(path, index=False)
         written[name] = path
-    written["exchange_universe"] = config.out_dir / "exchange_universe.json"
+    if config.shard_index == 0:
+        written["exchange_universe"] = config.out_dir / "exchange_universe.json"
     n_feasible = sum(1 for r in collected["samples"] if r["feasible"])
     LOGGER.info(
         "Wrote %d samples (%d feasible) to %s",

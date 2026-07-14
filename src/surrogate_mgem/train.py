@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -145,19 +146,34 @@ def train_fixed_community(
     out_dir: Path,
     *,
     n_models: int = 5,
+    hidden: tuple[int, ...] = (256, 256),
     epochs: int = 300,
     test_size: float = 0.2,
+    n_train: int | None = None,
     seed: int = 0,
 ) -> dict:
-    """Train an ensemble for one community (no active loop); write report inputs."""
+    """Train an ensemble for one community (no active loop); write report inputs.
+
+    ``hidden`` sets the MLP architecture (layers x width); ``n_train`` optionally
+    caps the training split to that many rows (seeded subsample) so a fixed
+    dataset can be swept along a learning curve. The held-out test split is
+    unaffected by the cap.
+    """
     X_tr, X_te, Y_tr, Y_te = train_test_split(
         dataset.X, dataset.Y, test_size=test_size, random_state=seed
     )
-    ensemble = GrowthEnsemble(dataset.X.shape[1], dataset.Y.shape[1], n_models=n_models)
+    if n_train is not None and n_train < len(X_tr):
+        idx = np.random.default_rng(seed).choice(len(X_tr), size=n_train, replace=False)
+        X_tr, Y_tr = X_tr[idx], Y_tr[idx]
+    ensemble = GrowthEnsemble(
+        dataset.X.shape[1], dataset.Y.shape[1], n_models=n_models, hidden=hidden
+    )
     ensemble.fit(X_tr, Y_tr, base_seed=seed, epochs=epochs)
     metrics = {
         "community_id": dataset.community_id,
         "mode": "static",
+        "hidden": list(hidden),
+        "n_models": int(n_models),
         "n_samples": int(len(dataset.X)),
         "n_train": int(len(X_tr)),
         "n_test": int(len(X_te)),
@@ -221,5 +237,123 @@ def train_fixed_community_active(
         metrics["n_final_train"],
         active_config.rounds,
         metrics["r2_overall"],
+    )
+    return metrics
+
+
+# ---------------------------------------------------------------------------
+# Single active-learning round (pipeline step): augment the tidy tables in place
+# ---------------------------------------------------------------------------
+
+_TABLES = ("samples", "media", "member_growth", "membership")
+
+
+def _write_augmented_dataset(
+    data_dir: Path,
+    out_dir: Path,
+    dataset: FixedCommunityDataset,
+    X_new: np.ndarray,
+    Y_new: np.ndarray,
+    round_index: int,
+) -> None:
+    """Write a single-community dataset dir: this community's rows + the new solves.
+
+    Emits the tidy tables (and ``exchange_universe.json``) in the same schema
+    :func:`load_fixed_community_dataset` reads, so the next round / the model
+    sweep can consume the output as an ordinary dataset directory. New samples get
+    fresh string ids ``act_r{round}_{k}``; per-member exchange fluxes are not
+    recorded (the oracle returns growth only, which is all fixed-community training
+    uses).
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(data_dir / "exchange_universe.json", out_dir / "exchange_universe.json")
+
+    samples = pd.read_csv(data_dir / "samples.csv")
+    kept_ids = samples.loc[samples["community_id"] == dataset.community_id, "sample_id"].tolist()
+
+    new_samples, new_media, new_growth, new_membership = [], [], [], []
+    for k in range(len(X_new)):
+        sid = f"act_r{round_index}_{k}"
+        new_samples.append(
+            {
+                "sample_id": sid,
+                "community_id": dataset.community_id,
+                "n_members": len(dataset.target_names),
+                "feasible": True,
+                "community_growth": np.nan,
+            }
+        )
+        for j, feat in enumerate(dataset.feature_names):
+            if X_new[k, j] > 0:
+                new_media.append(
+                    {"sample_id": sid, "exchange_id": feat, "uptake": float(X_new[k, j])}
+                )
+        for i, genome in enumerate(dataset.target_names):
+            new_growth.append({"sample_id": sid, "genome_id": genome, "growth": float(Y_new[k, i])})
+            new_membership.append({"sample_id": sid, "genome_id": genome})
+
+    new_rows = {
+        "samples": new_samples,
+        "media": new_media,
+        "member_growth": new_growth,
+        "membership": new_membership,
+    }
+    for name in _TABLES:
+        path = data_dir / f"{name}.csv"
+        table = pd.read_csv(path) if path.exists() else pd.DataFrame()
+        if not table.empty:
+            table = table[table["sample_id"].isin(kept_ids)]
+        combined = pd.concat([table, pd.DataFrame(new_rows[name])], ignore_index=True)
+        combined.to_csv(out_dir / f"{name}.csv", index=False)
+
+
+def run_active_round(
+    data_dir: Path,
+    community_id: str | None,
+    roster_path: Path,
+    out_dir: Path,
+    *,
+    active_config: ActiveConfig,
+    solver: str = "hybrid",
+    tradeoff: float = 0.35,
+    round_index: int = 0,
+) -> dict:
+    """One active round for one community; write the augmented single-community dir.
+
+    Loads the community's current tables, builds the real solver oracle, solves a
+    diverse high-uncertainty batch (:func:`~surrogate_mgem.active.active_round`),
+    and appends the new samples to a fresh output dataset dir.
+    """
+    from surrogate_mgem.active import active_round
+    from surrogate_mgem.data import (
+        make_fixed_community_evaluator,
+        members_for_community,
+        read_roster,
+    )
+
+    dataset = load_fixed_community_dataset(data_dir, community_id)
+    members = members_for_community(read_roster(roster_path), dataset.community_id)
+    evaluate, active_mask = make_fixed_community_evaluator(
+        members, dataset.feature_names, dataset.target_names, solver, tradeoff
+    )
+    X_new, Y_new = active_round(
+        dataset.X, dataset.Y, evaluate, active_mask, active_config, round_index
+    )
+    _write_augmented_dataset(data_dir, out_dir, dataset, X_new, Y_new, round_index)
+    metrics = {
+        "community_id": dataset.community_id,
+        "round": round_index,
+        "n_prior": int(len(dataset.X)),
+        "n_new_feasible": int(len(X_new)),
+        "n_total": int(len(dataset.X) + len(X_new)),
+    }
+    (out_dir / "active_round_metrics.json").write_text(json.dumps(metrics, indent=2))
+    LOGGER.info(
+        "Active round %d on %s: +%d feasible (%d -> %d).",
+        round_index,
+        dataset.community_id,
+        metrics["n_new_feasible"],
+        metrics["n_prior"],
+        metrics["n_total"],
     )
     return metrics

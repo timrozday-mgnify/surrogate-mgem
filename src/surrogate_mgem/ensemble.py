@@ -51,8 +51,12 @@ class GrowthEnsemble:
             model.save(directory / f"member_{i}.pt")
 
     @classmethod
-    def load(cls, directory: Path, hidden: tuple[int, ...] = (256, 256)) -> GrowthEnsemble:
-        """Load an ensemble saved by :meth:`save`."""
+    def load(cls, directory: Path, hidden: tuple[int, ...] | None = None) -> GrowthEnsemble:
+        """Load an ensemble saved by :meth:`save`.
+
+        Each member reads its architecture from its own checkpoint; pass
+        ``hidden`` only to override.
+        """
         paths = sorted(directory.glob("member_*.pt"))
         if not paths:
             raise FileNotFoundError(f"No ensemble members found in {directory}.")
@@ -60,6 +64,6 @@ class GrowthEnsemble:
         ensemble = cls.__new__(cls)
         ensemble.n_in = models[0].n_in
         ensemble.n_out = models[0].n_out
-        ensemble.hidden = hidden
+        ensemble.hidden = models[0].hidden
         ensemble.models = models
         return ensemble
