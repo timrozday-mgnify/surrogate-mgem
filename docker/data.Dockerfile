@@ -4,8 +4,9 @@
 FROM python:3.11-slim
 
 # cobra/micom pull in scientific wheels that need a compiler toolchain at build.
+# libexpat1 is a runtime dep of libsbml (cobra's SBML reader) not in python:slim.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential glpk-utils libglpk-dev \
+        build-essential glpk-utils libglpk-dev libexpat1 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PIP_NO_CACHE_DIR=1
