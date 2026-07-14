@@ -46,9 +46,9 @@ process COLLECT_METRICS {
 
     stub:
     """
-    printf 'community_id,hidden,n_models,n_train,r2_overall,mae_overall\\n' > leaderboard.csv
+    printf 'community_id,hidden,n_models,n_train,r2_overall,mae_overall,epochs_run_mean,stopped_early_frac,best_val_mean,final_batch_size_max\\n' > leaderboard.csv
     for f in */train_metrics.json; do
-        [ -e "\$f" ] && printf 'stub,64x64,2,40,0.5,0.1\\n' >> leaderboard.csv
+        [ -e "\$f" ] && printf 'stub,64x64,2,40,0.5,0.1,120.0,1.0,0.05,128\\n' >> leaderboard.csv
     done
 
     cat <<-END_VERSIONS > versions.yml

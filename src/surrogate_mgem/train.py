@@ -89,6 +89,36 @@ def load_fixed_community_dataset(
     )
 
 
+def _training_stats(histories: list[dict] | None) -> dict:
+    """Flat scalar summary of the ensemble's training histories (empty if none).
+
+    Kept flat (not nested) so it drops straight into ``train_metrics.json`` and
+    surfaces as leaderboard columns without special-casing in ``collect_metrics``.
+    """
+    if not histories:
+        return {}
+    return {
+        "epochs_run_mean": float(np.mean([h["epochs_run"] for h in histories])),
+        "epochs_run_max": int(max(h["epochs_run"] for h in histories)),
+        "stopped_early_frac": float(np.mean([h["stopped_early"] for h in histories])),
+        "best_val_mean": float(np.mean([h["best_val"] for h in histories])),
+        "final_lr_mean": float(np.mean([h["final_lr"] for h in histories])),
+        "final_batch_size_max": int(max(h["final_batch_size"] for h in histories)),
+    }
+
+
+def _write_training_history(out_dir: Path, histories: list[dict] | None) -> None:
+    """Write per-member, per-epoch train/val curves to ``training_history.csv``."""
+    if not histories:
+        return
+    rows = [
+        {"member": m, "epoch": e, "train": tr, "val": va}
+        for m, h in enumerate(histories)
+        for e, (tr, va) in enumerate(zip(h["train"], h["val"]))
+    ]
+    pd.DataFrame(rows).to_csv(out_dir / "training_history.csv", index=False)
+
+
 def _test_metrics(pred: np.ndarray, Y_te: np.ndarray, target_names: list[str]) -> dict:
     """Overall + per-member R^2/MAE on the held-out set."""
     return {
@@ -112,6 +142,7 @@ def _write_report_inputs(
     """Write predictions, metrics, meta (and history) the Quarto report reads."""
     out_dir.mkdir(parents=True, exist_ok=True)
     ensemble.save(out_dir / "ensemble")
+    _write_training_history(out_dir, getattr(ensemble, "last_history", None))
 
     mean, std = ensemble.predict_with_uncertainty(X_te)
     rows = []
@@ -147,9 +178,11 @@ def train_fixed_community(
     *,
     n_models: int = 5,
     hidden: tuple[int, ...] = (256, 256),
-    epochs: int = 300,
+    epochs: int = 1000,
     test_size: float = 0.2,
     n_train: int | None = None,
+    weight_decay: float = 0.0,
+    density_weights: bool = True,
     seed: int = 0,
 ) -> dict:
     """Train an ensemble for one community (no active loop); write report inputs.
@@ -168,7 +201,14 @@ def train_fixed_community(
     ensemble = GrowthEnsemble(
         dataset.X.shape[1], dataset.Y.shape[1], n_models=n_models, hidden=hidden
     )
-    ensemble.fit(X_tr, Y_tr, base_seed=seed, epochs=epochs)
+    ensemble.fit(
+        X_tr,
+        Y_tr,
+        base_seed=seed,
+        epochs=epochs,
+        weight_decay=weight_decay,
+        sample_weight="auto" if density_weights else None,
+    )
     metrics = {
         "community_id": dataset.community_id,
         "mode": "static",
@@ -179,6 +219,7 @@ def train_fixed_community(
         "n_test": int(len(X_te)),
         "n_members": int(dataset.Y.shape[1]),
         **_test_metrics(ensemble.predict(X_te), Y_te, dataset.target_names),
+        **_training_stats(ensemble.last_history),
     }
     _write_report_inputs(out_dir, dataset, ensemble, X_te, Y_te, metrics, history=None)
     LOGGER.info(
@@ -228,6 +269,7 @@ def train_fixed_community_active(
         "n_members": int(dataset.Y.shape[1]),
         "rounds": active_config.rounds,
         **_test_metrics(ensemble.predict(X_te), Y_te, dataset.target_names),
+        **_training_stats(getattr(ensemble, "last_history", None)),
     }
     _write_report_inputs(out_dir, dataset, ensemble, X_te, Y_te, metrics, history=history)
     LOGGER.info(

@@ -72,7 +72,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="256,256",
         help="MLP hidden layers as comma-separated widths (e.g. '512,512,512').",
     )
-    tr.add_argument("--epochs", type=int, default=300)
+    tr.add_argument("--epochs", type=int, default=1000, help="Max-epoch cap; training early-stops.")
+    tr.add_argument("--weight-decay", type=float, default=0.0, help="Adam L2 regularisation.")
+    tr.add_argument(
+        "--no-density-weights",
+        action="store_true",
+        help="Disable down-weighting of densely-sampled training regions.",
+    )
     tr.add_argument("--test-size", type=float, default=0.2)
     tr.add_argument(
         "--n-train",
@@ -125,7 +131,13 @@ def build_parser() -> argparse.ArgumentParser:
     ar.add_argument("--n-active", type=int, default=20)
     ar.add_argument("--n-models", type=int, default=5, help="Acquisition ensemble size.")
     ar.add_argument("--hidden", default="256,256", help="Acquisition MLP hidden widths.")
-    ar.add_argument("--epochs", type=int, default=300)
+    ar.add_argument("--epochs", type=int, default=1000, help="Max-epoch cap; training early-stops.")
+    ar.add_argument("--weight-decay", type=float, default=0.0, help="Adam L2 regularisation.")
+    ar.add_argument(
+        "--no-density-weights",
+        action="store_true",
+        help="Disable down-weighting of densely-sampled training regions.",
+    )
     ar.add_argument("--max-uptake", type=float, default=1000.0)
     ar.add_argument("--tradeoff", type=float, default=0.35)
     ar.add_argument("--solver", default="hybrid")
@@ -190,6 +202,8 @@ def _run_train(args: argparse.Namespace) -> int:
             epochs=args.epochs,
             test_size=args.test_size,
             n_train=args.n_train,
+            weight_decay=args.weight_decay,
+            density_weights=not args.no_density_weights,
             seed=args.seed,
         )
         return 0
@@ -209,6 +223,8 @@ def _run_train(args: argparse.Namespace) -> int:
         n_active=args.n_active,
         n_models=args.n_models,
         epochs=args.epochs,
+        weight_decay=args.weight_decay,
+        density_weights=not args.no_density_weights,
         seed=args.seed,
     )
     train_fixed_community_active(
@@ -238,6 +254,8 @@ def _run_active_round(args: argparse.Namespace) -> int:
         n_models=args.n_models,
         hidden=_parse_hidden(args.hidden),
         epochs=args.epochs,
+        weight_decay=args.weight_decay,
+        density_weights=not args.no_density_weights,
         seed=args.seed,
     )
     run_active_round(

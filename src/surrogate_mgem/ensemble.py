@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from surrogate_mgem.model import GrowthSurrogate
+from surrogate_mgem.model import GrowthSurrogate, inverse_density_weights
 
 
 class GrowthEnsemble:
@@ -26,10 +26,22 @@ class GrowthEnsemble:
         self.hidden = hidden
         self.models = [GrowthSurrogate(n_in, n_out, hidden) for _ in range(n_models)]
 
-    def fit(self, X: np.ndarray, Y: np.ndarray, *, base_seed: int = 0, **fit_kwargs) -> None:
-        """Fit every member; each gets a distinct seed so they disagree off-data."""
-        for i, model in enumerate(self.models):
+    def fit(self, X: np.ndarray, Y: np.ndarray, *, base_seed: int = 0, **fit_kwargs) -> list[dict]:
+        """Fit every member; each gets a distinct seed so they disagree off-data.
+
+        Returns the per-member training histories. Density weights (the default
+        ``sample_weight="auto"``) are computed once from ``X`` here and shared
+        across members -- they depend only on the data, not the seed, so this
+        avoids ``n_models`` redundant kNN builds while keeping every member's
+        weighting identical.
+        """
+        if fit_kwargs.get("sample_weight", "auto") == "auto":
+            fit_kwargs["sample_weight"] = inverse_density_weights(np.asarray(X))
+        self.last_history = [
             model.fit(X, Y, seed=base_seed + i, **fit_kwargs)
+            for i, model in enumerate(self.models)
+        ]
+        return self.last_history
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """Ensemble mean prediction (n_samples, n_out)."""

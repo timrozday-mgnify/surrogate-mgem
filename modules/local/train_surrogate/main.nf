@@ -44,7 +44,7 @@ process TRAIN_SURROGATE {
     prefix = task.ext.prefix ?: "${meta.id}"
     """
     mkdir -p ${prefix}
-    printf '{"community_id": "%s", "mode": "static", "hidden": [64, 64], "n_models": %s, "n_train": %s, "r2_overall": 0.5, "mae_overall": 0.1}' "${meta.community_id}" "${meta.n_models}" "${meta.n_train}" > ${prefix}/train_metrics.json
+    printf '{"community_id": "%s", "mode": "static", "hidden": [64, 64], "n_models": %s, "n_train": %s, "r2_overall": 0.5, "mae_overall": 0.1, "epochs_run_mean": 120.0, "epochs_run_max": 140, "stopped_early_frac": 1.0, "best_val_mean": 0.05, "final_lr_mean": 0.0005, "final_batch_size_max": 128}' "${meta.community_id}" "${meta.n_models}" "${meta.n_train}" > ${prefix}/train_metrics.json
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

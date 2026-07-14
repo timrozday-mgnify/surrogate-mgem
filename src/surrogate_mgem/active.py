@@ -4,7 +4,10 @@ Each round trains an ensemble on the labelled data, proposes many candidate medi
 cheaply, scores them by ensemble disagreement (epistemic uncertainty), selects a
 diverse high-uncertainty batch, solves *only that batch* with the real evaluator,
 and folds the results back in. This concentrates expensive LP solves on the gaps
-where the surrogate is weak, rather than sampling uniformly.
+where the surrogate is weak, rather than sampling uniformly. That deliberately
+oversamples tricky regions, so training uses inverse-density sample weights
+(``ActiveConfig.density_weights``, on by default) to stop those dense clusters
+from dominating the loss at the expense of the rest of the space.
 
 The real evaluator is injected as a callable, so the loop is unit-tested with a
 synthetic function and wired to micom only at the CLI.
@@ -46,7 +49,9 @@ class ActiveConfig:
     n_active: int = 20  # sparse proposer: active components per candidate
     n_models: int = 5
     hidden: tuple[int, ...] = (256, 256)  # acquisition-ensemble architecture
-    epochs: int = 300
+    epochs: int = 1000  # max-epoch cap; fit() early-stops
+    weight_decay: float = 0.0
+    density_weights: bool = True  # down-weight densely-sampled regions
     pool_factor: int = 4  # diversity pool = pool_factor * batch_size
     seed: int = 0
 
@@ -138,7 +143,14 @@ def active_round(
     ensemble = GrowthEnsemble(
         X.shape[1], Y.shape[1], n_models=config.n_models, hidden=config.hidden
     )
-    ensemble.fit(X, Y, base_seed=config.seed, epochs=config.epochs)
+    ensemble.fit(
+        X,
+        Y,
+        base_seed=config.seed,
+        epochs=config.epochs,
+        weight_decay=config.weight_decay,
+        sample_weight="auto" if config.density_weights else None,
+    )
 
     candidates = propose_candidates(
         active_mask,
@@ -188,7 +200,14 @@ def active_learning_loop(
 
     def train() -> GrowthEnsemble:
         ens = GrowthEnsemble(X.shape[1], n_out, n_models=config.n_models, hidden=config.hidden)
-        ens.fit(X, Y, base_seed=config.seed, epochs=config.epochs)
+        ens.fit(
+            X,
+            Y,
+            base_seed=config.seed,
+            epochs=config.epochs,
+            weight_decay=config.weight_decay,
+            sample_weight="auto" if config.density_weights else None,
+        )
         return ens
 
     ensemble = train()
