@@ -14,6 +14,7 @@ __all__ = [
     "latin_hypercube",
     "dirichlet_sample",
     "sparse_media",
+    "perturb_media",
     "sample_membership",
 ]
 
@@ -67,6 +68,34 @@ def sparse_media(n: int, dim: int, n_active: int, max_uptake: float, seed: int) 
         idx = rng.choice(dim, size=k, replace=False)
         design[i, idx] = rng.random(k) * max_uptake
     return design
+
+
+def perturb_media(
+    n: int,
+    base_vector: np.ndarray,
+    seed: int,
+    keep_range: tuple[float, float] = (0.05, 1.0),
+    scale_range: tuple[float, float] = (0.25, 1.0),
+) -> np.ndarray:
+    """Return ``n`` media by randomly dropping/scaling components of ``base_vector``.
+
+    Each row keeps every base component independently with probability
+    ``keep_p ~ U(keep_range)`` and scales the survivors by ``U(scale_range)``.
+    Starting from a growth-supporting base (e.g. the full environment), this
+    spans the feasible->limiting gradient with guaranteed coverage of the region
+    where growth actually varies -- unlike random subsets, which usually miss the
+    essential nutrient set and give uniformly zero growth. This is also the
+    nutrient-removal regime of interest for minimal-media design.
+    """
+    base = np.asarray(base_vector, dtype=float)
+    dim = len(base)
+    if dim == 0 or n == 0:
+        return np.zeros((n, dim))
+    rng = np.random.default_rng(seed)
+    keep_p = rng.uniform(keep_range[0], keep_range[1], size=(n, 1))
+    mask = rng.random((n, dim)) < keep_p
+    scale = rng.uniform(scale_range[0], scale_range[1], size=(n, dim))
+    return base[None, :] * mask * scale
 
 
 def sample_membership(

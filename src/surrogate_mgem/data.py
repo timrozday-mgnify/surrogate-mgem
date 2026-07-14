@@ -53,7 +53,7 @@ class GenerateConfig:
     media_per_community: int = 20
     max_uptake: float = 1000.0
     tradeoff: float = 0.35
-    sampler: str = "sparse"  # "sparse" | "dirichlet" | "lhs"
+    sampler: str = "perturb"  # "perturb" | "sparse" | "dirichlet" | "lhs"
     n_active: int = 20  # sparse sampler: active components per medium
     solver: str = "hybrid"
     seed: int = 0
@@ -228,10 +228,13 @@ def _run_subset(
         design = sampling.dirichlet_sample(config.media_per_community, dim, config.max_uptake, seed)
     elif config.sampler == "lhs":
         design = sampling.latin_hypercube(config.media_per_community, dim, config.max_uptake, seed)
-    else:
+    elif config.sampler == "sparse":
         design = sampling.sparse_media(
             config.media_per_community, dim, config.n_active, config.max_uptake, seed
         )
+    else:  # perturb: drop/scale components of the full (growth-supporting) environment
+        base = np.full(dim, config.max_uptake, dtype=float)
+        design = sampling.perturb_media(config.media_per_community, base, seed)
 
     out = {"samples": [], "membership": [], "media": [], "member_growth": [], "member_exchange": []}
     for draw, vector in enumerate(design):

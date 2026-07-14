@@ -20,7 +20,12 @@ import numpy as np
 import pandas as pd
 
 from surrogate_mgem.ensemble import GrowthEnsemble
-from surrogate_mgem.sampling import dirichlet_sample, latin_hypercube, sparse_media
+from surrogate_mgem.sampling import (
+    dirichlet_sample,
+    latin_hypercube,
+    perturb_media,
+    sparse_media,
+)
 
 LOGGER = logging.getLogger("surrogate-mgem.active")
 
@@ -37,7 +42,7 @@ class ActiveConfig:
     batch_size: int = 16
     n_candidates: int = 2000
     max_uptake: float = 1000.0
-    sampler: str = "sparse"  # candidate proposal distribution
+    sampler: str = "perturb"  # candidate proposal distribution
     n_active: int = 20  # sparse proposer: active components per candidate
     n_models: int = 5
     epochs: int = 300
@@ -66,8 +71,10 @@ def propose_candidates(
         sub = latin_hypercube(n, active_dim, max_uptake, seed)
     elif sampler == "dirichlet":
         sub = dirichlet_sample(n, active_dim, max_uptake, seed)
-    else:
+    elif sampler == "sparse":
         sub = sparse_media(n, active_dim, n_active, max_uptake, seed)
+    else:  # perturb the full environment
+        sub = perturb_media(n, np.full(active_dim, max_uptake, dtype=float), seed)
     candidates = np.zeros((n, full_dim), dtype=np.float32)
     candidates[:, active_mask] = sub
     return candidates

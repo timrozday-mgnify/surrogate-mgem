@@ -34,7 +34,9 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--media-per-community", type=int, default=20)
     gen.add_argument("--max-uptake", type=float, default=1000.0)
     gen.add_argument("--tradeoff", type=float, default=0.35)
-    gen.add_argument("--sampler", choices=["sparse", "dirichlet", "lhs"], default="sparse")
+    gen.add_argument(
+        "--sampler", choices=["perturb", "sparse", "dirichlet", "lhs"], default="perturb"
+    )
     gen.add_argument(
         "--n-active", type=int, default=20, help="sparse sampler: active components per medium."
     )
@@ -72,8 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tr.add_argument(
         "--sampler",
-        choices=["sparse", "dirichlet", "lhs"],
-        default="sparse",
+        choices=["perturb", "sparse", "dirichlet", "lhs"],
+        default="perturb",
         help="Active: candidate proposal.",
     )
     tr.add_argument(

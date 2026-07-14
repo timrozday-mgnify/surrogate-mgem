@@ -41,6 +41,22 @@ def test_sparse_media_clamps_n_active_to_dim():
     assert ((design > 0).sum(axis=1) == 3).all()  # can't exceed dim
 
 
+def test_perturb_media_drops_and_scales_a_base():
+    base = np.full(50, 100.0)
+    design = sampling.perturb_media(n=40, base_vector=base, seed=7)
+    assert design.shape == (40, 50)
+    # Every value is either 0 (dropped) or a scaled-down base value (<= base).
+    assert design.min() >= 0.0
+    assert design.max() <= 100.0
+    # Rows vary in how many components survive (keep_p is random per row).
+    kept = (design > 0).sum(axis=1)
+    assert kept.min() < kept.max()
+    # A never-present base component (0) stays 0.
+    base2 = np.array([0.0, 100.0])
+    d2 = sampling.perturb_media(n=10, base_vector=base2, seed=0)
+    assert np.all(d2[:, 0] == 0.0)
+
+
 def test_sample_membership_sizes_and_distinctness():
     subsets = sampling.sample_membership(n_genomes=10, n_communities=25, size_range=(2, 5), seed=3)
     assert len(subsets) == 25
