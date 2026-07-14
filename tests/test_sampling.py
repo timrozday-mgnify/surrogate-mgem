@@ -28,6 +28,19 @@ def test_dirichlet_rows_sum_to_budget():
     assert design.min() >= 0.0
 
 
+def test_sparse_media_has_exactly_n_active_components():
+    design = sampling.sparse_media(n=30, dim=100, n_active=8, max_uptake=500.0, seed=4)
+    assert design.shape == (30, 100)
+    nonzero_per_row = (design > 0).sum(axis=1)
+    assert (nonzero_per_row == 8).all()  # each medium activates exactly n_active
+    assert design.max() <= 500.0
+
+
+def test_sparse_media_clamps_n_active_to_dim():
+    design = sampling.sparse_media(n=5, dim=3, n_active=10, max_uptake=1.0, seed=0)
+    assert ((design > 0).sum(axis=1) == 3).all()  # can't exceed dim
+
+
 def test_sample_membership_sizes_and_distinctness():
     subsets = sampling.sample_membership(n_genomes=10, n_communities=25, size_range=(2, 5), seed=3)
     assert len(subsets) == 25

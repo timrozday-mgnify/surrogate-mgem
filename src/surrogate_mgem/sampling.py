@@ -13,6 +13,7 @@ import numpy as np
 __all__ = [
     "latin_hypercube",
     "dirichlet_sample",
+    "sparse_media",
     "sample_membership",
 ]
 
@@ -46,6 +47,26 @@ def dirichlet_sample(n: int, dim: int, total: float, seed: int) -> np.ndarray:
         return np.zeros((n, dim))
     rng = np.random.default_rng(seed)
     return rng.dirichlet(np.ones(dim), size=n) * total
+
+
+def sparse_media(n: int, dim: int, n_active: int, max_uptake: float, seed: int) -> np.ndarray:
+    """Return an ``(n, dim)`` design where each row has only ``n_active`` non-zero components.
+
+    Each medium activates a random subset of ``n_active`` components at
+    ``U(0, max_uptake)`` and leaves the rest at 0. Unlike LHS/Dirichlet (which
+    touch every component), this produces genuinely *limiting* media with a small,
+    identifiable set of nutrients -- the regime minimal-media search targets, and
+    the one where per-nutrient growth signal is learnable from few samples.
+    """
+    if dim == 0 or n == 0:
+        return np.zeros((n, dim))
+    rng = np.random.default_rng(seed)
+    k = min(n_active, dim)
+    design = np.zeros((n, dim))
+    for i in range(n):
+        idx = rng.choice(dim, size=k, replace=False)
+        design[i, idx] = rng.random(k) * max_uptake
+    return design
 
 
 def sample_membership(

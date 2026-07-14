@@ -53,7 +53,8 @@ class GenerateConfig:
     media_per_community: int = 20
     max_uptake: float = 1000.0
     tradeoff: float = 0.35
-    sampler: str = "lhs"  # "lhs" | "dirichlet"
+    sampler: str = "sparse"  # "sparse" | "dirichlet" | "lhs"
+    n_active: int = 20  # sparse sampler: active components per medium
     solver: str = "hybrid"
     seed: int = 0
     workers: int = 1
@@ -82,6 +83,21 @@ def read_roster(path: Path) -> list[GenomeModel]:
         )
         for _, row in table.iterrows()
     ]
+
+
+def members_for_community(roster: list[GenomeModel], community_id: str) -> list[GenomeModel]:
+    """Return the roster members named in a ``"g1+g2+..."`` community id.
+
+    ``community_id`` is the ``+``-joined sorted genome ids written by
+    :func:`generate`; used to rebuild a fixed community's members for the active
+    loop's solver oracle. Raises if any named genome is missing from the roster.
+    """
+    wanted = set(community_id.split("+"))
+    members = [m for m in roster if m.genome_id in wanted]
+    missing = wanted - {m.genome_id for m in members}
+    if missing:
+        raise ValueError(f"Community members not in roster: {sorted(missing)}")
+    return members
 
 
 def _taxonomy_frame(members: list[GenomeModel]) -> pd.DataFrame:
@@ -159,6 +175,38 @@ def _solve_sample(community, uptake: dict[str, float], tradeoff: float):
         return None
 
 
+def make_fixed_community_evaluator(
+    members: list[GenomeModel],
+    feature_names: list[str],
+    target_names: list[str],
+    solver: str,
+    tradeoff: float,
+):
+    """Return ``(evaluate, active_mask)`` for a fixed community (community built once).
+
+    ``evaluate(vector)`` takes a full-length medium vector (aligned to
+    ``feature_names``), solves the cooperative tradeoff, and returns per-member
+    growth in ``target_names`` order, or ``None`` if infeasible. ``active_mask``
+    flags which ``feature_names`` this community can actually exchange, so the
+    active loop only perturbs real coordinates. Used by the active-learning loop
+    as its expensive oracle.
+    """
+    community = _build_community(members, solver)
+    med_ex = set(_medium_exchanges(community))
+    active_mask = np.array([f in med_ex for f in feature_names], dtype=bool)
+    genome_to_taxon = {m.genome_id: m.taxon_id for m in members}
+    taxon_order = [genome_to_taxon[g] for g in target_names]
+
+    def evaluate(vector: np.ndarray) -> np.ndarray | None:
+        uptake = {f: float(v) for f, v in zip(feature_names, vector, strict=True) if v > 0}
+        solution = _solve_sample(community, uptake, tradeoff)
+        if solution is None:
+            return None
+        return solution.members.loc[taxon_order, "growth_rate"].to_numpy(dtype=float)
+
+    return evaluate, active_mask
+
+
 def _run_subset(
     members: list[GenomeModel],
     community_index: int,
@@ -178,8 +226,12 @@ def _run_subset(
 
     if config.sampler == "dirichlet":
         design = sampling.dirichlet_sample(config.media_per_community, dim, config.max_uptake, seed)
-    else:
+    elif config.sampler == "lhs":
         design = sampling.latin_hypercube(config.media_per_community, dim, config.max_uptake, seed)
+    else:
+        design = sampling.sparse_media(
+            config.media_per_community, dim, config.n_active, config.max_uptake, seed
+        )
 
     out = {"samples": [], "membership": [], "media": [], "member_growth": [], "member_exchange": []}
     for draw, vector in enumerate(design):

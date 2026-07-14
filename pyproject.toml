@@ -30,6 +30,12 @@ dev = [
     "pre-commit>=3.5",
     "ruff>=0.6",
 ]
+# Quarto performance reports (`surrogate-mgem report`); needs the quarto CLI too.
+report = [
+    "jupyter>=1.0",
+    "matplotlib>=3.7",
+    "nbclient>=0.9",
+]
 
 [project.scripts]
 surrogate-mgem = "surrogate_mgem.cli:main"

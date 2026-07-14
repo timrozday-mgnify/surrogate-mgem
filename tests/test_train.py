@@ -58,9 +58,11 @@ def test_train_writes_model_and_metrics(tmp_path):
     _write_synthetic_tables(tmp_path)
     ds = load_fixed_community_dataset(tmp_path)
     out = tmp_path / "model"
-    metrics = train_fixed_community(ds, out, epochs=150, seed=0)
+    metrics = train_fixed_community(ds, out, n_models=3, epochs=150, seed=0)
 
-    assert (out / "growth_surrogate.pt").exists()
+    assert (out / "ensemble").is_dir()
+    assert list((out / "ensemble").glob("member_*.pt"))  # ensemble members saved
+    assert (out / "predictions.csv").exists()
     assert (out / "surrogate_meta.json").exists()
     assert set(metrics["r2_per_member"]) == {"g1", "g2"}
     # The synthetic target is exactly linear, so the surrogate should fit it well.

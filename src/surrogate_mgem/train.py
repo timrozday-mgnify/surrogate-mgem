@@ -1,8 +1,11 @@
 """Phase 1 training: fit a fixed-community growth surrogate from the tidy tables.
 
 Assembles a feature matrix (medium uptake vector, aligned to the shared exchange
-universe) and target matrix (per-member growth) for one community, trains a
-:class:`~surrogate_mgem.model.GrowthSurrogate`, and reports held-out accuracy.
+universe) and target matrix (per-member growth) for one community, trains an
+ensemble :class:`~surrogate_mgem.ensemble.GrowthEnsemble` (optionally growing the
+training set with the active-learning loop), and writes report inputs:
+held-out predictions, metrics, and -- for the active loop -- the per-round
+history. A Quarto report renders these for inspection.
 """
 
 from __future__ import annotations
@@ -17,7 +20,8 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
 
-from surrogate_mgem.model import GrowthSurrogate
+from surrogate_mgem.active import ActiveConfig, active_learning_loop
+from surrogate_mgem.ensemble import GrowthEnsemble
 
 LOGGER = logging.getLogger("surrogate-mgem.train")
 
@@ -69,47 +73,59 @@ def load_fixed_community_dataset(
     if y_wide.isna().any().any():
         raise ValueError(f"Community {community_id!r} has samples missing a member's growth.")
 
+    # Drop features this community never exchanges (all-zero across its media):
+    # they carry no signal and only inflate the input dimension. The reduced
+    # feature list stays a subset of the shared universe, so it still aligns.
+    active_cols = x_wide.columns[(x_wide != 0).any()].tolist()
+    x_wide = x_wide[active_cols]
+
     return FixedCommunityDataset(
         community_id=str(community_id),
         X=x_wide.to_numpy(dtype=np.float32),
         Y=y_wide.to_numpy(dtype=np.float32),
-        feature_names=feature_names,
+        feature_names=active_cols,
         target_names=target_names,
     )
 
 
-def train_fixed_community(
-    dataset: FixedCommunityDataset,
-    out_dir: Path,
-    *,
-    epochs: int = 300,
-    lr: float = 1e-3,
-    test_size: float = 0.2,
-    seed: int = 0,
-) -> dict:
-    """Train a surrogate for one community; write the model + metrics; return metrics."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    X_tr, X_te, Y_tr, Y_te = train_test_split(
-        dataset.X, dataset.Y, test_size=test_size, random_state=seed
-    )
-    model = GrowthSurrogate(n_in=dataset.X.shape[1], n_out=dataset.Y.shape[1])
-    model.fit(X_tr, Y_tr, epochs=epochs, lr=lr, seed=seed)
-
-    pred = model.predict(X_te)
-    metrics = {
-        "community_id": dataset.community_id,
-        "n_samples": int(len(dataset.X)),
-        "n_train": int(len(X_tr)),
-        "n_test": int(len(X_te)),
-        "n_members": int(dataset.Y.shape[1]),
-        # multioutput='uniform_average' would hide a bad member; report both.
+def _test_metrics(pred: np.ndarray, Y_te: np.ndarray, target_names: list[str]) -> dict:
+    """Overall + per-member R^2/MAE on the held-out set."""
+    return {
         "r2_overall": float(r2_score(Y_te, pred)),
-        "r2_per_member": {
-            g: float(r2_score(Y_te[:, i], pred[:, i])) for i, g in enumerate(dataset.target_names)
-        },
         "mae_overall": float(mean_absolute_error(Y_te, pred)),
+        "r2_per_member": {
+            g: float(r2_score(Y_te[:, i], pred[:, i])) for i, g in enumerate(target_names)
+        },
     }
-    model.save(out_dir / "growth_surrogate.pt")
+
+
+def _write_report_inputs(
+    out_dir: Path,
+    dataset: FixedCommunityDataset,
+    ensemble: GrowthEnsemble,
+    X_te: np.ndarray,
+    Y_te: np.ndarray,
+    metrics: dict,
+    history: pd.DataFrame | None,
+) -> None:
+    """Write predictions, metrics, meta (and history) the Quarto report reads."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ensemble.save(out_dir / "ensemble")
+
+    mean, std = ensemble.predict_with_uncertainty(X_te)
+    rows = []
+    for i, g in enumerate(dataset.target_names):
+        for r in range(len(X_te)):
+            rows.append(
+                {
+                    "genome_id": g,
+                    "y_true": float(Y_te[r, i]),
+                    "y_pred": float(mean[r, i]),
+                    "y_std": float(std[r, i]),
+                }
+            )
+    pd.DataFrame(rows).to_csv(out_dir / "predictions.csv", index=False)
+    (out_dir / "train_metrics.json").write_text(json.dumps(metrics, indent=2))
     (out_dir / "surrogate_meta.json").write_text(
         json.dumps(
             {
@@ -120,12 +136,90 @@ def train_fixed_community(
             indent=2,
         )
     )
-    (out_dir / "train_metrics.json").write_text(json.dumps(metrics, indent=2))
+    if history is not None:
+        history.to_csv(out_dir / "active_history.csv", index=False)
+
+
+def train_fixed_community(
+    dataset: FixedCommunityDataset,
+    out_dir: Path,
+    *,
+    n_models: int = 5,
+    epochs: int = 300,
+    test_size: float = 0.2,
+    seed: int = 0,
+) -> dict:
+    """Train an ensemble for one community (no active loop); write report inputs."""
+    X_tr, X_te, Y_tr, Y_te = train_test_split(
+        dataset.X, dataset.Y, test_size=test_size, random_state=seed
+    )
+    ensemble = GrowthEnsemble(dataset.X.shape[1], dataset.Y.shape[1], n_models=n_models)
+    ensemble.fit(X_tr, Y_tr, base_seed=seed, epochs=epochs)
+    metrics = {
+        "community_id": dataset.community_id,
+        "mode": "static",
+        "n_samples": int(len(dataset.X)),
+        "n_train": int(len(X_tr)),
+        "n_test": int(len(X_te)),
+        "n_members": int(dataset.Y.shape[1]),
+        **_test_metrics(ensemble.predict(X_te), Y_te, dataset.target_names),
+    }
+    _write_report_inputs(out_dir, dataset, ensemble, X_te, Y_te, metrics, history=None)
     LOGGER.info(
-        "Trained %s: %d samples, overall test R2=%.3f MAE=%.4g",
+        "Trained %s (static): %d samples, test R2=%.3f",
         dataset.community_id,
         metrics["n_samples"],
         metrics["r2_overall"],
-        metrics["mae_overall"],
+    )
+    return metrics
+
+
+def train_fixed_community_active(
+    dataset: FixedCommunityDataset,
+    members: list,
+    out_dir: Path,
+    *,
+    active_config: ActiveConfig,
+    solver: str = "hybrid",
+    tradeoff: float = 0.35,
+    test_size: float = 0.2,
+    seed: int = 0,
+) -> dict:
+    """Train with the active-learning loop; write report inputs incl. per-round history.
+
+    ``members`` are the :class:`~surrogate_mgem.data.GenomeModel`\\ s of this
+    community (used to build the real solver oracle). The held-out test split is
+    fixed up front and never fed to the loop, so the history's R^2 curve measures
+    honest generalisation as solves accrue.
+    """
+    from surrogate_mgem.data import make_fixed_community_evaluator
+
+    X_tr, X_te, Y_tr, Y_te = train_test_split(
+        dataset.X, dataset.Y, test_size=test_size, random_state=seed
+    )
+    evaluate, active_mask = make_fixed_community_evaluator(
+        members, dataset.feature_names, dataset.target_names, solver, tradeoff
+    )
+    ensemble, history, (X_all, _) = active_learning_loop(
+        X_tr, Y_tr, evaluate, active_mask, active_config, X_test=X_te, Y_test=Y_te
+    )
+    metrics = {
+        "community_id": dataset.community_id,
+        "mode": "active",
+        "n_seed_samples": int(len(X_tr)),
+        "n_final_train": int(len(X_all)),
+        "n_test": int(len(X_te)),
+        "n_members": int(dataset.Y.shape[1]),
+        "rounds": active_config.rounds,
+        **_test_metrics(ensemble.predict(X_te), Y_te, dataset.target_names),
+    }
+    _write_report_inputs(out_dir, dataset, ensemble, X_te, Y_te, metrics, history=history)
+    LOGGER.info(
+        "Trained %s (active): seed %d -> %d train over %d rounds, test R2=%.3f",
+        dataset.community_id,
+        metrics["n_seed_samples"],
+        metrics["n_final_train"],
+        active_config.rounds,
+        metrics["r2_overall"],
     )
     return metrics

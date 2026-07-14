@@ -1,0 +1,122 @@
+---
+title: "Surrogate model performance"
+format:
+  html:
+    toc: true
+    code-fold: true
+    embed-resources: true
+params:
+  results_dir: "."
+jupyter: python3
+---
+
+```{python}
+# | tags: [parameters]
+results_dir = "."
+```
+
+```{python}
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+rd = Path(results_dir)
+meta = json.loads((rd / "surrogate_meta.json").read_text())
+metrics = json.loads((rd / "train_metrics.json").read_text())
+preds = pd.read_csv(rd / "predictions.csv")
+history = pd.read_csv(rd / "active_history.csv") if (rd / "active_history.csv").exists() else None
+members = meta["target_names"]
+```
+
+## Summary
+
+```{python}
+# | echo: false
+summary = {
+    "community": metrics.get("community_id"),
+    "mode": metrics.get("mode"),
+    "members": metrics.get("n_members"),
+    "test R²": round(metrics.get("r2_overall", float("nan")), 3),
+    "test MAE": round(metrics.get("mae_overall", float("nan")), 4),
+}
+if metrics.get("mode") == "active":
+    summary["seed → final train"] = f"{metrics['n_seed_samples']} → {metrics['n_final_train']}"
+    summary["rounds"] = metrics["rounds"]
+else:
+    summary["train / test"] = f"{metrics['n_train']} / {metrics['n_test']}"
+pd.DataFrame([summary]).T.rename(columns={0: "value"})
+```
+
+A negative R² means the surrogate is worse than predicting the mean growth —
+usually a sign the sampled media carry too little signal (e.g. saturated
+nutrient-rich media), not that the model is mis-specified.
+
+## Predicted vs. true growth (held-out)
+
+```{python}
+# | echo: false
+n = len(members)
+fig, axes = plt.subplots(1, n, figsize=(4 * n, 4), squeeze=False)
+for ax, g in zip(axes[0], members):
+    sub = preds[preds["genome_id"] == g]
+    ax.errorbar(sub["y_true"], sub["y_pred"], yerr=sub["y_std"], fmt="o", alpha=0.5, ms=4, elinewidth=0.7)
+    lo = float(min(sub["y_true"].min(), sub["y_pred"].min()))
+    hi = float(max(sub["y_true"].max(), sub["y_pred"].max()))
+    ax.plot([lo, hi], [lo, hi], "k--", lw=1)
+    r2 = metrics.get("r2_per_member", {}).get(g, float("nan"))
+    ax.set_title(f"{g}\nR²={r2:.3f}")
+    ax.set_xlabel("true growth")
+    ax.set_ylabel("predicted growth")
+fig.tight_layout()
+plt.show()
+```
+
+Error bars are the ensemble's predictive std (epistemic uncertainty). Points far
+off the diagonal with large bars are where the model knows it is unsure — the
+regions the active loop targets.
+
+## Residuals
+
+```{python}
+# | echo: false
+preds["residual"] = preds["y_pred"] - preds["y_true"]
+fig, ax = plt.subplots(figsize=(6, 4))
+for g in members:
+    ax.hist(preds.loc[preds["genome_id"] == g, "residual"], bins=20, alpha=0.5, label=g)
+ax.axvline(0, color="k", lw=1)
+ax.set_xlabel("predicted − true growth")
+ax.set_ylabel("count")
+ax.legend(fontsize=8)
+plt.show()
+```
+
+## Active-learning progress
+
+```{python}
+# | echo: false
+if history is None:
+    print("Static run — no active-learning history.")
+else:
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4))
+    if "r2" in history:
+        ax1.plot(history["n_train"], history["r2"], "o-")
+        ax1.set_xlabel("training samples")
+        ax1.set_ylabel("held-out R²")
+        ax1.set_title("Generalisation vs. solve budget")
+    if "mean_selected_uncertainty" in history:
+        h = history.dropna(subset=["mean_selected_uncertainty"])
+        ax2.plot(h["round"], h["mean_selected_uncertainty"], "o-", color="tab:orange")
+        ax2.set_xlabel("round")
+        ax2.set_ylabel("mean uncertainty of selected batch")
+        ax2.set_title("Uncertainty of queried media")
+    fig.tight_layout()
+    plt.show()
+    history
+```
+
+The left panel should trend upward if spending solves where the ensemble is
+uncertain actually improves held-out accuracy; the right panel should trend down
+as the informative gaps get filled.
