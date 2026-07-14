@@ -39,7 +39,20 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--seed", type=int, default=0)
     gen.add_argument("--workers", type=int, default=1)
 
-    for name in ("train", "validate", "search"):
+    tr = subparsers.add_parser("train", help="Train a fixed-community growth surrogate.")
+    tr.add_argument(
+        "--data-dir", type=Path, required=True, help="Directory of tables from `generate`."
+    )
+    tr.add_argument("--out", type=Path, required=True, help="Output directory for model + metrics.")
+    tr.add_argument(
+        "--community-id", default=None, help="Community to train on (default: most-sampled)."
+    )
+    tr.add_argument("--epochs", type=int, default=300)
+    tr.add_argument("--lr", type=float, default=1e-3)
+    tr.add_argument("--test-size", type=float, default=0.2)
+    tr.add_argument("--seed", type=int, default=0)
+
+    for name in ("validate", "search"):
         subparsers.add_parser(name, help=f"{name} (not yet implemented)")
     return parser
 
@@ -64,12 +77,25 @@ def _run_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_train(args: argparse.Namespace) -> int:
+    """Dispatch the ``train`` subcommand."""
+    from surrogate_mgem.train import load_fixed_community_dataset, train_fixed_community
+
+    dataset = load_fixed_community_dataset(args.data_dir, args.community_id)
+    train_fixed_community(
+        dataset, args.out, epochs=args.epochs, lr=args.lr, test_size=args.test_size, seed=args.seed
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse args and dispatch to the selected subcommand."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     args = build_parser().parse_args(argv)
     if args.command == "generate":
         return _run_generate(args)
+    if args.command == "train":
+        return _run_train(args)
     raise SystemExit(f"'{args.command}' is not implemented yet.")
 
 
