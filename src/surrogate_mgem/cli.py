@@ -179,9 +179,9 @@ def _run_report(args: argparse.Namespace) -> int:
         Path(__file__).resolve().parents[2] / "reports" / "model_report.qmd"
     )
     shutil.copyfile(template, results / "model_report.qmd")
-    env = {**os.environ, "QUARTO_PYTHON": sys.executable}
+    env = {**os.environ, "QUARTO_PYTHON": sys.executable, "SURROGATE_RESULTS_DIR": str(results)}
     subprocess.run(
-        ["quarto", "render", "model_report.qmd", "-P", f"results_dir:{results}", "--to", "html"],
+        ["quarto", "render", "model_report.qmd", "--to", "html"],
         cwd=results,
         env=env,
         check=True,

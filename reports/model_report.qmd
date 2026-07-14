@@ -5,25 +5,21 @@ format:
     toc: true
     code-fold: true
     embed-resources: true
-params:
-  results_dir: "."
 jupyter: python3
 ---
 
 ```{python}
-# | tags: [parameters]
-results_dir = "."
-```
-
-```{python}
 import json
+import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-rd = Path(results_dir)
+# Results directory is passed via env var (set by `surrogate-mgem report`);
+# defaults to the working directory the report is rendered in.
+rd = Path(os.environ.get("SURROGATE_RESULTS_DIR", "."))
 meta = json.loads((rd / "surrogate_meta.json").read_text())
 metrics = json.loads((rd / "train_metrics.json").read_text())
 preds = pd.read_csv(rd / "predictions.csv")
