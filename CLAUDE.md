@@ -61,8 +61,10 @@ GENERATE_DATA (per shard) ─┐
 - **Containers only** (no bioconda package) — the modules are container-only with
   no `environment.yml`; the `conda` profile won't cover them. Two images, built
   out-of-repo via `docker/{train,data}.Dockerfile`, referenced by GHCR convention
-  (`ghcr.io/timrozday-mgnify/surrogate-mgem-{train,data}:0.1.0`, `-sif` ORAS for
-  singularity). Bump the tag in all five modules together.
+  (`ghcr.io/timrozday-mgnify/surrogate-mgem-{train,data}:0.1.0`). Bump the tag in
+  all five modules together. No `-sif` ORAS artifacts are published, so the
+  modules name the Docker image plainly (no nf-core `oras://` ternary) and
+  singularity/apptainer converts on first pull.
 - **HiGHS backs the default `hybrid` solver** — no CPLEX/Gurobi licence (`highspy`
   is in the `data` extra).
 - **No slurm/test profile in-repo** — layer the executor via an external

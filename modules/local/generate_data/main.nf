@@ -6,9 +6,7 @@ process GENERATE_DATA {
     tag "$meta.id"
     label 'process_high'
 
-    container "${ workflow.containerEngine in ['singularity', 'apptainer'] && !task.ext.singularity_pull_docker_container ?
-        'oras://ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.0-sif' :
-        'ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.0' }"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.0"
 
     input:
     tuple val(meta), path(roster)
