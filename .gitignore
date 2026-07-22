@@ -21,6 +21,11 @@ data/
 *.pt
 *.ckpt
 
+# Nextflow
+work/
+.nextflow*
+examples/*/results/
+
 # OS / editor
 .DS_Store
 .idea/
