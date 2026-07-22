@@ -6,7 +6,7 @@ process GENERATE_DATA {
     tag "$meta.id"
     label 'process_high'
 
-    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.0"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.1"
 
     input:
     tuple val(meta), path(roster)

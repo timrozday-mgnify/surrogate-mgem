@@ -1,0 +1,38 @@
+name: Images
+
+# Builds the two pipeline images to GHCR. Bump IMAGE_TAG here and in the five
+# modules' `container` lines together.
+on:
+  push:
+    branches: [main]
+    paths: ["docker/**", "src/**", "pyproject.toml", ".github/workflows/images.yml"]
+  workflow_dispatch:
+
+env:
+  IMAGE_TAG: "0.1.1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [train, data]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/${{ matrix.image }}.Dockerfile
+          push: true
+          tags: ghcr.io/timrozday-mgnify/surrogate-mgem-${{ matrix.image }}:${{ env.IMAGE_TAG }}

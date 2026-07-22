@@ -5,7 +5,7 @@ process MERGE_DATA {
     tag "$meta.id"
     label 'process_low'
 
-    container "ghcr.io/timrozday-mgnify/surrogate-mgem-train:0.1.0"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-train:0.1.1"
 
     input:
     tuple val(meta), path(shards, stageAs: 'shard_*')

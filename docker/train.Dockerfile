@@ -3,6 +3,10 @@
 #   docker build -f docker/train.Dockerfile -t ghcr.io/timrozday-mgnify/surrogate-mgem-train:<ver> .
 FROM python:3.11-slim
 
+# procps supplies `ps`, which nextflow requires to collect task metrics.
+RUN apt-get update && apt-get install -y --no-install-recommends procps \
+    && rm -rf /var/lib/apt/lists/*
+
 # CPU-only torch keeps the image small; the surrogate MLP is tiny.
 ENV PIP_NO_CACHE_DIR=1 PIP_INDEX_URL=https://download.pytorch.org/whl/cpu \
     PIP_EXTRA_INDEX_URL=https://pypi.org/simple
