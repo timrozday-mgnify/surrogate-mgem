@@ -1,0 +1,49 @@
+nextflow_pipeline {
+    name "Pipeline e2e: real MICOM solves + real training in the containers"
+    script "../main.nf"
+    tag "e2e"
+
+    // Not run by `nf-test test` alone in CI-speed workflows: needs a container
+    // engine and pulls the multi-GB data/train images. Run with:
+    //   nf-test test tests/e2e.nf.test --profile docker
+    test("single-genome example trains end to end") {
+        when {
+            params {
+                roster                = "$projectDir/examples/single_mgem/roster.csv"
+                outdir                = "$outputDir"
+                num_shards            = 1
+                n_communities         = 1
+                community_size_min    = 1
+                community_size_max    = 1
+                media_per_community   = 24
+                sampler               = 'sparse'
+                n_communities_augment = 1
+                active_rounds         = 1
+                active_batch_size     = 4
+                active_n_candidates   = 100
+                active_n_models       = 2
+                active_hidden         = '32,32'
+                active_epochs         = 50
+                hidden_configs        = '32,32'
+                n_models_list         = '2'
+                train_sizes           = '20'
+                train_epochs          = 50
+                max_cpus              = 4
+                max_memory            = '8.GB'
+                max_time              = '2.h'
+            }
+        }
+        then {
+            assertAll(
+                { assert workflow.success },
+                // leaderboard has a header plus the single sweep cell
+                { assert path("$outputDir/leaderboard.csv").readLines().size() == 2 },
+                { assert path("$outputDir/leaderboard.csv").text.contains('FNPN01') },
+                // the cell really trained: metrics + saved ensemble members
+                { assert path("$outputDir/models").list().size() == 1 },
+                { assert path("$outputDir/models/FNPN01__h32x32__k2__n20/train_metrics.json").exists() },
+                { assert path("$outputDir/models/FNPN01__h32x32__k2__n20/ensemble/member_0.pt").exists() },
+            )
+        }
+    }
+}

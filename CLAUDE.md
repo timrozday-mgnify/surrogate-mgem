@@ -78,4 +78,5 @@ GENERATE_DATA (per shard) ─┐
 pip install -e ".[dev]"            # + ".[dev,data]" for the solver stack
 pytest                             # solver-free units (incl. active-round writeback)
 nf-test test tests/default.nf.test # stub pipeline (no solver, no containers)
+nf-test test tests/e2e.nf.test --profile docker  # real solves+training, ~3 min, pulls both images
 ```

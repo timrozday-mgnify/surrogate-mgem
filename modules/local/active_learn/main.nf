@@ -11,7 +11,7 @@ process ACTIVE_LEARN {
     container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.1"
 
     input:
-    tuple val(meta), path(dataset), path(roster)
+    tuple val(meta), path(dataset), path(roster), path(models)
 
     output:
     tuple val(meta), path('augmented'), emit: dataset

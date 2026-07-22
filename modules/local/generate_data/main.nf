@@ -9,7 +9,7 @@ process GENERATE_DATA {
     container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.1"
 
     input:
-    tuple val(meta), path(roster)
+    tuple val(meta), path(roster), path(models)
 
     output:
     tuple val(meta), path("shard_${meta.shard}"), emit: shard

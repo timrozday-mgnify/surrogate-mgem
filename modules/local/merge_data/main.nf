@@ -25,9 +25,17 @@ process MERGE_DATA {
 
     shard_dirs = sorted(d for d in glob.glob('shard_*') if os.path.isdir(d))
     os.makedirs('merged', exist_ok=True)
+    def read(path):
+        # An all-empty table is written headerless (a bare newline), so size > 0
+        # is not enough -- pandas raises EmptyDataError on it.
+        try:
+            return pd.read_csv(path)
+        except pd.errors.EmptyDataError:
+            return None
+
     for name in ['samples', 'media', 'member_growth', 'membership', 'member_exchange']:
-        parts = [pd.read_csv(f'{d}/{name}.csv') for d in shard_dirs
-                 if os.path.exists(f'{d}/{name}.csv') and os.path.getsize(f'{d}/{name}.csv')]
+        parts = [p for p in (read(f'{d}/{name}.csv') for d in shard_dirs
+                             if os.path.exists(f'{d}/{name}.csv')) if p is not None]
         if parts:
             pd.concat(parts, ignore_index=True).to_csv(f'merged/{name}.csv', index=False)
     for d in shard_dirs:

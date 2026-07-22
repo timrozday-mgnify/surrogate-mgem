@@ -21,10 +21,10 @@ workflow {
     if (!params.roster) {
         error "Provide --roster <roster.csv> (columns: genome_id, model_path)."
     }
-    if (params.num_shards < 1) {
+    if ((params.num_shards as int) < 1) {
         error "num_shards must be >= 1 (got ${params.num_shards})."
     }
-    if (params.active_rounds < 0) {
+    if ((params.active_rounds as int) < 0) {
         error "active_rounds must be >= 0 (got ${params.active_rounds})."
     }
 

@@ -31,3 +31,11 @@ examples/*/results/
 .idea/
 .vscode/
 rendered_reports/
+
+# nf-test
+.nf-test/
+.nf-test.log
+
+# Local run outputs / tooling
+results/
+.serena/

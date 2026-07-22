@@ -21,10 +21,26 @@ workflow SURROGATE_TRAINING {
     main:
     ch_versions = Channel.empty()
 
+    // The GEMs named by the roster are separate files. Stage them flat and hand the
+    // tasks a rewritten roster whose model_path is the bare filename, so it resolves
+    // against the task work dir (read_roster resolves relative to the roster).
+    ch_rows = Channel.fromPath(ch_roster).splitCsv(header: true)
+    ch_models = ch_rows
+        .map { row -> file(row.model_path.startsWith('/') ? row.model_path : "${ch_roster.parent}/${row.model_path}", checkIfExists: true) }
+        .collect()
+        .map { models -> [ models ] }   // wrap: combine() would otherwise spread the list
+    ch_flat_roster = ch_rows
+        .map { row -> "${row.genome_id},${file(row.model_path).name}" }
+        .collectFile(name: 'roster.csv', seed: 'genome_id,model_path', newLine: true, sort: true)
+        .first()
+
     // 1. Seed data: fan out `generate` over HPC shards (deterministic in seed, so
     //    each shard derives the same community list and solves its own slice).
-    ch_gen = Channel.fromList((0..<params.num_shards).toList())
-        .map { idx -> [ [id: "shard_${idx}", shard: idx], ch_roster ] }
+    // `as int`: CLI-supplied params arrive as Strings, and 0..<'2' is not a 2-element range.
+    ch_gen = Channel.fromList((0..<(params.num_shards as int)).toList())
+        .map { idx -> [ [id: "shard_${idx}", shard: idx] ] }
+        .combine(ch_flat_roster)
+        .combine(ch_models)
     GENERATE_DATA(ch_gen)
     ch_versions = ch_versions.mix(GENERATE_DATA.out.versions.first())
 
@@ -45,7 +61,7 @@ workflow SURROGATE_TRAINING {
         .filter { row -> row.feasible?.toString()?.toLowerCase() in ['true', '1'] }
         .map { row -> row.community_id }
         .collect()
-        .map { ids -> ids.countBy { it }.sort { -it.value }.keySet().take(params.n_communities_augment) as List }
+        .map { ids -> ids.countBy { it }.sort { -it.value }.keySet().take(params.n_communities_augment as int) as List }
         .flatten()
 
     ch_comm_dataset = ch_top_comm
@@ -54,8 +70,8 @@ workflow SURROGATE_TRAINING {
 
     // 4. Active-learning supplementation (skipped when active_rounds == 0, in which
     //    case the sweep trains on the seed data, filtered per community at train time).
-    if (params.active_rounds > 0) {
-        ACTIVE_LEARN(ch_comm_dataset.map { meta, d -> [ meta, d, ch_roster ] })
+    if ((params.active_rounds as int) > 0) {
+        ACTIVE_LEARN(ch_comm_dataset.combine(ch_flat_roster).combine(ch_models).map { meta, d, roster, models -> [ meta, d, roster, models ] })
         ch_versions  = ch_versions.mix(ACTIVE_LEARN.out.versions.first())
         ch_augmented = ACTIVE_LEARN.out.dataset
     } else {
