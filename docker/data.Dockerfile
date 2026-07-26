@@ -1,5 +1,7 @@
-# Heavy data image: micom + cobra + HiGHS on top of the base package.
-# Used by GENERATE_DATA and ACTIVE_ROUND (both need the real solver oracle).
+# Heavy data image: micom + cobra + HiGHS + memote on top of the base package.
+# Used by GENERATE_DATA, ACTIVE_ROUND (real solver oracle) and the M0/M1 QC stage
+# QC_MODELS + DEGENERACY_SURVEY (cobra FVA; QC_MODELS also needs the `memote` CLI,
+# pulled in by the `data` extra). Rebuild + bump the tag when the extra changes.
 #   docker build -f docker/data.Dockerfile -t ghcr.io/timrozday-mgnify/surrogate-mgem-data:<ver> .
 FROM python:3.11-slim
 

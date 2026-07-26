@@ -1,0 +1,24 @@
+nextflow_pipeline {
+    name "Pipeline stub: M0+M1 ground-truth QC (qc -> freeze-index -> degeneracy -> D4)"
+    script "../main.nf"
+    tag "pipeline"
+
+    test("stub wires the QC stage") {
+        options "-stub"
+        when {
+            params {
+                stage  = "qc"
+                roster = "$projectDir/tests/roster.csv"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert path("$outputDir/qc/metabolite_index.json").exists() },
+                { assert path("$outputDir/qc/qc_summary.json").exists() },
+                { assert path("$outputDir/qc/d4_recommendation.json").exists() },
+            )
+        }
+    }
+}

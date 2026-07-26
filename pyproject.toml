@@ -24,6 +24,7 @@ data = [
     "micom>=0.33",
     "cobra>=0.29",
     "highspy>=1.7",  # HiGHS backs the default "hybrid" solver (no CPLEX/Gurobi licence)
+    "memote>=0.17",  # M0 automated model QC (cfs qc); shells out to the memote CLI
 ]
 dev = [
     "pytest>=7.4",
@@ -35,14 +36,16 @@ dev = [
 report = [
     "jupyter>=1.0",
     "matplotlib>=3.7",
+    "plotly>=5.20",  # interactive run report (reports/run_report.qmd)
     "nbclient>=0.9",
 ]
 
 [project.scripts]
 surrogate-mgem = "surrogate_mgem.cli:main"
+cfs = "cfs.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/surrogate_mgem"]
+packages = ["src/surrogate_mgem", "src/cfs"]
 
 [tool.ruff]
 line-length = 100
