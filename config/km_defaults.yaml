@@ -1,0 +1,28 @@
+# Michaelis constants for the concentration -> uptake-bound map (plan D5, §3.3):
+#   lb_m = -Vmax_m * c_m / (Km_m + c_m)
+# Vmax_m is the model's own default uptake bound (absorbs scale). Km_m is a single
+# default per transporter class -- four numbers, not 200. These are NOT measured
+# (order-of-magnitude literature values, mmol/L). Any result whose ranking depends
+# on relative Km magnitudes is unsupported (P15); results that depend only on which
+# metabolites are limiting are robust to this.
+#
+# Longer term: put priors on Km and infer them jointly (HMC). Out of scope for v1.
+
+classes:
+  sugar: 0.01
+  amino_acid: 0.005
+  ion: 0.001
+  gas: 0.1
+default: 0.01
+
+# BiGG metabolite base id -> class. The base is the token between EX_ and the next
+# '_' (e.g. EX_glc__D_e -> glc, EX_ala__L_e -> ala, EX_na1_e -> na1). Anything
+# unmatched falls back to `default`.
+keywords:
+  amino_acid: [ala, arg, asn, asp, cys, gln, glu, gly, his, ile, leu, lys, met,
+               phe, pro, ser, thr, trp, tyr, val]
+  ion: [na1, k, ca2, mg2, fe2, fe3, zn2, mn2, cu2, cl, so4, pi, nh4, cobalt2,
+        mobd, ni2, cd2, hg2, mobd, tungs]
+  gas: [o2, co2, h2, n2, ch4, no, h2s, hco3]
+  sugar: [glc, fru, gal, man, xyl, ara, rib, malt, sucr, lcts, glcn, tre, cellb,
+          melib, rmn, fuc, gam, acgam]

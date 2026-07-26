@@ -23,8 +23,9 @@ dependencies = [
 data = [
     "micom>=0.33",
     "cobra>=0.29",
-    "highspy>=1.7",  # HiGHS backs the default "hybrid" solver (no CPLEX/Gurobi licence)
+    "highspy>=1.7",  # HiGHS backs the default "hybrid" solver + the M2 elastic-net QP
     "memote>=0.17",  # M0 automated model QC (cfs qc); shells out to the memote CLI
+    "pyyaml>=6.0",   # M2 km_defaults.yaml loader (cobra ships ruamel, not pyyaml)
 ]
 dev = [
     "pytest>=7.4",

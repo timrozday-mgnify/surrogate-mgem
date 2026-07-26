@@ -16,10 +16,13 @@
 > The existing **`src/surrogate_mgem/`** package (PyTorch + MICOM growth
 > surrogate, documented below) is **legacy/reference** — kept, not deleted.
 >
-> **Current work: M0 + M1** (`src/cfs/groundtruth/`, `src/cfs/validate/`) — model
-> QC (EGC + MEMOTE), the frozen/hashed metabolite index, and the exchange-FVA
-> degeneracy survey that decides the open **D4** uniqueness question before any
-> label generation or training.
+> **Progress:** M0 + M1 done (`src/cfs/groundtruth/qc.py`, `index.py`,
+> `src/cfs/validate/degeneracy.py`) — QC, frozen/hashed metabolite index, and the
+> degeneracy survey that settled **D4 = elastic net** (§5.4). M2 solve interface
+> done (`src/cfs/groundtruth/solve.py`) — MM uptake bounds (§3.3), two-stage
+> FBA + **HiGHS elastic-net QP** for `mu_max`, exchange fluxes `z`, and metabolite
+> shadow prices. **Next: the sampling design (§4)** — active-subspace reduction +
+> stratified low-concentration media — then bulk parquet label generation.
 
 ## Legacy package (surrogate_mgem)
 
