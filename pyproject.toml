@@ -26,6 +26,7 @@ data = [
     "highspy>=1.7",  # HiGHS backs the default "hybrid" solver + the M2 elastic-net QP
     "memote>=0.17",  # M0 automated model QC (cfs qc); shells out to the memote CLI
     "pyyaml>=6.0",   # M2 km_defaults.yaml loader (cobra ships ruamel, not pyyaml)
+    "pyarrow>=14",   # §4.5 parquet label shards (pandas.to_parquet backend)
 ]
 dev = [
     "pytest>=7.4",

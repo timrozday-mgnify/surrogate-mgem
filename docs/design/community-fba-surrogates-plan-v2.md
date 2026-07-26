@@ -167,6 +167,19 @@ degenerate labelling problem does not show up in training loss.
 
 D2 at 100+ dimensions makes this the part of the plan that changed most.
 
+> **Implementation status (2026-07-26).** §4.1–4.5 built in `src/cfs/sampling/`:
+> `active_subspace.py` (§4.2 sweep), `design.py` (§4.3–4.4 stratified-Sobol +
+> `SamplingConfig` carrying the K=8 alpha grid and the 3-level `eps` family), and
+> `generate.py` (§4.5 driver → parquet sharded by organism × `eps`, full media at
+> the primary `eps`, 20% subset at the others; stores `mu_max`/`z`/shadow/status/
+> medium, records `index_hash` per row per P13). CLI: `cfs active-subspace`,
+> `cfs generate`. `pyarrow` added to the `data` extra. Tested (`tests/test_cfs_sampling.py`).
+> **Not yet:** §4.6 active-learning reserve (needs Phase 5); `config/sampling.yaml`
+> (defaults live on `SamplingConfig`); a Nextflow `GENERATE_LABELS` process. Two
+> things to check before bulk generation — the roster-wide `cfs degeneracy` re-run
+> (§5.4 caveat) and that `A_i` selection is stable across cobra-default vs. HiGHS
+> solvers on a real CarveMe model.
+
 ### 4.1 Per-organism designs, not shared media
 
 Surrogates are trained independently and only composed at inference, so each

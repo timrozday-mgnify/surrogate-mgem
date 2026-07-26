@@ -1,9 +1,11 @@
-"""Command-line entry point: ``cfs {qc, freeze-index, degeneracy}``.
+"""Command-line entry point: ``cfs {qc, freeze-index, degeneracy, active-subspace, generate}``.
 
-M0/M1 of the v2 plan (``docs/design/community-fba-surrogates-plan-v2.md``). All
-subcommands need the ``data`` extra (cobra; ``qc`` also needs the ``memote``
-CLI). The Nextflow ``QC_MODELS`` process runs ``qc`` then ``freeze-index``;
-``DEGENERACY_SURVEY`` runs ``degeneracy``.
+M0-M2 of the v2 plan (``docs/design/community-fba-surrogates-plan-v2.md``). All
+subcommands need the ``data`` extra (cobra; ``qc`` also needs the ``memote`` CLI;
+``generate`` also needs ``pyarrow``). The Nextflow ``QC_MODELS`` process runs
+``qc`` then ``freeze-index``; ``DEGENERACY_SURVEY`` runs ``degeneracy``. §4
+sampling is ``active-subspace`` (the sensitivity sweep) then ``generate`` (label
+shards -> parquet by organism × eps).
 """
 
 from __future__ import annotations
@@ -37,6 +39,18 @@ def build_parser() -> argparse.ArgumentParser:
     dg.add_argument("--alpha", default="1.0,0.7", help="Comma-separated growth fractions.")
     dg.add_argument("--n-media", type=int, default=50, help="Media sampled per organism.")
     dg.add_argument("--seed", type=int, default=0)
+
+    asp = sub.add_parser("active-subspace", help="§4.2: per-organism sensitive-metabolite sweep.")
+    asp.add_argument("--roster", type=Path, required=True, help="CSV: genome_id, model_path.")
+    asp.add_argument("--out", type=Path, required=True, help="Subspaces JSON (fed to generate).")
+    asp.add_argument("--tol", type=float, default=1e-3, help="Relative mu_max-drop threshold.")
+
+    gen = sub.add_parser("generate", help="§4.5: solve label shards -> parquet by (organism, eps).")
+    gen.add_argument("--roster", type=Path, required=True, help="CSV: genome_id, model_path.")
+    gen.add_argument("--index", type=Path, required=True, help="Frozen metabolite_index.json.")
+    gen.add_argument("--outdir", type=Path, required=True, help="Parquet shard root.")
+    gen.add_argument("--n-media", type=int, help="Override media per organism (default 20000).")
+    gen.add_argument("--seed", type=int, default=0)
     return parser
 
 
@@ -82,6 +96,35 @@ def main(argv: list[str] | None = None) -> int:
         }
         rec = survey_roster(roster, media_per_model, args.outdir, alphas=alphas)
         print(json.dumps(rec, indent=2))
+        return 0
+
+    if args.command == "active-subspace":
+        from cobra.io import read_sbml_model
+
+        from cfs.sampling.active_subspace import active_subspace, write_subspaces
+
+        subspaces = [
+            active_subspace(read_sbml_model(str(gm.model_path)), gm.genome_id, tol=args.tol)
+            for gm in roster
+        ]
+        write_subspaces(subspaces, args.out)
+        print(f"wrote {args.out} — {sum(len(s.active) for s in subspaces)} active "
+              f"metabolites across {len(subspaces)} organisms")
+        return 0
+
+    if args.command == "generate":
+        from dataclasses import replace
+
+        from cfs.sampling.design import SamplingConfig
+        from cfs.sampling.generate import generate_roster
+
+        cfg = SamplingConfig(seed=args.seed)
+        if args.n_media is not None:
+            cfg = replace(cfg, n_media=args.n_media)
+        shards = generate_roster(roster, args.index, args.outdir, cfg)
+        print(json.dumps(
+            {s.genome_id: {"n_media": s.n_media, "shards": [str(p) for p in s.paths]}
+             for s in shards}, indent=2))
         return 0
 
     return 1
