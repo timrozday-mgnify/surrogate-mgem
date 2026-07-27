@@ -79,17 +79,22 @@ workflow SURROGATE_TRAINING {
     }
 
     // 5. Model sweep: community x architecture x ensemble-size x train-size.
-    ch_hidden  = Channel.fromList(params.hidden_configs.tokenize(';')*.trim())
-    ch_nmodels = Channel.fromList(params.n_models_list.tokenize(',')*.trim())
-    ch_sizes   = Channel.fromList(params.train_sizes.tokenize(',')*.trim())
+    ch_hidden   = Channel.fromList(params.hidden_configs.tokenize(';')*.trim())
+    ch_nmodels  = Channel.fromList(params.n_models_list.tokenize(',')*.trim())
+    ch_sizes    = Channel.fromList(params.train_sizes.tokenize(',')*.trim())
+    // Input width matters as much as depth here: growth is set by a few limiting
+    // nutrients, so the best `--n-features` shifts with dataset size and community
+    // (measured: 8 / 16 / 32 features -> R2 0.56 / 0.86 / 0.70 on one community).
+    ch_features = Channel.fromList(params.n_features_list.toString().tokenize(',')*.trim())
 
     ch_train_in = ch_augmented
         .combine(ch_hidden)
         .combine(ch_nmodels)
         .combine(ch_sizes)
-        .map { meta, d, hid, nm, sz ->
-            def cell = "${meta.id}__h${hid.replaceAll(',', 'x')}__k${nm}__n${sz}"
-            [ meta + [id: cell, hidden: hid, n_models: nm, n_train: sz], d ]
+        .combine(ch_features)
+        .map { meta, d, hid, nm, sz, nf ->
+            def cell = "${meta.id}__h${hid.replaceAll(',', 'x')}__k${nm}__n${sz}__f${nf}"
+            [ meta + [id: cell, hidden: hid, n_models: nm, n_train: sz, n_features: nf], d ]
         }
     TRAIN_SURROGATE(ch_train_in)
     ch_versions = ch_versions.mix(TRAIN_SURROGATE.out.versions.first())

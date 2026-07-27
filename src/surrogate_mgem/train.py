@@ -23,6 +23,7 @@ from sklearn.model_selection import train_test_split
 
 from surrogate_mgem.active import ActiveConfig, active_learning_loop
 from surrogate_mgem.ensemble import GrowthEnsemble
+from surrogate_mgem.model import select_features
 
 LOGGER = logging.getLogger("surrogate-mgem.train")
 
@@ -79,6 +80,16 @@ def load_fixed_community_dataset(
     # feature list stays a subset of the shared universe, so it still aligns.
     active_cols = x_wide.columns[(x_wide != 0).any()].tolist()
     x_wide = x_wide[active_cols]
+
+    # A constant target trains "perfectly" to R^2 = 0 and hides the real failure
+    # (a sampler that never produces growth), so refuse it here instead.
+    if float(np.nanstd(y_wide.to_numpy(dtype=float))) < 1e-9:
+        raise ValueError(
+            f"Community {community_id!r}: growth is constant across all "
+            f"{len(sample_ids)} samples -- there is nothing to learn. Check the "
+            "generation settings (sampler=titrate, and max_uptake far above the "
+            "saturation point flattens growth)."
+        )
 
     return FixedCommunityDataset(
         community_id=str(community_id),
@@ -181,6 +192,7 @@ def train_fixed_community(
     epochs: int = 1000,
     test_size: float = 0.2,
     n_train: int | None = None,
+    n_features: int = 0,
     weight_decay: float = 0.0,
     density_weights: bool = True,
     seed: int = 0,
@@ -198,8 +210,14 @@ def train_fixed_community(
     if n_train is not None and n_train < len(X_tr):
         idx = np.random.default_rng(seed).choice(len(X_tr), size=n_train, replace=False)
         X_tr, Y_tr = X_tr[idx], Y_tr[idx]
+    # Selection is fitted on the training rows only -- never X_te.
+    feature_index = select_features(X_tr, Y_tr, n_features, seed=seed)
     ensemble = GrowthEnsemble(
-        dataset.X.shape[1], dataset.Y.shape[1], n_models=n_models, hidden=hidden
+        dataset.X.shape[1],
+        dataset.Y.shape[1],
+        n_models=n_models,
+        hidden=hidden,
+        feature_index=feature_index,
     )
     ensemble.fit(
         X_tr,
@@ -218,6 +236,8 @@ def train_fixed_community(
         "n_train": int(len(X_tr)),
         "n_test": int(len(X_te)),
         "n_members": int(dataset.Y.shape[1]),
+        "n_features_used": int(len(feature_index)),
+        "n_features_total": int(dataset.X.shape[1]),
         **_test_metrics(ensemble.predict(X_te), Y_te, dataset.target_names),
         **_training_stats(ensemble.last_history),
     }
@@ -254,9 +274,10 @@ def train_fixed_community_active(
     X_tr, X_te, Y_tr, Y_te = train_test_split(
         dataset.X, dataset.Y, test_size=test_size, random_state=seed
     )
-    evaluate, active_mask = make_fixed_community_evaluator(
+    evaluate, active_mask, spec = make_fixed_community_evaluator(
         members, dataset.feature_names, dataset.target_names, solver, tradeoff
     )
+    active_config.spec = spec
     ensemble, history, (X_all, _) = active_learning_loop(
         X_tr, Y_tr, evaluate, active_mask, active_config, X_test=X_te, Y_test=Y_te
     )
@@ -290,6 +311,19 @@ def train_fixed_community_active(
 _TABLES = ("samples", "media", "member_growth", "membership")
 
 
+def _read_spec(data_dir: Path, community_id: str) -> dict | None:
+    """This community's ``medium_spec.json`` entry, if the dataset carries one.
+
+    Generation calibrates the uptake bound and scans for essential nutrients once
+    and writes them alongside the tables; re-deriving them here would cost a solve
+    per exchange in every active round.
+    """
+    path = data_dir / "medium_spec.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text()).get(community_id)
+
+
 def _write_augmented_dataset(
     data_dir: Path,
     out_dir: Path,
@@ -309,6 +343,8 @@ def _write_augmented_dataset(
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(data_dir / "exchange_universe.json", out_dir / "exchange_universe.json")
+    if (data_dir / "medium_spec.json").exists():
+        shutil.copyfile(data_dir / "medium_spec.json", out_dir / "medium_spec.json")
 
     samples = pd.read_csv(data_dir / "samples.csv")
     kept_ids = samples.loc[samples["community_id"] == dataset.community_id, "sample_id"].tolist()
@@ -375,9 +411,15 @@ def run_active_round(
 
     dataset = load_fixed_community_dataset(data_dir, community_id)
     members = members_for_community(read_roster(roster_path), dataset.community_id)
-    evaluate, active_mask = make_fixed_community_evaluator(
-        members, dataset.feature_names, dataset.target_names, solver, tradeoff
+    evaluate, active_mask, spec = make_fixed_community_evaluator(
+        members,
+        dataset.feature_names,
+        dataset.target_names,
+        solver,
+        tradeoff,
+        _read_spec(data_dir, dataset.community_id),
     )
+    active_config.spec = spec
     X_new, Y_new = active_round(
         dataset.X, dataset.Y, evaluate, active_mask, active_config, round_index
     )

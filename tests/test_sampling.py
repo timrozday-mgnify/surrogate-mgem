@@ -57,6 +57,41 @@ def test_perturb_media_drops_and_scales_a_base():
     assert np.all(d2[:, 0] == 0.0)
 
 
+def test_titrate_media_limits_a_few_nutrients_against_a_replete_background():
+    essential = np.zeros(6, dtype=bool)
+    essential[0] = True
+    demand = np.array([2.0, 0.01, 100.0, 5.0, 0.5, 0.0])  # orders of magnitude apart
+    design = sampling.titrate_media(
+        300, 6, seed=1, scale=demand, keep_range=(0.8, 1.0), essential=essential,
+        span=(0.05, 1.0), replete=(2.0, 5.0), n_limiting=2,
+    )
+    assert design.shape == (300, 6)
+    assert (design[:, 0] > 0).all()  # essentials are never dropped
+    assert (design[:, 5] == 0).all()  # zero demand -> never offered
+    for j, d in enumerate(demand[:5]):
+        offered = design[design[:, j] > 0, j]
+        # Every nutrient is expressed relative to its own demand: sometimes scarce
+        # (limiting), mostly replete.
+        assert offered.min() >= 0.05 * d
+        assert offered.max() <= 5.0 * d
+        assert (offered < d).any() and (offered > d).any()
+    # ...but only a few nutrients are scarce in any one medium, so growth stays
+    # attributable instead of being a minimum over everything at once.
+    scarce_per_row = (design < demand[None, :]) & (design > 0)
+    assert scarce_per_row.sum(axis=1).max() <= 2
+
+
+def test_titrate_media_rejects_bad_arguments_and_degenerate_shapes():
+    assert sampling.titrate_media(0, 5, seed=0, scale=1.0).shape == (0, 5)
+    assert sampling.titrate_media(4, 0, seed=0, scale=1.0).shape == (4, 0)
+    design = sampling.titrate_media(20, 5, seed=0, scale=1.0)  # scalar scale broadcasts
+    assert (design == 0).any()  # dropout still applies
+    with pytest.raises(ValueError, match="span"):
+        sampling.titrate_media(4, 3, seed=0, scale=1.0, span=(0.0, 1.0))
+    with pytest.raises(ValueError, match="non-negative"):
+        sampling.titrate_media(4, 3, seed=0, scale=np.array([-1.0, 1.0, 1.0]))
+
+
 def test_sample_membership_sizes_and_distinctness():
     subsets = sampling.sample_membership(n_genomes=10, n_communities=25, size_range=(2, 5), seed=3)
     assert len(subsets) == 25

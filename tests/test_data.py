@@ -8,6 +8,7 @@ from surrogate_mgem.data import (
     GenomeModel,
     _member_exchange_rows,
     _shard_ranges,
+    _work_units,
     medium_to_member_exchange,
     read_roster,
 )
@@ -32,6 +33,21 @@ def test_shard_ranges_more_workers_than_media():
     ranges = _shard_ranges(3, 8)
     assert sum(c for _, c in ranges) == 3
     assert all(c >= 1 for _, c in ranges)  # no empty shards
+
+
+def test_work_units_cover_every_media_range_exactly_once():
+    kwargs = {"n_communities": 3, "media_per_community": 100, "workers": 2, "num_shards": 4}
+    units = [u for shard in range(4) for u in _work_units(**kwargs, shard_index=shard)]
+    assert len(units) == len(set(units))  # nothing solved twice
+    for ci in range(3):
+        assert sum(count for c, _, count in units if c == ci) == 100  # all media covered
+
+
+def test_work_units_fan_out_a_single_community():
+    # The old community-only sharding left every shard but one idle here.
+    per_shard = [len(_work_units(1, 100, 1, 10, i)) for i in range(10)]
+    assert all(n > 0 for n in per_shard)
+    assert sum(count for _, _, count in _work_units(1, 100, 1, 10, 0)) < 100  # a slice, not all
 
 
 def test_medium_to_member_exchange():

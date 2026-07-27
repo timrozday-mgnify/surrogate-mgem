@@ -1,0 +1,570 @@
+---
+title: "Surrogate-mGEM run report"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    embed-resources: true
+    theme: cosmo
+    fig-width: 9
+jupyter: basicpython
+params:
+  run_dir: "."
+  trace: ""
+---
+
+```{python}
+# | tags: [parameters]
+# | echo: false
+# Overridden by `quarto render ... -P run_dir:/path/to/run`.
+run_dir = "."
+trace = ""
+```
+
+```{python}
+# | echo: false
+import json
+import re
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import plotly.io as pio
+from plotly.offline import get_plotlyjs
+from IPython.display import HTML, Markdown, display
+
+pio.templates.default = "plotly_white"
+# Embed plotly.js exactly once (the notebook renderer inlines a copy per figure,
+# which makes the self-contained HTML ~10x bigger than it needs to be).
+display(HTML(f"<script>{get_plotlyjs()}</script>"))
+PALETTE = px.colors.qualitative.Safe
+
+RUN = Path(run_dir).expanduser().resolve()
+RESULTS = RUN / "results"
+MODELS = RESULTS / "models"
+PIPELINE_INFO = RESULTS / "pipeline_info"
+
+
+def show(fig, height=450, **kw):
+    """Display a figure. Explicit, because a bare expression inside an `if` is not echoed."""
+    fig.update_layout(height=height, margin=dict(l=60, r=20, t=50, b=50),
+                      hovermode="closest", legend=dict(orientation="h", y=-0.2), **kw)
+    display(HTML(fig.to_html(include_plotlyjs=False, full_html=False, default_width="100%")))
+
+
+def md(text):
+    display(Markdown(text))
+
+
+def parse_params_config(path):
+    """`key = value  // comment` lines out of a Nextflow params block."""
+    if not path.exists():
+        return {}
+    out = {}
+    for line in path.read_text().splitlines():
+        line = line.split("//")[0].strip()
+        m = re.match(r"^([A-Za-z_][\w]*)\s*=\s*(.+?)\s*$", line)
+        if m:
+            out[m.group(1)] = m.group(2).strip().strip("'\"")
+    return out
+
+
+_DUR = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, "d": 86400}
+_SIZE = {"B": 1 / 1e6, "KB": 1 / 1e3, "MB": 1, "GB": 1e3, "TB": 1e6}
+
+
+def dur_seconds(text):
+    """'46m 49s' / '9.4s' / '670ms' -> seconds."""
+    if not isinstance(text, str):
+        return np.nan
+    parts = re.findall(r"([\d.]+)\s*(ms|[smhd])", text)
+    return sum(float(v) * _DUR[u] for v, u in parts) if parts else np.nan
+
+
+def size_mb(text):
+    """'4.9 GB' -> MB."""
+    m = re.match(r"^\s*([\d.]+)\s*([KMGT]?B)\s*$", str(text))
+    return float(m.group(1)) * _SIZE[m.group(2)] if m else np.nan
+
+
+def latest_trace():
+    if trace:
+        return Path(trace).expanduser().resolve()
+    files = sorted(PIPELINE_INFO.glob("execution_trace_*.txt")) if PIPELINE_INFO.exists() else []
+    # Multiple resume attempts land here; the last complete one is the run that finished.
+    files = [f for f in files if len(f.read_text().splitlines()) > 1]
+    return files[-1] if files else None
+
+
+CFG = parse_params_config(RUN / "params.config")
+
+LEADERBOARD = RESULTS / "leaderboard.csv"
+lb = pd.read_csv(LEADERBOARD) if LEADERBOARD.exists() else pd.DataFrame()
+
+# One entry per sweep cell: dir name is <community>__h<HxW>__k<n_models>__n<n_train>.
+cells = {}
+for d in sorted(MODELS.glob("*__h*")) if MODELS.exists() else []:
+    tm = d / "train_metrics.json"
+    if not tm.exists():
+        continue
+    cells[d.name] = {
+        "dir": d,
+        "metrics": json.loads(tm.read_text()),
+        "preds": pd.read_csv(d / "predictions.csv") if (d / "predictions.csv").exists() else None,
+        "history": pd.read_csv(d / "training_history.csv")
+        if (d / "training_history.csv").exists()
+        else None,
+        "meta": json.loads((d / "surrogate_meta.json").read_text())
+        if (d / "surrogate_meta.json").exists()
+        else {},
+    }
+
+trace_path = latest_trace()
+tr = pd.DataFrame()
+if trace_path is not None:
+    tr = pd.read_csv(trace_path, sep="\t")
+    tr["process"] = tr["name"].str.replace(r"^.*:", "", regex=True).str.replace(r"\s*\(.*", "", regex=True)
+    tr["tag"] = tr["name"].str.extract(r"\(([^)]*)\)")[0].fillna("")
+    tr["duration_s"] = tr["duration"].map(dur_seconds)
+    tr["realtime_s"] = tr["realtime"].map(dur_seconds)
+    tr["peak_rss_mb"] = tr["peak_rss"].map(size_mb)
+    tr["cpu_pct"] = tr["%cpu"].str.rstrip("%").astype(float)
+    tr["submit_ts"] = pd.to_datetime(tr["submit"])
+    tr["finish_ts"] = tr["submit_ts"] + pd.to_timedelta(tr["duration_s"], unit="s")
+```
+
+```{python}
+# | echo: false
+# --- health checks: every downstream narrative flag is computed here, not asserted.
+flags = []
+
+const_cells = [
+    name
+    for name, c in cells.items()
+    if c["preds"] is not None and c["preds"]["y_true"].std() < 1e-9
+]
+degenerate = len(const_cells) == len(cells) and cells
+if degenerate:
+    lvl = float(next(iter(cells.values()))["preds"]["y_true"].iloc[0])
+    flags.append(("danger", "Degenerate target",
+                  f"Held-out growth is constant at {lvl:g} in all {len(cells)} sweep cells. "
+                  "R² is undefined/zero by construction and the sweep cannot separate "
+                  "architectures or training-set sizes — the models only learned to output "
+                  "a constant."))
+elif const_cells:
+    flags.append(("warning", "Some cells have a constant target",
+                  f"{len(const_cells)} of {len(cells)} cells: {', '.join(const_cells)}."))
+
+if not lb.empty and "r2_overall" in lb:
+    neg = lb[lb["r2_overall"] < 0]
+    if len(neg):
+        flags.append(("warning", "Negative R²",
+                      f"{len(neg)} cell(s) predict worse than the training mean."))
+    best = lb.loc[lb["r2_overall"].idxmax()]
+    if not degenerate and best["r2_overall"] > 0:
+        flags.append(("note", "Best cell",
+                      f"{best['hidden']}, k={best['n_models']}, n_train={best['n_train']} "
+                      f"→ R² {best['r2_overall']:.3f}, MAE {best['mae_overall']:.3g}."))
+
+if not lb.empty and "stopped_early_frac" in lb and (lb["stopped_early_frac"] == 1.0).all():
+    ep = lb["epochs_run_max"].max()
+    flags.append(("warning", "Every ensemble member early-stopped",
+                  f"All members in all cells stopped by epoch {int(ep)} of a "
+                  f"{CFG.get('train_epochs', '?')}-epoch budget — the loss had nothing left "
+                  "to reduce."))
+
+gen = tr[tr["process"] == "GENERATE_DATA"] if not tr.empty else pd.DataFrame()
+if len(gen) > 1:
+    busiest, idlest = gen["realtime_s"].max(), gen["realtime_s"].median()
+    if busiest > 10 * max(idlest, 1e-9):
+        n_idle = int((gen["realtime_s"] < busiest / 10).sum())
+        flags.append(("warning", "Uneven data-generation fan-out",
+                      f"{n_idle} of {len(gen)} GENERATE_DATA shards finished in under "
+                      f"{busiest / 10:.0f}s while the busiest took {busiest:.0f}s. Sharding "
+                      "splits communities, so with "
+                      f"n_communities={CFG.get('n_communities', '?')} the extra shards have "
+                      "nothing to solve."))
+
+if not tr.empty:
+    top = tr.loc[tr["duration_s"].idxmax()]
+    total = (tr["finish_ts"].max() - tr["submit_ts"].min()).total_seconds()
+    flags.append(("note", "Wall-clock",
+                  f"{total / 60:.0f} min end to end; {top['process']} was the longest single "
+                  f"task at {top['duration_s'] / 60:.0f} min "
+                  f"({100 * top['duration_s'] / total:.0f}% of the run)."))
+
+_ICON = {"danger": "🔴", "warning": "🟠", "note": "🔵"}
+
+md(
+    "\n\n".join(f"{_ICON[l]} **{t}** — {b}" for l, t, b in flags)
+    or "No findings — all checks passed."
+)
+```
+
+## What this run was
+
+```{python}
+# | echo: false
+roster = pd.read_csv(RUN / "roster.csv") if (RUN / "roster.csv").exists() else pd.DataFrame()
+n_cells = len(cells)
+any_metrics = next(iter(cells.values()))["metrics"] if cells else {}
+md(
+    f"""
+Run directory: `{RUN}`.
+
+| | |
+| --- | --- |
+| Genomes in roster | {len(roster)} |
+| Communities trained | {lb['community_id'].nunique() if not lb.empty else 0} |
+| Sweep cells | {n_cells} |
+| Samples after generation + active learning | {any_metrics.get('n_samples', '—')} |
+| Exchange features per medium | {len(next(iter(cells.values()))['meta'].get('feature_names', [])) if cells else '—'} |
+"""
+)
+```
+
+The pipeline generated media/community samples with MICOM (sharded), merged them, spent an
+active-learning budget on the highest-uncertainty media, then trained one deep ensemble per
+sweep cell (architecture × ensemble size × training-set size) and collected a leaderboard.
+
+### Parameters
+
+```{python}
+# | echo: false
+GROUPS = {
+    "Generation": ["num_shards", "n_communities", "community_size_min", "community_size_max",
+                   "media_per_community", "sampler", "n_active", "tradeoff", "max_uptake",
+                   "solver", "seed"],
+    "Active learning": ["n_communities_augment", "active_rounds", "active_batch_size",
+                        "active_n_candidates", "active_n_models", "active_hidden",
+                        "active_epochs"],
+    "Sweep": ["hidden_configs", "n_models_list", "train_sizes", "train_epochs", "test_size"],
+}
+rows = [(g, k, CFG[k]) for g, keys in GROUPS.items() for k in keys if k in CFG]
+extra = [("Other", k, v) for k, v in CFG.items() if k not in {k for _, k, _ in rows}]
+pd.DataFrame(rows + extra, columns=["group", "parameter", "value"]).set_index(["group", "parameter"])
+```
+
+```{python}
+# | echo: false
+sv = PIPELINE_INFO / "software_versions.yml"
+md(f"```yaml\n{sv.read_text()}\n```" if sv.exists() else "_No software_versions.yml._")
+```
+
+## Execution
+
+```{python}
+# | echo: false
+if tr.empty:
+    md("_No execution trace in this run directory._")
+else:
+    procs = list(dict.fromkeys(tr.sort_values("submit_ts")["process"]))
+    colours = {p: PALETTE[i % len(PALETTE)] for i, p in enumerate(procs)}
+    t0 = tr["submit_ts"].min()
+    fig = go.Figure()
+    for p in procs:
+        sub = tr[tr["process"] == p]
+        fig.add_bar(
+            y=[f"{r.process} {r.tag}".strip() for r in sub.itertuples()],
+            x=sub["duration_s"] / 60,
+            base=(sub["submit_ts"] - t0).dt.total_seconds() / 60,
+            orientation="h",
+            name=p,
+            marker_color=colours[p],
+            customdata=np.stack([sub["duration"], sub["realtime"], sub["cpu_pct"],
+                                 sub["peak_rss"], sub["status"]], axis=-1),
+            hovertemplate=("<b>%{y}</b><br>duration %{customdata[0]}"
+                           "<br>realtime %{customdata[1]}<br>cpu %{customdata[2]:.0f}%"
+                           "<br>peak RSS %{customdata[3]}<br>%{customdata[4]}<extra></extra>"),
+        )
+    fig.update_layout(barmode="overlay", xaxis_title="minutes since first submit",
+                      yaxis=dict(autorange="reversed"), title="Task timeline")
+    show(fig, height=max(360, 26 * len(tr)))
+```
+
+```{python}
+# | echo: false
+if not tr.empty:
+    fig = px.scatter(
+        tr, x="realtime_s", y="peak_rss_mb", color="process", size="cpu_pct",
+        hover_name="name", color_discrete_sequence=PALETTE,
+        hover_data={"realtime": True, "peak_rss": True, "cpu_pct": ":.0f",
+                    "realtime_s": False, "peak_rss_mb": ":.0f"},
+        labels={"realtime_s": "realtime (s)", "peak_rss_mb": "peak RSS (MB)"},
+        title="Cost per task (bubble = %CPU)",
+    )
+    fig.update_xaxes(type="log")
+    show(fig)
+```
+
+## The generated dataset
+
+```{python}
+# | echo: false
+growth = None
+merged = RESULTS / "data/merged"
+if (merged / "member_growth.csv").exists():
+    growth = pd.read_csv(merged / "member_growth.csv")
+spec = json.loads((merged / "medium_spec.json").read_text()) if (merged / "medium_spec.json").exists() else {}
+
+if growth is None:
+    md(
+        "_The merged dataset is not published in this run directory "
+        "(`results/data/merged/`), so only the per-cell held-out predictions are "
+        "available below._"
+    )
+else:
+    rows = [
+        ("samples", f"{len(growth):,}"),
+        ("grew (growth > 0)", f"{100 * (growth['growth'] > 0).mean():.1f}%"),
+        ("growth range", f"{growth['growth'].min():.3g} – {growth['growth'].max():.3g}"),
+        ("growth std", f"{growth['growth'].std():.3g}"),
+    ]
+    for community_id, s in spec.items():
+        rows.append((f"calibrated uptake bound ({community_id})", f"{s['bound']:.3g}"))
+        rows.append((f"essential exchanges ({community_id})", str(len(s["essential"]))))
+        dem = s.get("demand", {})
+        if dem:
+            v = np.array(list(dem.values()))
+            rows.append((f"exchanges ever consumed ({community_id})", str(len(dem))))
+            rows.append((f"uptake demand range ({community_id})", f"{v.min():.3g} – {v.max():.3g}"))
+    md("| | |\n| --- | --- |\n" + "\n".join(f"| {k} | {v} |" for k, v in rows))
+```
+
+```{python}
+# | echo: false
+if growth is not None:
+    fig = go.Figure()
+    for i, (g, sub) in enumerate(growth.groupby("genome_id")):
+        fig.add_histogram(x=sub["growth"], name=str(g), nbinsx=60, opacity=0.7,
+                          marker_color=PALETTE[i % len(PALETTE)],
+                          hovertemplate="growth %{x:.3g}<br>samples %{y}<extra>" + str(g) + "</extra>")
+    show(fig.update_layout(barmode="overlay", title="Growth across the generated media",
+                           xaxis_title="growth rate", yaxis_title="samples"))
+```
+
+A healthy dataset has most of its mass spread over a range of positive growth rates, with a spike
+at zero from the media that dropped an essential nutrient. All mass at a single value means the
+media carry no signal to learn.
+
+Each nutrient is sampled around its **own** uptake demand (an LP output, read off the solved
+reference and probe media), because a nutrient only limits growth near the flux the community
+actually draws of it — and those demands span orders of magnitude. Exchanges the community never
+consumes are left out of the medium entirely: they cannot change growth, and including them only
+gives the surrogate dimensions to memorise noise in.
+
+## Model performance
+
+Each sweep cell is one deep ensemble. The dropdown selects the cell; error bars are the
+ensemble's predictive standard deviation (its own estimate of what it does not know).
+
+```{python}
+# | echo: false
+def cell_dropdown(fig, names, per_cell=1, title=""):
+    """Show only the traces belonging to the selected cell."""
+    buttons = []
+    for i, n in enumerate(names):
+        vis = [False] * (len(names) * per_cell)
+        for j in range(per_cell):
+            vis[i * per_cell + j] = True
+        buttons.append(dict(label=n, method="update",
+                            args=[{"visible": vis}, {"title": f"{title}{n}"}]))
+    fig.update_layout(updatemenus=[dict(buttons=buttons, x=0, xanchor="left", y=1.18)],
+                      title=f"{title}{names[0]}")
+    return fig
+
+
+names = list(cells)
+if names:
+    fig = go.Figure()
+    for i, n in enumerate(names):
+        p = cells[n]["preds"]
+        fig.add_scatter(
+            x=p["y_true"], y=p["y_pred"], mode="markers", name=n, visible=(i == 0),
+            marker=dict(color=PALETTE[0], opacity=0.55, size=6),
+            error_y=dict(type="data", array=p["y_std"], visible=True, thickness=0.6, width=0),
+            customdata=np.stack([p["y_std"], p["genome_id"]], axis=-1),
+            hovertemplate=("true %{x:.4g}<br>pred %{y:.4g}<br>± %{customdata[0]:.3g}"
+                           "<br>%{customdata[1]}<extra></extra>"),
+        )
+        lo = float(min(p["y_true"].min(), p["y_pred"].min()))
+        hi = float(max(p["y_true"].max(), p["y_pred"].max()))
+        pad = (hi - lo) * 0.05 or 1e-9
+        fig.add_scatter(x=[lo - pad, hi + pad], y=[lo - pad, hi + pad], mode="lines",
+                        line=dict(dash="dash", color="black", width=1), visible=(i == 0),
+                        showlegend=False, hoverinfo="skip")
+    cell_dropdown(fig, names, per_cell=2, title="Predicted vs true growth — ")
+    show(fig.update_layout(xaxis_title="true growth rate", yaxis_title="predicted growth rate",
+                           showlegend=False))
+```
+
+```{python}
+# | echo: false
+if degenerate:
+    md(
+        "Every point sits at the same true growth rate, so the diagonal collapses to a point: "
+        "the scatter shows only how tightly the ensemble converged on that constant "
+        "(residuals of order 1e-10 against a target of 0). Nothing here is evidence about "
+        "the surrogate's ability to predict growth — the dataset carries no growth signal to "
+        "predict. Under the `sparse` sampler with `n_active="
+        f"{CFG.get('n_active', '?')}` nutrients per medium, no sampled medium supported growth "
+        "for this organism."
+    )
+```
+
+```{python}
+# | echo: false
+if names:
+    fig = go.Figure()
+    for i, n in enumerate(names):
+        p = cells[n]["preds"]
+        fig.add_histogram(x=p["y_pred"] - p["y_true"], name=n, opacity=0.6, nbinsx=60,
+                          marker_color=PALETTE[i % len(PALETTE)],
+                          hovertemplate="residual %{x:.3g}<br>count %{y}<extra>" + n + "</extra>")
+    show(fig.update_layout(barmode="overlay", title="Residuals (predicted − true), all cells",
+                           xaxis_title="residual", yaxis_title="held-out samples"))
+```
+
+```{python}
+# | echo: false
+if names:
+    fig = go.Figure()
+    for i, n in enumerate(names):
+        fig.add_box(y=cells[n]["preds"]["y_std"], name=n, marker_color=PALETTE[i % len(PALETTE)],
+                    boxpoints=False)
+    show(fig.update_layout(title="Predictive uncertainty (ensemble std) per cell",
+                           yaxis_title="ensemble std", showlegend=False))
+```
+
+## Training
+
+Loss per ensemble member. Training stops early when validation loss plateaus, so a curve that
+is flat from epoch 0 means there was nothing to fit.
+
+```{python}
+# | echo: false
+hist_names = [n for n in names if cells[n]["history"] is not None]
+if hist_names:
+    n_members = max(cells[n]["history"]["member"].nunique() for n in hist_names)
+    fig = go.Figure()
+    for i, n in enumerate(hist_names):
+        h = cells[n]["history"]
+        members = sorted(h["member"].unique())
+        for j in range(n_members):
+            for k, col in enumerate(["train", "val"]):
+                if j < len(members):
+                    sub = h[h["member"] == members[j]]
+                    x, y = sub["epoch"], sub[col]
+                else:
+                    x, y = [], []
+                fig.add_scatter(
+                    x=x, y=y, mode="lines", visible=(i == 0),
+                    name=f"member {j} {col}",
+                    legendgroup=col,
+                    showlegend=(j == 0),
+                    line=dict(color=PALETTE[k], width=1.4, dash="dot" if col == "val" else None),
+                    hovertemplate=(f"{n}<br>member {j} {col}"
+                                   "<br>epoch %{x}<br>loss %{y:.3g}<extra></extra>"),
+                )
+    cell_dropdown(fig, hist_names, per_cell=n_members * 2, title="Training curves — ")
+    show(fig.update_layout(xaxis_title="epoch", yaxis_title="MSE loss", yaxis_type="log"))
+```
+
+## Parameter sweep
+
+```{python}
+# | echo: false
+if not lb.empty:
+    d = lb.copy()
+    d["cell"] = (d["community_id"] + "__h" + d["hidden"] + "__k" + d["n_models"].astype(str)
+                 + "__n" + d["n_train"].astype(str))
+    if not tr.empty:
+        d = d.merge(tr[["tag", "duration_s", "peak_rss_mb"]], left_on="cell", right_on="tag",
+                    how="left")
+    for metric, logy in [("r2_overall", False), ("mae_overall", True)]:
+        fig = px.line(
+            d.sort_values("n_train"), x="n_train", y=metric, color="hidden", markers=True,
+            symbol="n_models", color_discrete_sequence=PALETTE, log_x=True, log_y=logy,
+            hover_data=[c for c in ["community_id", "n_models", "n_test", "n_features_used",
+                                    "epochs_run_max", "best_val_mean"] if c in d],
+            labels={"n_train": "training rows (--n-train cap)", metric: metric},
+            title=f"{metric} vs training-set size",
+        )
+        show(fig, height=380)
+```
+
+```{python}
+# | echo: false
+if not lb.empty and "duration_s" in d:
+    fig = px.scatter(
+        d, x="duration_s", y="mae_overall", color="hidden", size="n_train",
+        symbol="n_models", color_discrete_sequence=PALETTE, log_y=True,
+        hover_name="cell", hover_data=[c for c in ["r2_overall", "peak_rss_mb",
+                                                   "n_features_used", "epochs_run_max"] if c in d],
+        labels={"duration_s": "TRAIN_SURROGATE wall-clock (s)", "mae_overall": "test MAE"},
+        title="Cost versus accuracy",
+    )
+    show(fig, height=380)
+```
+
+```{python}
+# | echo: false
+lb
+```
+
+```{python}
+# | echo: false
+if degenerate:
+    md(
+        "Because the target is constant, the two sweep axes (architecture "
+        f"`{CFG.get('hidden_configs', '')}` and training size `{CFG.get('train_sizes', '')}`) "
+        "differ only in how quickly each cell drove an already-zero loss to numerical noise. "
+        "The learning curves above are measuring floating-point residue, not generalisation."
+    )
+```
+
+## What to change next run
+
+```{python}
+# | echo: false
+recs = []
+if degenerate:
+    recs.append(
+        "**Make the sampled media support growth.** This is the blocker: nothing else in the "
+        f"run can be judged until growth varies. The `{CFG.get('sampler', '?')}` sampler with "
+        f"`n_active={CFG.get('n_active', '?')}` non-zero nutrients produced no feasible growth "
+        "for this genome. Try a richer medium (raise `n_active`, or `sampler = 'perturb'` / "
+        "`'dirichlet'` around a known-viable medium), and sanity-check with a single "
+        "`surrogate-mgem generate` call that the resulting `samples.csv` has non-zero, "
+        "varying growth before spending cluster time."
+    )
+    recs.append(
+        "**Publish the merged dataset.** `conf/modules.config` only publishes `models/` and "
+        "`leaderboard.csv`, so the merged `samples.csv` and the active-learning history are "
+        "not in the run directory — the growth distribution had to be inferred from the "
+        "per-cell predictions. Adding a `publishDir` to `MERGE_DATA` and `ACTIVE_LEARN` would "
+        "have made this diagnosis immediate."
+    )
+if len(gen) > 1 and gen["realtime_s"].max() > 10 * max(gen["realtime_s"].median(), 1e-9):
+    recs.append(
+        f"**Right-size the fan-out.** Shards split communities, so with "
+        f"`n_communities={CFG.get('n_communities', '?')}` only one of "
+        f"`num_shards={CFG.get('num_shards', '?')}` had work. Either set `num_shards` to the "
+        "community count, or shard by medium so a single-community run still parallelises."
+    )
+if not tr.empty:
+    al = tr[tr["process"] == "ACTIVE_LEARN"]
+    if len(al) and al["duration_s"].sum() > 0.5 * tr["duration_s"].max():
+        recs.append(
+            f"**Active learning dominates the budget** "
+            f"({al['duration_s'].sum() / 60:.0f} min for "
+            f"`active_rounds={CFG.get('active_rounds', '?')}` × "
+            f"`active_batch_size={CFG.get('active_batch_size', '?')}` MICOM solves). Worth "
+            "setting `active_rounds = 0` while debugging the data-generation settings, and "
+            "re-enabling once growth varies."
+        )
+md("\n\n".join(f"{i}. {r}" for i, r in enumerate(recs, 1)) or "Nothing flagged.")
+```

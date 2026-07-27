@@ -16,7 +16,7 @@ nextflow_pipeline {
                 community_size_min    = 1
                 community_size_max    = 1
                 media_per_community   = 24
-                sampler               = 'sparse'
+                sampler               = 'titrate'
                 n_communities_augment = 1
                 active_rounds         = 1
                 active_batch_size     = 4
@@ -27,6 +27,7 @@ nextflow_pipeline {
                 hidden_configs        = '32,32'
                 n_models_list         = '2'
                 train_sizes           = '20'
+                n_features_list       = '0'
                 train_epochs          = 50
                 max_cpus              = 4
                 max_memory            = '8.GB'
@@ -39,10 +40,20 @@ nextflow_pipeline {
                 // leaderboard has a header plus the single sweep cell
                 { assert path("$outputDir/leaderboard.csv").readLines().size() == 2 },
                 { assert path("$outputDir/leaderboard.csv").text.contains('FNPN01') },
+                // the media actually carry growth signal (a constant target used to
+                // sail through this test and produce R2 = 0 on the cluster)
+                { assert path("$outputDir/data/merged/member_growth.csv").exists() },
+                {
+                    def growth = path("$outputDir/data/merged/member_growth.csv")
+                        .readLines().drop(1).collect { it.split(',')[2] as Double }
+                    assert growth.size() > 1
+                    assert growth.max() > 0          // something grew
+                    assert growth.toSet().size() > 1 // and growth is not a single level
+                },
                 // the cell really trained: metrics + saved ensemble members
                 { assert path("$outputDir/models").list().size() == 1 },
-                { assert path("$outputDir/models/FNPN01__h32x32__k2__n20/train_metrics.json").exists() },
-                { assert path("$outputDir/models/FNPN01__h32x32__k2__n20/ensemble/member_0.pt").exists() },
+                { assert path("$outputDir/models/FNPN01__h32x32__k2__n20__f0/train_metrics.json").exists() },
+                { assert path("$outputDir/models/FNPN01__h32x32__k2__n20__f0/ensemble/member_0.pt").exists() },
             )
         }
     }

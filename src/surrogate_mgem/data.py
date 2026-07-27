@@ -53,15 +53,19 @@ class GenerateConfig:
     media_per_community: int = 20
     max_uptake: float = 1000.0
     tradeoff: float = 0.35
-    sampler: str = "perturb"  # "perturb" | "sparse" | "dirichlet" | "lhs"
+    sampler: str = "titrate"  # "titrate" | "perturb" | "sparse" | "dirichlet" | "lhs"
     n_active: int = 20  # sparse sampler: active components per medium
+    keep_min: float = 0.5  # titrate sampler: lowest per-medium keep probability
+    n_limiting: int = 3  # titrate sampler: nutrients made scarce per medium (rest replete)
+    target_frac: float = 0.5  # titrate sampler: calibrate to this fraction of saturated growth
     solver: str = "hybrid"
     seed: int = 0
     workers: int = 1
     knockouts: bool = False  # also record single-member-drop growth changes
-    # HPC fan-out: solve only communities with `ci % num_shards == shard_index`.
-    # Membership sampling is deterministic in `seed`, so every shard derives the
-    # same full community list and takes its own slice. The shared exchange
+    # HPC fan-out: work units are (community, media-range) pairs, assigned round
+    # robin over shards, so a single-community run still parallelises. Membership
+    # sampling and the media design are deterministic in `seed`, so every shard
+    # derives the same work list and takes its own slice. The shared exchange
     # universe is written only by shard 0 (the merge step reuses it).
     shard_index: int = 0
     num_shards: int = 1
@@ -181,25 +185,214 @@ def _solve_sample(community, uptake: dict[str, float], tradeoff: float):
         return None
 
 
+@dataclass(frozen=True)
+class MediumSpec:
+    """What the ``titrate`` sampler needs to know about one community's medium.
+
+    ``bound`` is the uptake bound at which growth is nutrient-limited overall
+    (roughly ``target_frac`` of the saturated rate); ``essential`` flags the
+    exchanges the community cannot grow without; ``demand`` is the *per-nutrient*
+    uptake scale -- how much of each the community actually draws -- in the order
+    of the exchange list it was built from.
+
+    ``demand`` is what makes a medium informative. It is an LP output, not
+    something to be learned: a nutrient is only ever growth-limiting near the flux
+    the organism draws of it, and those fluxes span orders of magnitude (measured
+    on the example genome: 1e-3 to 20, five decades). Sampling every exchange in
+    one shared band leaves the small-demand ones permanently saturated, so growth
+    does not respond to them and no amount of data or rescaling can recover a
+    sensitivity that was never sampled. ``demand == 0`` marks an exchange the
+    community never consumes: it cannot affect growth, so the sampler leaves it at
+    zero and it drops out of the feature space entirely.
+    """
+
+    bound: float
+    essential: np.ndarray  # bool mask over the community's medium exchanges
+    demand: np.ndarray  # per-exchange uptake scale (0 = never consumed)
+
+    def scale(self) -> np.ndarray:
+        """Per-exchange sampling scale, falling back to the global bound."""
+        return np.where(self.demand > 0, self.demand, 0.0)
+
+    def to_json(self, exchanges: list[str]) -> dict:
+        return {
+            "bound": float(self.bound),
+            "essential": [e for e, keep in zip(exchanges, self.essential, strict=True) if keep],
+            "demand": {
+                e: float(d) for e, d in zip(exchanges, self.demand, strict=True) if d > 0
+            },
+        }
+
+    @classmethod
+    def from_json(cls, blob: dict, exchanges: list[str]) -> MediumSpec:
+        essential = set(blob.get("essential", ()))
+        demand = blob.get("demand", {})
+        return cls(
+            bound=float(blob["bound"]),
+            essential=np.array([e in essential for e in exchanges], dtype=bool),
+            demand=np.array([float(demand.get(e, 0.0)) for e in exchanges], dtype=float),
+        )
+
+
+def _uptake_flux(solution, exchanges: list[str]) -> np.ndarray:
+    """Community uptake flux per medium exchange (0 where nothing is consumed).
+
+    micom renames each member's ``EX_<met>_e``; summing the member rows gives the
+    community's draw on the shared pool exchange ``EX_<met>_m``.
+    """
+    fluxes = solution.fluxes
+    drawn = np.zeros(len(exchanges))
+    for i, ex in enumerate(exchanges):
+        member_id = medium_to_member_exchange(ex)
+        if member_id not in fluxes.columns:
+            continue
+        column = fluxes[member_id]
+        taken = -column[np.isfinite(column) & (column < 0)].sum()
+        drawn[i] = float(max(taken, 0.0))
+    return drawn
+
+
+def estimate_demand(
+    community,
+    exchanges: list[str],
+    tradeoff: float,
+    bound: float,
+    essential: np.ndarray,
+    *,
+    n_probes: int = 24,
+    seed: int = 0,
+) -> np.ndarray:
+    """Per-exchange uptake scale: how much of each nutrient the community draws.
+
+    Read straight off the LP -- the uptake fluxes of a solved medium -- rather
+    than learned, because a nutrient can only limit growth near the flux the
+    organism actually consumes. One solve at a fully-open medium covers whatever
+    the community prefers; the probe media (with the sampler's own dropout) then
+    expose the substitutes that only get used once a preferred source is missing.
+    On the example genome that is the difference between 50 and 114 exchanges of
+    259 showing any demand at all -- the remaining ~145 cannot affect growth and
+    are left out of the medium design.
+    """
+    drawn = np.zeros(len(exchanges))
+    designs = [np.full(len(exchanges), bound)]
+    if n_probes > 0:
+        designs.extend(
+            sampling.titrate_media(
+                n_probes,
+                len(exchanges),
+                seed,
+                scale=np.full(len(exchanges), bound),
+                keep_range=(0.3, 1.0),
+                essential=essential,
+            )
+        )
+    for vector in designs:
+        solution = _solve_sample(community, dict(zip(exchanges, vector, strict=True)), tradeoff)
+        if solution is not None:
+            drawn = np.maximum(drawn, _uptake_flux(solution, exchanges))
+    return drawn
+
+
+def medium_spec(
+    community,
+    exchanges: list[str],
+    tradeoff: float,
+    *,
+    target_frac: float = 0.5,
+    max_bound: float = 1000.0,
+    steps: int = 20,
+    n_probes: int = 24,
+) -> MediumSpec:
+    """Calibrate the limiting uptake bound and scan for essential exchanges.
+
+    Growth saturates well below a fully-open medium (measured on the example
+    genome: identical growth at bounds 1000 and 100, half of it at 10), so
+    sampling around ``max_bound`` gives a constant target. Bisecting in log space
+    for the bound where growth is ``target_frac`` of saturated puts the sampler in
+    the regime where growth actually responds to the medium. The single-drop scan
+    that follows costs one solve per exchange and identifies the nutrients every
+    medium must keep to be viable at all.
+    """
+
+    def growth(vector: np.ndarray) -> float:
+        solution = _solve_sample(community, dict(zip(exchanges, vector, strict=True)), tradeoff)
+        return 0.0 if solution is None else float(solution.growth_rate)
+
+    dim = len(exchanges)
+    saturated = growth(np.full(dim, max_bound))
+    if saturated <= 0:
+        raise ValueError(
+            "Community cannot grow on a fully-open medium: no medium will produce growth. "
+            "Check the GEM(s) and the MICOM tradeoff."
+        )
+    lo, hi = max_bound * 1e-5, max_bound
+    target = target_frac * saturated
+    for _ in range(steps):
+        mid = float(np.sqrt(lo * hi))
+        if growth(np.full(dim, mid)) < target:
+            lo = mid
+        else:
+            hi = mid
+    bound = float(np.sqrt(lo * hi))
+
+    base = np.full(dim, bound)
+    base_growth = growth(base)
+    essential = np.zeros(dim, dtype=bool)
+    for i in range(dim):
+        dropped = base.copy()
+        dropped[i] = 0.0
+        essential[i] = growth(dropped) < 0.01 * base_growth
+    demand = estimate_demand(
+        community, exchanges, tradeoff, bound, essential, n_probes=n_probes
+    )
+    # An exchange the community never draws on cannot change growth; keeping it in
+    # the design only adds a dimension the surrogate can memorise noise in.
+    demand[essential & (demand <= 0)] = bound
+    LOGGER.info(
+        "Calibrated uptake bound %.4g (saturated growth %.4g at %.4g); "
+        "%d/%d exchanges essential, %d ever consumed (demand %.3g - %.3g).",
+        bound,
+        saturated,
+        max_bound,
+        int(essential.sum()),
+        dim,
+        int((demand > 0).sum()),
+        float(demand[demand > 0].min()) if (demand > 0).any() else 0.0,
+        float(demand.max()),
+    )
+    return MediumSpec(bound=bound, essential=essential, demand=demand)
+
+
 def make_fixed_community_evaluator(
     members: list[GenomeModel],
     feature_names: list[str],
     target_names: list[str],
     solver: str,
     tradeoff: float,
+    spec_json: dict | None = None,
 ):
-    """Return ``(evaluate, active_mask)`` for a fixed community (community built once).
+    """Return ``(evaluate, active_mask, spec)`` for a fixed community (built once).
 
     ``evaluate(vector)`` takes a full-length medium vector (aligned to
     ``feature_names``), solves the cooperative tradeoff, and returns per-member
     growth in ``target_names`` order, or ``None`` if infeasible. ``active_mask``
     flags which ``feature_names`` this community can actually exchange, so the
-    active loop only perturbs real coordinates. Used by the active-learning loop
-    as its expensive oracle.
+    active loop only perturbs real coordinates. The returned ``spec`` is the
+    community's :class:`MediumSpec` over those active coordinates -- rebuilt from
+    ``spec_json`` (this community's ``medium_spec.json`` entry) when the caller
+    has it, recomputed here otherwise, so the active loop proposes candidates from
+    the same distribution ``generate`` used. Used by the active-learning loop as
+    its expensive oracle.
     """
     community = _build_community(members, solver)
     med_ex = set(_medium_exchanges(community))
     active_mask = np.array([f in med_ex for f in feature_names], dtype=bool)
+    active_names = [f for f in feature_names if f in med_ex]
+    spec = (
+        MediumSpec.from_json(spec_json, active_names)
+        if spec_json
+        else medium_spec(community, active_names, tradeoff)
+    )
     genome_to_taxon = {m.genome_id: m.taxon_id for m in members}
     taxon_order = [genome_to_taxon[g] for g in target_names]
 
@@ -210,15 +403,29 @@ def make_fixed_community_evaluator(
             return None
         return solution.members.loc[taxon_order, "growth_rate"].to_numpy(dtype=float)
 
-    return evaluate, active_mask
+    return evaluate, active_mask, spec
 
 
-def _make_design(config: GenerateConfig, dim: int, seed: int) -> np.ndarray:
+def _make_design(
+    config: GenerateConfig, dim: int, seed: int, spec: MediumSpec | None = None
+) -> np.ndarray:
     """Generate the full ``(media_per_community, dim)`` medium design for a community.
 
     Deterministic in ``seed``, so a media shard can be regenerated identically in
     any worker and sliced -- no need to ship the array between processes.
     """
+    if config.sampler == "titrate":
+        if spec is None:
+            raise ValueError("The 'titrate' sampler needs a MediumSpec.")
+        return sampling.titrate_media(
+            config.media_per_community,
+            dim,
+            seed,
+            scale=spec.scale(),
+            keep_range=(config.keep_min, 1.0),
+            essential=spec.essential,
+            n_limiting=config.n_limiting,
+        )
     if config.sampler == "dirichlet":
         return sampling.dirichlet_sample(config.media_per_community, dim, config.max_uptake, seed)
     if config.sampler == "lhs":
@@ -244,26 +451,50 @@ def _shard_ranges(total: int, workers: int) -> list[tuple[int, int]]:
     return ranges
 
 
+def _work_units(
+    n_communities: int,
+    media_per_community: int,
+    workers: int,
+    num_shards: int,
+    shard_index: int,
+) -> list[tuple[int, int, int]]:
+    """Return the ``(community_index, start, count)`` units this HPC shard owns.
+
+    Each community's media are split into ``num_shards * workers`` ranges and the
+    flat list of (community, range) pairs is dealt round robin over the shards, so
+    a single-community run still fans out. Sharding used to split *communities*
+    only, which left every shard but one idle whenever ``n_communities <
+    num_shards``. Community indices are never renumbered, so seeds and sample ids
+    stay globally consistent.
+    """
+    ranges = _shard_ranges(media_per_community, max(1, num_shards * workers))
+    units = [(ci, start, count) for ci in range(n_communities) for start, count in ranges]
+    return [u for i, u in enumerate(units) if i % num_shards == shard_index]
+
+
 def _run_media_shard(
     members: list[GenomeModel],
     community_index: int,
     config: GenerateConfig,
     start: int,
     count: int,
+    spec: MediumSpec | None = None,
 ) -> dict[str, list[dict]]:
     """Solve ``count`` media (from ``start``) of one community; return long-format rows.
 
     Runs in a worker process: rebuilds its own community, regenerates the
     deterministic design and takes its ``[start:start+count]`` slice, so media
     *within* a single community parallelise across workers (not just whole
-    communities).
+    communities). ``spec`` (the ``titrate`` sampler's calibration + essential set)
+    is computed once per community by the parent and passed in, not recomputed per
+    work unit -- the scan costs one solve per exchange.
     """
     community = _build_community(members, config.solver)
     med_ex = _medium_exchanges(community)
     taxon_to_genome = {m.taxon_id: m.genome_id for m in members}
     community_id = "+".join(sorted(m.genome_id for m in members))
     seed = config.seed + community_index * 1000
-    design = _make_design(config, len(med_ex), seed)[start : start + count]
+    design = _make_design(config, len(med_ex), seed, spec)[start : start + count]
 
     out = {"samples": [], "membership": [], "media": [], "member_growth": [], "member_exchange": []}
     for local, vector in enumerate(design):
@@ -356,26 +587,41 @@ def generate(roster: list[GenomeModel], config: GenerateConfig) -> dict[str, Pat
         len(roster), config.n_communities, config.size_range, config.seed
     )
     member_subsets = [[roster[i] for i in idx] for idx in subsets]
-    # Work unit = one media shard of one community, so media within a single
-    # community parallelise (not just whole communities). Each community's media
-    # are split into `workers` shards; all shards across all communities are then
-    # distributed over the pool. Across HPC shards, community `ci` is solved only
-    # by the shard it belongs to (`ci % num_shards`); the original `ci` is kept
-    # (not renumbered) so seeds and sample_ids stay globally consistent.
-    tasks = [
-        (members, ci, start, count)
-        for ci, members in enumerate(member_subsets)
-        if ci % config.num_shards == config.shard_index
-        for start, count in _shard_ranges(config.media_per_community, config.workers)
-    ]
+    units = _work_units(
+        len(member_subsets),
+        config.media_per_community,
+        config.workers,
+        config.num_shards,
+        config.shard_index,
+    )
     LOGGER.info(
-        "Solving %d communities x %d media (%s sampler) as %d shards over %d workers...",
+        "Solving %d communities x %d media (%s sampler): %d work units over %d workers...",
         len(member_subsets),
         config.media_per_community,
         config.sampler,
-        len(tasks),
+        len(units),
         config.workers,
     )
+
+    # The titrate sampler's calibration + essentiality scan costs ~one solve per
+    # exchange, so do it once per community here and hand the result to the
+    # workers (they each solve several media ranges of the same community).
+    specs: dict[int, MediumSpec] = {}
+    spec_blob: dict[str, dict] = {}
+    if config.sampler == "titrate":
+        for ci in sorted({ci for ci, _, _ in units}):
+            members = member_subsets[ci]
+            community = _build_community(members, config.solver)
+            exchanges = _medium_exchanges(community)
+            specs[ci] = medium_spec(
+                community,
+                exchanges,
+                config.tradeoff,
+                target_frac=config.target_frac,
+                max_bound=config.max_uptake,
+            )
+            community_id = "+".join(sorted(m.genome_id for m in members))
+            spec_blob[community_id] = specs[ci].to_json(exchanges)
 
     collected = {
         k: [] for k in ("samples", "membership", "media", "member_growth", "member_exchange")
@@ -385,17 +631,23 @@ def generate(roster: list[GenomeModel], config: GenerateConfig) -> dict[str, Pat
         for key, rows in result.items():
             collected[key].extend(rows)
 
+    tasks = [(member_subsets[ci], ci, start, count, specs.get(ci)) for ci, start, count in units]
     if config.workers <= 1:
-        for members, ci, start, count in tasks:
-            absorb(_run_media_shard(members, ci, config, start, count))
+        for members, ci, start, count, spec in tasks:
+            absorb(_run_media_shard(members, ci, config, start, count, spec))
     else:
         with ProcessPoolExecutor(max_workers=config.workers) as executor:
             futures = [
-                executor.submit(_run_media_shard, members, ci, config, start, count)
-                for members, ci, start, count in tasks
+                executor.submit(_run_media_shard, members, ci, config, start, count, spec)
+                for members, ci, start, count, spec in tasks
             ]
             for future in as_completed(futures):
                 absorb(future.result())
+
+    if spec_blob:
+        # One entry per community: what the active loop needs to propose media from
+        # the same distribution (the merge step unions these across shards).
+        (config.out_dir / "medium_spec.json").write_text(json.dumps(spec_blob, indent=2))
 
     written: dict[str, Path] = {}
     for name, rows in collected.items():

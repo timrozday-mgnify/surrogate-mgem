@@ -60,7 +60,9 @@ def test_active_round_roundtrip(tmp_path):
         return np.full(len(MEMBERS), float(vector.mean()), dtype=np.float32)
 
     active_mask = np.ones(len(dataset.feature_names), dtype=bool)
-    config = ActiveConfig(batch_size=3, n_candidates=20, epochs=5, n_models=2, hidden=(8, 8))
+    config = ActiveConfig(
+        batch_size=3, n_candidates=20, sampler="dirichlet", epochs=5, n_models=2, hidden=(8, 8)
+    )
     X_new, Y_new = active_round(dataset.X, dataset.Y, evaluate, active_mask, config, round_index=0)
 
     assert len(X_new) == 3  # every pick feasible

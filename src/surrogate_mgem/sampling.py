@@ -15,6 +15,7 @@ __all__ = [
     "dirichlet_sample",
     "sparse_media",
     "perturb_media",
+    "titrate_media",
     "sample_membership",
 ]
 
@@ -96,6 +97,73 @@ def perturb_media(
     mask = rng.random((n, dim)) < keep_p
     scale = rng.uniform(scale_range[0], scale_range[1], size=(n, dim))
     return base[None, :] * mask * scale
+
+
+def titrate_media(
+    n: int,
+    dim: int,
+    seed: int,
+    *,
+    scale: np.ndarray | float,
+    keep_range: tuple[float, float] = (0.5, 1.0),
+    essential: np.ndarray | None = None,
+    span: tuple[float, float] = (0.05, 1.0),
+    replete: tuple[float, float] = (2.0, 5.0),
+    n_limiting: int = 3,
+) -> np.ndarray:
+    """Return ``(n, dim)`` media that titrate a *few* nutrients against a replete background.
+
+    Per medium: drop non-essential components with probability ``1 - keep_p``
+    (``keep_p ~ U(keep_range)``), then pick up to ``n_limiting`` of the survivors
+    and give them a log-uniform bound in ``span * scale[i]`` -- scarce, so they
+    set the growth rate -- while every other survivor gets ``U(replete) *
+    scale[i]``, comfortably above its demand. Components with ``scale[i] == 0``
+    are never offered.
+
+    Two failure modes this steers between, both measured on the example genome
+    (3000 media, held-out R^2):
+
+    * One shared band for every nutrient (``scale`` a constant) leaves the
+      low-demand ones permanently saturated: growth never responds to them, and
+      the surrogate gets ~250 pure-noise coordinates. Nutrient demands there
+      spanned 1e-3 to 42.
+    * Titrating *all* of them at once around their own demand makes growth a
+      minimum over ~110 simultaneously-scarce nutrients: physically fine, but the
+      target collapses (std 1.78 -> 0.18) and even a random forest drops from
+      0.89 to 0.75.
+
+    Limiting a handful at a time keeps every nutrient's own scale while leaving
+    growth attributable to the few that are actually scarce -- the same reason wet
+    experiments vary one factor against a replete background.
+    """
+    if dim == 0 or n == 0:
+        return np.zeros((n, dim))
+    scale = np.broadcast_to(np.asarray(scale, dtype=float), (dim,))
+    if np.any(scale < 0):
+        raise ValueError("scale must be non-negative")
+    for name, rng_pair in (("span", span), ("replete", replete)):
+        if rng_pair[0] <= 0 or rng_pair[1] < rng_pair[0]:
+            raise ValueError(f"{name} must be 0 < lo <= hi, got {rng_pair}")
+    rng = np.random.default_rng(seed)
+
+    keep_p = rng.uniform(keep_range[0], keep_range[1], size=(n, 1))
+    offered = rng.random((n, dim)) < keep_p
+    if essential is not None:
+        offered |= np.asarray(essential, dtype=bool)[None, :]
+    offered &= scale[None, :] > 0  # never offer what the community cannot consume
+
+    # Replete background, then knock a few nutrients down into the limiting range.
+    factor = rng.uniform(replete[0], replete[1], size=(n, dim))
+    limiting = np.exp(rng.uniform(np.log(span[0]), np.log(span[1]), size=(n, dim)))
+    scarce = np.zeros((n, dim), dtype=bool)
+    for i in range(n):
+        candidates = np.flatnonzero(offered[i])
+        if not len(candidates):
+            continue
+        k = min(rng.integers(1, n_limiting + 1), len(candidates))
+        scarce[i, rng.choice(candidates, size=int(k), replace=False)] = True
+    factor = np.where(scarce, limiting, factor)
+    return factor * scale[None, :] * offered
 
 
 def sample_membership(

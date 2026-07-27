@@ -15,13 +15,14 @@ nextflow_pipeline {
                 hidden_configs        = '64,64'
                 n_models_list         = '2'
                 train_sizes           = '40'
+                n_features_list       = '0,8'
             }
         }
         then {
             assertAll(
                 { assert workflow.success },
                 { assert path("$outputDir/leaderboard.csv").exists() },
-                { assert path("$outputDir/models").list().size() >= 1 },
+                { assert path("$outputDir/models").list().size() == 2 },  // one cell per n_features
             )
         }
     }

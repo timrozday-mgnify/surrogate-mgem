@@ -35,10 +35,34 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--max-uptake", type=float, default=1000.0)
     gen.add_argument("--tradeoff", type=float, default=0.35)
     gen.add_argument(
-        "--sampler", choices=["perturb", "sparse", "dirichlet", "lhs"], default="perturb"
+        "--sampler",
+        choices=["titrate", "perturb", "sparse", "dirichlet", "lhs"],
+        default="titrate",
+        help="Medium design. 'titrate' is the only one that reliably grows: it keeps the "
+        "essential nutrients and titrates uptake inside the limiting regime.",
     )
     gen.add_argument(
         "--n-active", type=int, default=20, help="sparse sampler: active components per medium."
+    )
+    gen.add_argument(
+        "--n-limiting",
+        type=int,
+        default=3,
+        help="titrate sampler: nutrients made scarce per medium; the rest sit replete above "
+        "their own demand. Titrating everything at once makes growth a minimum over every "
+        "nutrient and nothing learns it.",
+    )
+    gen.add_argument(
+        "--keep-min",
+        type=float,
+        default=0.5,
+        help="titrate sampler: lowest per-medium keep probability (dropout depth).",
+    )
+    gen.add_argument(
+        "--target-frac",
+        type=float,
+        default=0.5,
+        help="titrate sampler: calibrate the uptake bound to this fraction of saturated growth.",
     )
     gen.add_argument("--solver", default="hybrid")
     gen.add_argument("--seed", type=int, default=0)
@@ -72,6 +96,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="256,256",
         help="MLP hidden layers as comma-separated widths (e.g. '512,512,512').",
     )
+    tr.add_argument(
+        "--n-features",
+        type=int,
+        default=0,
+        help="Keep only the N most predictive medium coordinates (0 = all). Growth is set "
+        "by a handful of limiting nutrients; the rest are dimensions the net memorises noise in.",
+    )
     tr.add_argument("--epochs", type=int, default=1000, help="Max-epoch cap; training early-stops.")
     tr.add_argument("--weight-decay", type=float, default=0.0, help="Adam L2 regularisation.")
     tr.add_argument(
@@ -103,9 +134,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tr.add_argument(
         "--sampler",
-        choices=["perturb", "sparse", "dirichlet", "lhs"],
-        default="perturb",
+        choices=["titrate", "perturb", "sparse", "dirichlet", "lhs"],
+        default="titrate",
         help="Active: candidate proposal.",
+    )
+    tr.add_argument(
+        "--n-limiting",
+        type=int,
+        default=3,
+        help="titrate sampler: nutrients made scarce per medium; the rest sit replete above "
+        "their own demand. Titrating everything at once makes growth a minimum over every "
+        "nutrient and nothing learns it.",
+    )
+    tr.add_argument(
+        "--keep-min",
+        type=float,
+        default=0.5,
+        help="titrate sampler: lowest per-medium keep probability (dropout depth).",
     )
     tr.add_argument(
         "--n-active", type=int, default=20, help="Active: sparse proposer components per medium."
@@ -126,7 +171,21 @@ def build_parser() -> argparse.ArgumentParser:
     ar.add_argument("--batch-size", type=int, default=16, help="Real solves this round.")
     ar.add_argument("--n-candidates", type=int, default=2000, help="Media proposed this round.")
     ar.add_argument(
-        "--sampler", choices=["perturb", "sparse", "dirichlet", "lhs"], default="perturb"
+        "--sampler", choices=["titrate", "perturb", "sparse", "dirichlet", "lhs"], default="titrate"
+    )
+    ar.add_argument(
+        "--n-limiting",
+        type=int,
+        default=3,
+        help="titrate sampler: nutrients made scarce per medium; the rest sit replete above "
+        "their own demand. Titrating everything at once makes growth a minimum over every "
+        "nutrient and nothing learns it.",
+    )
+    ar.add_argument(
+        "--keep-min",
+        type=float,
+        default=0.5,
+        help="titrate sampler: lowest per-medium keep probability (dropout depth).",
     )
     ar.add_argument("--n-active", type=int, default=20)
     ar.add_argument("--n-models", type=int, default=5, help="Acquisition ensemble size.")
@@ -174,6 +233,9 @@ def _run_generate(args: argparse.Namespace) -> int:
         tradeoff=args.tradeoff,
         sampler=args.sampler,
         n_active=args.n_active,
+        keep_min=args.keep_min,
+        n_limiting=args.n_limiting,
+        target_frac=args.target_frac,
         solver=args.solver,
         seed=args.seed,
         workers=args.workers,
@@ -202,6 +264,7 @@ def _run_train(args: argparse.Namespace) -> int:
             epochs=args.epochs,
             test_size=args.test_size,
             n_train=args.n_train,
+            n_features=args.n_features,
             weight_decay=args.weight_decay,
             density_weights=not args.no_density_weights,
             seed=args.seed,
@@ -221,6 +284,8 @@ def _run_train(args: argparse.Namespace) -> int:
         max_uptake=args.max_uptake,
         sampler=args.sampler,
         n_active=args.n_active,
+        keep_min=args.keep_min,
+        n_limiting=args.n_limiting,
         n_models=args.n_models,
         epochs=args.epochs,
         weight_decay=args.weight_decay,
@@ -251,6 +316,8 @@ def _run_active_round(args: argparse.Namespace) -> int:
         max_uptake=args.max_uptake,
         sampler=args.sampler,
         n_active=args.n_active,
+        keep_min=args.keep_min,
+        n_limiting=args.n_limiting,
         n_models=args.n_models,
         hidden=_parse_hidden(args.hidden),
         epochs=args.epochs,

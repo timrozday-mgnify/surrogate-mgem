@@ -1,6 +1,7 @@
 """Tests for the active-learning loop with a synthetic (solver-free) evaluator."""
 
 import numpy as np
+import pytest
 
 from surrogate_mgem.active import (
     ActiveConfig,
@@ -28,6 +29,23 @@ def test_diverse_topk_prefers_high_scores_and_is_distinct():
     assert 39 in picks
 
 
+def test_propose_candidates_titrate_keeps_essentials_inside_the_mask():
+    from surrogate_mgem.data import MediumSpec
+
+    mask = np.array([True, False, True, True])
+    spec = MediumSpec(
+        bound=10.0,
+        essential=np.array([True, False, False]),
+        demand=np.array([2.0, 0.5, 20.0]),
+    )
+    cand = propose_candidates(mask, n=20, max_uptake=0.0, sampler="titrate", seed=0, spec=spec)
+    assert cand.shape == (20, 4)
+    assert (cand[:, ~mask] == 0).all()  # never proposes what the community cannot exchange
+    assert (cand[:, 0] > 0).all()  # the essential coordinate is always present
+    with pytest.raises(ValueError, match="MediumSpec"):
+        propose_candidates(mask, 5, 0.0, "titrate", seed=0)
+
+
 def test_active_loop_grows_training_set_and_tracks_history():
     rng = np.random.default_rng(1)
     mask = np.array([True, True, True, False])
@@ -43,7 +61,14 @@ def test_active_loop_grows_training_set_and_tracks_history():
     Y_te = np.stack([evaluate(x) for x in X_te])
 
     config = ActiveConfig(
-        rounds=2, batch_size=5, n_candidates=100, max_uptake=100.0, n_models=2, epochs=40, seed=0
+        rounds=2,
+        batch_size=5,
+        n_candidates=100,
+        max_uptake=100.0,
+        sampler="dirichlet",
+        n_models=2,
+        epochs=40,
+        seed=0,
     )
     ensemble, history, (X_all, Y_all) = active_learning_loop(
         X0, Y0, evaluate, mask, config, X_test=X_te, Y_test=Y_te

@@ -1,0 +1,34 @@
+version: '3'
+
+vars:
+  # Conda env holding the quarto CLI + a jupyter that sees the `basicpython` kernel
+  # the report executes in.
+  QUARTO_ENV: quarto
+  RUN_DIR: '{{.RUN_DIR | default "../surrogate-mgem_runs/single_test"}}'
+  RUN_ABS:
+    sh: cd "{{.RUN_DIR | default "../surrogate-mgem_runs/single_test"}}" 2>/dev/null && pwd
+  OUT: '{{.OUT | default (printf "%s_report.html" (base .RUN_DIR))}}'
+
+tasks:
+  report:
+    desc: Render the run report for a pipeline run dir (task report RUN_DIR=/path/to/run [OUT=x.html])
+    preconditions:
+      - sh: test -d "{{.RUN_DIR}}"
+        msg: 'RUN_DIR "{{.RUN_DIR}}" does not exist'
+      - sh: test -f "{{.RUN_DIR}}/results/leaderboard.csv"
+        msg: '"{{.RUN_DIR}}/results/leaderboard.csv" missing — is this a finished run dir?'
+    cmds:
+      - mkdir -p rendered_reports
+      # Rendered from reports/ because quarto resolves embed-resources' lib paths
+      # against the cwd, then moved to rendered_reports/.
+      - cd reports && conda run --no-capture-output -n {{.QUARTO_ENV}} quarto render run_report.qmd -P run_dir:"{{.RUN_ABS}}" --output "{{.OUT}}"
+      - mv reports/{{.OUT}} rendered_reports/{{.OUT}}
+    generates:
+      - rendered_reports/{{.OUT}}
+
+  report:open:
+    desc: Render the run report and open it
+    cmds:
+      - task: report
+        vars: {RUN_DIR: '{{.RUN_DIR}}', OUT: '{{.OUT}}'}
+      - open rendered_reports/{{.OUT}}

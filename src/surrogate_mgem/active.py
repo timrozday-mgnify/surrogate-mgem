@@ -28,6 +28,7 @@ from surrogate_mgem.sampling import (
     latin_hypercube,
     perturb_media,
     sparse_media,
+    titrate_media,
 )
 
 LOGGER = logging.getLogger("surrogate-mgem.active")
@@ -45,8 +46,15 @@ class ActiveConfig:
     batch_size: int = 16
     n_candidates: int = 2000
     max_uptake: float = 1000.0
-    sampler: str = "perturb"  # candidate proposal distribution
+    sampler: str = "titrate"  # candidate proposal distribution
     n_active: int = 20  # sparse proposer: active components per candidate
+    # titrate proposer: the community's calibrated medium (data.MediumSpec over the
+    # active coordinates). Without it the loop would propose from a different --
+    # and, for the other samplers, largely zero-growth -- distribution than the one
+    # the seed data was generated from.
+    spec: object | None = None
+    keep_min: float = 0.5
+    n_limiting: int = 3  # nutrients made scarce per proposed medium
     n_models: int = 5
     hidden: tuple[int, ...] = (256, 256)  # acquisition-ensemble architecture
     epochs: int = 1000  # max-epoch cap; fit() early-stops
@@ -63,17 +71,34 @@ def propose_candidates(
     sampler: str,
     seed: int,
     n_active: int = 20,
+    spec=None,
+    keep_min: float = 0.5,
+    n_limiting: int = 3,
 ) -> np.ndarray:
     """Sample ``n`` candidate media, non-zero only on the community's own exchanges.
 
     ``active_mask`` is a boolean over the full feature space; components outside
     it stay 0 (the community cannot exchange them), so proposals live in the
     community's real medium subspace while keeping the surrogate's full-width
-    coordinate system. ``n_active`` applies to the ``sparse`` sampler.
+    coordinate system. ``n_active`` applies to the ``sparse`` sampler, ``spec``
+    (a :class:`~surrogate_mgem.data.MediumSpec` over the active coordinates) to
+    ``titrate``.
     """
     full_dim = len(active_mask)
     active_dim = int(active_mask.sum())
-    if sampler == "lhs":
+    if sampler == "titrate":
+        if spec is None:
+            raise ValueError("The 'titrate' proposer needs a MediumSpec.")
+        sub = titrate_media(
+            n,
+            active_dim,
+            seed,
+            scale=spec.scale(),
+            keep_range=(keep_min, 1.0),
+            essential=spec.essential,
+            n_limiting=n_limiting,
+        )
+    elif sampler == "lhs":
         sub = latin_hypercube(n, active_dim, max_uptake, seed)
     elif sampler == "dirichlet":
         sub = dirichlet_sample(n, active_dim, max_uptake, seed)
@@ -159,6 +184,9 @@ def active_round(
         config.sampler,
         config.seed + round_index + 1,
         config.n_active,
+        config.spec,
+        config.keep_min,
+        config.n_limiting,
     )
     _, std = ensemble.predict_with_uncertainty(candidates)
     picks = diverse_topk(candidates, std.mean(axis=1), config.batch_size, config.pool_factor)
@@ -224,6 +252,9 @@ def active_learning_loop(
             config.sampler,
             config.seed + r + 1,
             config.n_active,
+            config.spec,
+            config.keep_min,
+            config.n_limiting,
         )
         _, std = ensemble.predict_with_uncertainty(candidates)
         acquisition = std.mean(axis=1)

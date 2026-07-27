@@ -19,12 +19,24 @@ class GrowthEnsemble:
     """K independently-seeded :class:`GrowthSurrogate` models."""
 
     def __init__(
-        self, n_in: int, n_out: int, n_models: int = 5, hidden: tuple[int, ...] = (256, 256)
+        self,
+        n_in: int,
+        n_out: int,
+        n_models: int = 5,
+        hidden: tuple[int, ...] = (256, 256),
+        *,
+        feature_index: np.ndarray | None = None,
+        log_inputs: bool = True,
     ):
         self.n_in = n_in
         self.n_out = n_out
         self.hidden = hidden
-        self.models = [GrowthSurrogate(n_in, n_out, hidden) for _ in range(n_models)]
+        # Every member shares the same input view, so the ensemble std stays a
+        # comparison of models rather than of feature sets.
+        self.models = [
+            GrowthSurrogate(n_in, n_out, hidden, feature_index=feature_index, log_inputs=log_inputs)
+            for _ in range(n_models)
+        ]
 
     def fit(self, X: np.ndarray, Y: np.ndarray, *, base_seed: int = 0, **fit_kwargs) -> list[dict]:
         """Fit every member; each gets a distinct seed so they disagree off-data.

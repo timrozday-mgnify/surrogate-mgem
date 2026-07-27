@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_TAG: "0.1.1"
+  IMAGE_TAG: "0.1.2"
 
 jobs:
   build:
