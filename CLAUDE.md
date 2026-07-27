@@ -16,7 +16,7 @@
 > The existing **`src/surrogate_mgem/`** package (PyTorch + MICOM growth
 > surrogate, documented below) is **legacy/reference** — kept, not deleted.
 >
-> ### Progress — M0–M2 and §4 are done *and run on the real roster*
+> ### Progress — M0–M2 and §4 done on the real roster; M3 built, gate not yet met
 >
 > | Milestone | State | Code |
 > | --- | --- | --- |
@@ -24,6 +24,7 @@
 > | M1 degeneracy → D4 | **done, V1 complete** — **68.9%** of 371k exchange-FVA observations degenerate roster-wide (59.7–82.8% per genome; 88% at α=0.7 vs 50% at α=1.0) ⇒ **D4 = elastic net** | `src/cfs/validate/degeneracy.py` |
 > | M2 solve interface | **done, §3.4 gate verified on a real GEM** — MM uptake bounds (§3.3), FBA for `mu_max` + duals, then the **Clarabel** elastic-net QP for `z` | `src/cfs/groundtruth/solve.py` |
 > | §4 sampling + bulk labels | **done, generated** — active subspace, stratified-Sobol design, parquet driver | `src/cfs/sampling/`, `--stage labels` |
+> | M3 Head A (value) | **built and training on the real roster; gate NOT met** — held-out gradient cosine **worst 0.40 / mean 0.72 / best 0.94** against the required 0.99. Concavity violations ~0 (7e-5), so the structural prior holds | `src/cfs/surrogate/`, `cfs train-value` |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
@@ -34,9 +35,35 @@
 > The run dir also holds `check_v2.py` (the §3.4 gate) and `check_labels.py`
 > (shard sanity), plus `local.config` — the external `-c` site config for this box.
 >
-> **Next: M3** — the JAX/Equinox concave value head (`mu_max`) trained on those
-> parquet shards, vmapped across the 21 organisms; gate is gradient cosine > 0.99
-> held-out.
+> **Two label-interpretation bugs M3 uncovered — read before touching the duals.**
+> The stored `shadow` is `d(mu_max)/d(uptake bound)` *only where that bound
+> binds*. Elsewhere it is the metabolite's value in the network, which for waste
+> like CO2 is **positive** — i.e. it claims more nutrient lowers growth, which no
+> LP can do. Finite differences: 12/12 positive-dual cases returned
+> `d(mu_max)/d(supply) = 0.000000` exactly. That is ~12% of the non-zero duals, on
+> metabolites present in half the media. Second, **half the "non-zero" duals are
+> solver dust** (O(1e-14)); a row whose whole target is dust dominates any
+> norm-relative loss by ~1e14. Both are handled in
+> `cfs.surrogate.data._organism_arrays` (clamp at 0, `_DUAL_TOL`) — do not
+> "simplify" that back to a plain `-shadow`.
+>
+> **What shapes M3 and will shape M4.** On a real GEM `mu_max` is a *linear ramp*
+> in saturation `x = c/(Km+c)` that reaches its plateau by `x* ~ 5e-3`: 99% of the
+> input range carries no signal, and `d(mu)/dx` spans five decades within one
+> organism. Three fixes each bought a large jump and are load-bearing —
+> per-metabolite kink rescale of the inputs (`_kink_scale`, affine so concavity is
+> untouched), a **per-row norm-relative** Sobolev term instead of §7.1's absolute
+> `||grad - pi||^2` (absolute gave cosine 0.05: a few ion-limited rows absorbed the
+> whole term), and ICNN init at `softplus^-1(1/width)`.
+>
+> **Next: finish M3.** Cosine is still budget-bound (0.50 → 0.56 → 0.72 as capacity
+> and steps grew), and at `w_grad=10` the value head collapses late in training
+> (R2 -0.61) while cosine climbs — balance the two terms first. The worst gradient
+> errors are the ion-limited metabolites (`EX_mg2_e`, `EX_k_e`, `EX_cl_e`,
+> `EX_ca2_e` lead in 17–19 of 21 organisms), exactly where the ramp is steepest, as
+> §7.3 predicts. Checkpoint + diagnostics:
+> `~/Documents/surrogate-mgems_runs/20hm/value/`. Hessian condition number is 7e11
+> — recorded, not gated, and the early warning for M6.
 
 ## Legacy package (surrogate_mgem)
 

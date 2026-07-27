@@ -1,11 +1,17 @@
-"""Command-line entry point: ``cfs {qc, freeze-index, degeneracy, active-subspace, generate}``.
+"""``cfs {qc, freeze-index, degeneracy, active-subspace, generate, train-value}``.
 
-M0-M2 of the v2 plan (``docs/design/community-fba-surrogates-plan-v2.md``). All
-subcommands need the ``data`` extra (cobra; ``qc`` also needs the ``memote`` CLI;
-``generate`` also needs ``pyarrow``). The Nextflow ``QC_MODELS`` process runs
+M0-M3 of the v2 plan (``docs/design/community-fba-surrogates-plan-v2.md``). The
+M0-M2 subcommands need the ``data`` extra (cobra; ``qc`` also needs the ``memote``
+CLI; ``generate`` also needs ``pyarrow``). The Nextflow ``QC_MODELS`` process runs
 ``qc`` then ``freeze-index``; ``DEGENERACY_SURVEY`` runs ``degeneracy``. §4
 sampling is ``active-subspace`` (the sensitivity sweep) then ``generate`` (label
 shards -> parquet by organism × eps).
+
+``train-value`` is M3 and is the odd one out: it reads those label shards rather
+than any model, so it needs the ``jax`` extra and no solver stack, and takes
+``--labels``/``--index`` instead of ``--roster``. It is CLI-only for now — the
+heads train in minutes on a laptop, so there is no Nextflow stage until M4 wants
+a cluster.
 """
 
 from __future__ import annotations
@@ -51,12 +57,36 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--outdir", type=Path, required=True, help="Parquet shard root.")
     gen.add_argument("--n-media", type=int, help="Override media per organism (default 20000).")
     gen.add_argument("--seed", type=int, default=0)
+
+    tv = sub.add_parser("train-value", help="M3: train Head A (concave mu_max) on label shards.")
+    tv.add_argument("--labels", type=Path, required=True, help="Label shard root (§4.5).")
+    tv.add_argument("--index", type=Path, required=True, help="Frozen metabolite_index.json.")
+    tv.add_argument("--out", type=Path, required=True, help="Checkpoint + diagnostics dir.")
+    tv.add_argument("--eps", type=float, default=1e-3, help="Which eps family level to train on.")
+    tv.add_argument("--width", type=int, default=128)
+    tv.add_argument("--depth", type=int, default=3)
+    tv.add_argument("--epochs", type=int, default=400)
+    tv.add_argument("--batch", type=int, default=512)
+    tv.add_argument("--lr", type=float, default=3e-3)
+    tv.add_argument("--w-grad", type=float, default=1.0, help="Sobolev term weight (§7.1).")
+    tv.add_argument("--seed", type=int, default=0)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
     args = build_parser().parse_args(argv)
+
+    if args.command == "train-value":
+        # The only subcommand that reads labels rather than models: no roster, no
+        # solver stack, and the jax extra instead of the data one.
+        from cfs.surrogate.train import run
+
+        diagnostics = run(args.labels, args.index, args.out, eps=args.eps, width=args.width,
+                          depth=args.depth, epochs=args.epochs, batch=args.batch, lr=args.lr,
+                          w_grad=args.w_grad, seed=args.seed)
+        print(json.dumps(diagnostics, indent=2))
+        return 0 if diagnostics["passed"] else 1
 
     # Imports are deferred so `--help` works without the data extra installed.
     from surrogate_mgem.data import read_roster

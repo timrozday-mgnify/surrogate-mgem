@@ -29,6 +29,14 @@ data = [
     "pyyaml>=6.0",   # M2 km_defaults.yaml loader (cobra ships ruamel, not pyyaml)
     "pyarrow>=14",   # §4.5 parquet label shards (pandas.to_parquet backend)
 ]
+# M3+ surrogate stack (D6). Kept out of the default install like `data`, so the
+# legacy torch package and its tests still run without it.
+jax = [
+    "jax>=0.4.35",
+    "equinox>=0.11",
+    "optax>=0.2",
+    "pyarrow>=14",  # the label shards the value head trains on
+]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
