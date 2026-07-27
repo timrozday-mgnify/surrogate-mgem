@@ -56,6 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--index", type=Path, required=True, help="Frozen metabolite_index.json.")
     gen.add_argument("--outdir", type=Path, required=True, help="Parquet shard root.")
     gen.add_argument("--n-media", type=int, help="Override media per organism (default 20000).")
+    gen.add_argument("--scales", type=Path, help="JSON {genome_id: {exchange: scale}} from "
+                     "design.limiting_scales — per-metabolite sampling bands.")
     gen.add_argument("--seed", type=int, default=0)
 
     tv = sub.add_parser("train-value", help="M3: train Head A (concave mu_max) on label shards.")
@@ -151,7 +153,8 @@ def main(argv: list[str] | None = None) -> int:
         cfg = SamplingConfig(seed=args.seed)
         if args.n_media is not None:
             cfg = replace(cfg, n_media=args.n_media)
-        shards = generate_roster(roster, args.index, args.outdir, cfg)
+        scales = json.loads(args.scales.read_text()) if args.scales else None
+        shards = generate_roster(roster, args.index, args.outdir, cfg, scales=scales)
         print(json.dumps(
             {s.genome_id: {"n_media": s.n_media, "shards": [str(p) for p in s.paths]}
              for s in shards}, indent=2))
