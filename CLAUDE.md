@@ -5,7 +5,7 @@
 > The project is **pivoting** to the v2 design spec:
 > [`docs/design/community-fba-surrogates-plan-v2.md`](docs/design/community-fba-surrogates-plan-v2.md).
 > That document is the authoritative map — milestones **M0…M8**, locked
-> decisions **D1…D10**, validation gates **V0…V8**, pitfalls **P0…P15**. Orient
+> decisions **D1…D10**, validation gates **V0…V8**, pitfalls **P0…P17**. Orient
 > to it before starting work.
 >
 > The target architecture is **JAX/Equinox** with **per-organism CarveMe FBA**
@@ -24,16 +24,29 @@
 > | M1 degeneracy → D4 | **done, V1 complete** — **68.9%** of 371k exchange-FVA observations degenerate roster-wide (59.7–82.8% per genome; 88% at α=0.7 vs 50% at α=1.0) ⇒ **D4 = elastic net** | `src/cfs/validate/degeneracy.py` |
 > | M2 solve interface | **done, §3.4 gate verified on a real GEM** — MM uptake bounds (§3.3), FBA for `mu_max` + duals, then the **Clarabel** elastic-net QP for `z` | `src/cfs/groundtruth/solve.py` |
 > | §4 sampling + bulk labels | **done, generated** — active subspace, stratified-Sobol design, parquet driver | `src/cfs/sampling/`, `--stage labels` |
-> | M3 Head A (value) | **built and training on the real roster; gate NOT met** — held-out gradient cosine **worst 0.66 / mean 0.80** against the required 0.99, measured in `u` space (see below). Concavity violations exactly 0 (structural), Hessian cond 1.6e9 | `src/cfs/surrogate/`, `cfs train-value` |
+> | M3 Head A (value) | **built and training on the real roster; gate NOT met** — held-out gradient cosine **worst 0.733 / mean 0.800** against the required 0.99, measured in `u` space (see below). Value R² 0.54, concavity violations exactly 0 (structural), Hessian cond 3.4e7 | `src/cfs/surrogate/`, `cfs train-value` |
 >
-> **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm/`
+> **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
 > 1/5 of the D10 budget, laptop-sized; `SamplingConfig.n_media` still defaults to
-> 20000 for HPC. **940 800 rows, 573 MB, 21/21 organisms, 0 failures, 100% optimal
-> solves**, one `index_hash` throughout (P13). Per organism: 32 000 rows at the
-> primary `eps=1e-3` and 6400 at each of `1e-2`/`1e-4`. `|A_i|` = 11–32, median 24.
-> The run dir also holds `check_v2.py` (the §3.4 gate) and `check_labels.py`
-> (shard sanity), plus `local.config` — the external `-c` site config for this box.
+> 20000 for HPC. 21/21 organisms, 63/63 shards, **100% optimal solves**, one
+> `index_hash` throughout (P13). Per organism: 32 000 rows at the primary
+> `eps=1e-3` and 6400 at each of `1e-2`/`1e-4`. `|A_i|` = 11–32, median 24.
+>
+> It supersedes `20hm/` (same design, one shared sampling band) and differs only
+> in that each metabolite's focus stratum is centred on **its own** limiting
+> regime — `design.limiting_scales` → `cfs generate --scales`. Over `A_i`, roster
+> medians: the median metabolite's limiting media **143 → 174**, metabolites with
+> ≥50 media 15 → 17, the top metabolite's share 0.58 → 0.55. The run dir holds
+> `make_scales.py` (labels → `scales.json`), `check_coverage.py` (the number that
+> predicts the gate), `run_labels.sh` + `one_organism.sh` (21-way local fan-out —
+> **not** nextflow: the `0.1.2` data image predates the band code and would
+> silently regenerate the old design). `20hm/` still holds `check_v2.py` (the §3.4
+> gate), `check_labels.py` and `local.config` (the external `-c` site config).
+>
+> Generating a set costs ~30 MB/organism and ~1 h/organism at 10-way concurrency;
+> it dies mid-shard on a full disk, and the resulting partial shard must be
+> deleted, not resumed.
 >
 > **Two label-interpretation bugs M3 uncovered — read before touching the duals.**
 > The stored `shadow` is `d(mu_max)/d(uptake bound)` *only where that bound
@@ -79,20 +92,32 @@
 >
 > Measured in `u` space, worst/mean cosine: old linear-rescale checkpoint
 > 0.06/0.09 → saturating transform + monotone head 0.41/0.69 → same, trained on
-> the `u`-space objective for 1500 epochs 0.66/0.80. Predicted gradient magnitude
-> landing on zero-target metabolites fell 98% → 53% across the same sequence, and
-> the Hessian condition number 7e11 → 1.6e9.
+> the `u`-space objective for 1500 epochs 0.63/0.77 → **same model, same
+> hyperparameters, banded labels 0.733/0.800**. Predicted gradient magnitude
+> landing on zero-target metabolites fell 98% → 53% across that sequence, and the
+> Hessian condition number 7e11 → 3.4e7.
 >
-> **Next: finish M3.** The remaining error is concentrated exactly where §7.3
-> predicts — `EX_mg2_e`, `EX_ca2_e`, `EX_cl_e`, `EX_k_e` lead in 12–19 of 21
-> organisms — and it is *sparsity*: the true dual vector has one non-zero in more
-> than half the rows, while a softplus ICNN spreads. The untried lever is a
-> sharpness parameter on the activation (`softplus(beta z)/beta`, convexity-safe,
-> anneal beta up) to localise the gradient. `w_grad` trades the two heads rather
-> than fixing this: 1 → cosine 0.63 with value R2 0.72, 10 → cosine 0.66 with R2
-> 0.62; neither reaches the "R2 >= 0.9" balance rule. Checkpoints:
-> `~/Documents/surrogate-mgems_runs/20hm/value_v2/{u_w1,u_w10}/` (the pre-fix one
-> is still at `value/`).
+> **The gate was label coverage before it was architecture.** Held-out cosine per
+> (organism, metabolite) cell tracks that cell's *training row count* at Spearman
+> 0.72 (<50 rows → 0.49, >400 → 0.95), and the old design's counts were skewed
+> ~1137 : 9 : 1 per organism because every metabolite got the same
+> `log10(c/Km) ∈ [-4, 1]` band while real limiting points span 5107×. Fixing that
+> alone bought +0.10 worst cosine and 60× conditioning — but the tail did not move
+> (p05 0.21 → 0.20), the same ions still lead the error (`EX_mg2_e` 21/21 organisms,
+> `EX_cl_e` 19, `EX_ca2_e` 17), and value R² fell 0.72 → 0.54. Also rejected: a
+> soft-min ("Liebig") head that matches the target's sparsity exactly scored
+> *worse*, 0.55, with 6–16 orders worse conditioning (`20hm/value_v3/`).
+>
+> **Next, in order.** (1) **Plan §4.7 — make band placement automatic**: an LP
+> demand probe per (organism, metabolite) inside `cfs generate`, so a genome the
+> roster has never seen anchors its own bands, with a stated fallback chain
+> (probe → previous `u*` → roster median → 1.0) recorded per metabolite. The
+> current `--scales` path works but is two-pass and dead on a new GEM, and nothing
+> that amounts to hand-tuning a metabolite is the deliverable. (2) R² from
+> **architecture and D10 scale**, not loss weights: `w_grad` only trades the heads
+> (1 → 0.63 cosine / 0.72 R², 10 → 0.66 / 0.62) and neither end reaches the
+> "R² ≥ 0.9" balance rule. Checkpoints: `20hm_bands/value_b1/` (current),
+> `20hm/value_v2/{u_w1,u_w10}/` (pre-band baseline).
 
 ## Legacy package (surrogate_mgem)
 
@@ -214,7 +239,11 @@ GENERATE_DATA (per shard) ─┐
   is in the `data` extra). **But not the QP**: the M2 elastic-net labels go
   through **Clarabel**, because HiGHS's QP active-set method failed on ~30% of
   real CarveMe solves at the primary `eps` and stalled for minutes at `eps=1e-4`
-  (design doc §5.4). Do not "simplify" it back to one solver.
+  (design doc §5.4). Do not "simplify" it back to one solver. The **LP is GLPK**
+  (cobra's default here, despite the above) and GLPK's simplex can cycle forever
+  on a near-degenerate medium — one organism burned 4.5 h at 100% CPU with a
+  frozen log. Both LP and QP carry `_QP_TIME_LIMIT`; the LP's needs `int()`
+  because optlang feeds it to glpk's integer `tm_lim`.
 - **No slurm/test profile in-repo** — layer the executor via an external
   `-c site.config`; `max_cpus/max_memory/max_time` cap `process.resourceLimits`.
 - **Community fan-out** picks the top `n_communities_augment` communities by

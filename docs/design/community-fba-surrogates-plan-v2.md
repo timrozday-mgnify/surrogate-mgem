@@ -201,6 +201,24 @@ D2 at 100+ dimensions makes this the part of the plan that changed most.
 >
 > **Not yet:** §4.6 active-learning reserve (needs Phase 5); `config/sampling.yaml`
 > (defaults live on `SamplingConfig`).
+>
+> **Second run (2026-07-27), per-metabolite bands** (run dir
+> `~/Documents/surrogate-mgems_runs/20hm_bands`, same roster, same 4000
+> media/organism, same frozen index). §4.3's single shared band is wrong on real
+> models — see the correction there — so this run centred each metabolite's focus
+> stratum on its own limiting regime via `design.limiting_scales` (`cfs generate
+> --scales`), read off the first run's labels. 63/63 shards, 21/21 organisms,
+> 100% optimal. Over the sampled set `A_i`, roster medians: the **median
+> metabolite's limiting media 143 → 174**, metabolites with ≥50 media 15 → 17,
+> the top metabolite's share of media 0.58 → 0.55; the ions gained most
+> (AAXE02 `EX_mg2_e` 84 → 155, `EX_ca2_e` 38 → 108) and `EX_k_e` came down
+> 559 → 411. Downstream effect on M3 in the §7 status block.
+>
+> Two operational findings: the run needs ~30 MB/organism and dies mid-shard on a
+> full disk (`OSError: [Errno 28]`); and GLPK — cobra's default LP solver here —
+> can cycle indefinitely on a near-degenerate medium (one organism burned 4.5 h at
+> 100% CPU inside `glp_simplex` on a single solve). The FBA now carries the same
+> `_QP_TIME_LIMIT` the QP has had since M2.
 
 ### 4.1 Per-organism designs, not shared media
 
@@ -231,6 +249,19 @@ in particular.
 Minimal medium design drives concentrations toward zero, so the optimiser will
 spend all its time in the low-concentration regime. That is also where MM is
 steepest and where feasibility flips.
+
+> **Correction (2026-07-27, measured).** The band below is written *relative to
+> `Km`* and shared by every metabolite. That assumes metabolites start limiting at
+> comparable `c/Km`, and on the 21-genome roster they do not: measured medians
+> span **5107×**. `EX_mg2_e`/`EX_ca2_e`/`EX_cl_e` begin limiting 3–4% into the
+> band, `EX_o2_e`/`EX_malt_e`/`EX_h_e` at 82–88%. The consequence is a label set
+> whose per-metabolite coverage is skewed ~**1137 : 9 : 1** per organism, and
+> held-out gradient cosine per (organism, metabolite) cell tracks that cell's
+> training-row count at Spearman **0.72** — so the shared band, not the
+> architecture, was the first thing holding the M3 gate down. The literature `Km`
+> is not the right anchor; the nutrient's own demand is (the legacy pipeline
+> reached the same conclusion via `surrogate_mgem.data.estimate_demand`). Read the
+> band placement below as *per metabolite*, anchored per §4.7.
 
 - Sample `log10(c)` uniformly over roughly `[-4, 1]` relative to `Km`.
 - **Weight 40% of samples below `Km`.** A uniform log design underweights
@@ -270,6 +301,42 @@ Hold back 20% of budget. After the first composition experiments, generate
 samples at the allocations the master problem actually visits. Communities
 create metabolite concentration profiles that no single-organism design will
 have sampled — this is the P4 failure mode and passive sampling cannot fix it.
+
+### 4.7 Band placement must be measured per (organism, metabolite)
+
+**This is the next piece of work, and the bar is that it holds for any metabolite
+on any GEM without hand-tuning.** The mechanism that produced the second run —
+`limiting_scales` reading `u*` off the previous run's labels — works, but it is
+two-pass and therefore not a design: a genome with no labels yet falls back to
+scale 1.0 and its first pass is as skewed as the original. A roster-median prior
+is not a substitute either; `u*` is stable across organisms for the ions (2–5×)
+but spans 2585× for `EX_arg__L_e`.
+
+What it has to be instead, in order:
+
+1. **A pre-sampling probe, not a previous run.** Per organism, per metabolite in
+   `A_i`, bisect the uptake bound for the point where `mu_max` starts to fall —
+   the same LP probe as legacy `estimate_demand`, a few solves per metabolite
+   against the ~32 000 the organism's labels cost. It needs no labels, no model
+   and no human, so it runs inside `cfs generate` for a genome the roster has
+   never seen. This is what makes the design self-anchoring.
+2. **Fall back in a stated order:** probe → previous run's `u*` → roster-median
+   `u*` for that metabolite → 1.0. Record which was used per metabolite in the
+   `<id>.subspace.json` sidecar; a band anchored at the default is a known blind
+   spot, not a silent one.
+3. **Verify by coverage, not by eye.** The acceptance number is per-metabolite,
+   over `A_i`: the *median* metabolite's share of media and the count of
+   metabolites below ~50 media. Coverage is the quantity that predicts held-out
+   gradient cosine (Spearman 0.72), so it is checkable before any training runs.
+   `check_coverage.py` in the run dir is the current form of this.
+
+Two things deliberately **not** in that list. Per-metabolite budget weighting by
+measured held-out error (`design.topup_weights`) is a refinement on top of a
+correct anchor, not a replacement for one — it needs a trained model and a
+val split, and it inherits whatever the anchor got wrong. Ensemble gradient
+disagreement is for the 4–10 metabolites per organism that never limited at all
+and so have neither a probe result nor a measurable error; it is the last resort,
+not the first (see the ordering rationale in §4.6 and P4).
 
 ---
 
@@ -510,6 +577,56 @@ composition time.
 
 ## 7. Phase 4 — training
 
+> **Implementation status (2026-07-27) — M3 Head A built, gate not met.**
+> `src/cfs/surrogate/` (`picnn.py`, `data.py`, `train.py`), CLI `cfs train-value`.
+> Measured held-out, in `u = c/(Km+c)` space (never in the network's own input
+> coordinate — a cosine there is a different number for every input transform),
+> 21/21 organisms, 1500 epochs, `w_grad = 1`:
+>
+> | | 20hm labels | 20hm_bands labels |
+> |---|---|---|
+> | worst gradient cosine (the gate) | 0.629 | **0.733** |
+> | mean | 0.765 | 0.800 |
+> | per-row p05 | 0.214 | 0.200 |
+> | value R² | 0.722 | 0.538 |
+> | Hessian cond, median | 2.0e9 | 3.4e7 |
+> | concavity violations | 0 | 0 |
+>
+> The gate is 0.99. Same architecture, same hyperparameters, *only the label
+> design changed* (§4.3 correction / §4.7): +0.10 worst cosine and 60× better
+> conditioning came from coverage alone. What that leaves:
+>
+> - **The tail did not move** (p05 0.21 → 0.20) and the leading error metabolites
+>   are unchanged — `EX_mg2_e` in 21/21 organisms, `EX_cl_e` 19, `EX_ca2_e` 17,
+>   with `EX_k_e` receding 16 → 11 exactly as its share of media fell. 84% of the
+>   587 (organism, metabolite) cells are still below 0.9. Coverage was *a*
+>   constraint, not the only one.
+> - **R² fell 0.72 → 0.54** at fixed `w_grad`: harder gradient targets now eat the
+>   value head's budget. This is the same trade the `w_grad` sweep showed
+>   (1 → cosine 0.63 / R² 0.72; 10 → 0.66 / 0.62), reached via the labels instead,
+>   and it is not something retuning `w_grad` settles — neither end satisfies the
+>   "R² ≥ 0.9" balance rule. Expect this from **architecture and scale** (the run
+>   is 4000 media, 1/5 of the D10 budget), not from loss weights.
+> - Architecture already tried and rejected: a soft-min ("Liebig") head matching
+>   the target's sparsity (54.7% of rows have exactly one non-zero dual) scored
+>   *worse* — 0.55 worst — with Hessian conditioning 6–16 orders worse.
+>
+> Load-bearing pieces of the current head, in the order they were found: a
+> saturating per-metabolite input rescale `x = u/(u+s)` (a linear one cannot work —
+> reaching the ions' ramp at `u ~ 1.4e-4` sends replete dims to `x ~ 1e4`); a
+> **monotone non-decreasing** head, required for `f(h(x))` to stay concave under a
+> concave input map, and true of the target; a **per-row norm-relative** Sobolev
+> term instead of §7.1's absolute one, with the all-zero-target rows (23%)
+> included; ICNN init at `softplus^-1(1/width)`.
+>
+> Two label-interpretation bugs this uncovered, handled in
+> `cfs.surrogate.data._organism_arrays`: the stored `shadow` is
+> `d(mu_max)/d(uptake bound)` **only where that bound binds** — elsewhere it is the
+> metabolite's value in the network, positive for waste like CO2, which no LP can
+> mean (12/12 finite-difference checks returned exactly 0), so it is clamped at 0;
+> and half the "non-zero" duals are solver dust at O(1e-14), which would dominate
+> any norm-relative loss by ~1e14.
+
 ### 7.1 Loss
 
 ```
@@ -632,6 +749,8 @@ prices tell you the structure.
 | P13 | Metabolite index drift | Silent invalidation of all checkpoints | Hash `metabolite_index.json` into every artefact |
 | P14 | Unit and scale mismatch | Silent | Assert units in loader; store normalisation stats with checkpoint |
 | P15 | Km values are invented | Overconfident quantitative claims | §3.3. State the limitation; report topology-dependent results only |
+| P16 | One sampling band for every metabolite | Training loss and mean accuracy look fine; the gradient is wrong on whichever metabolites the band missed, and no amount of extra data or rescaling fixes it | §4.7. Anchor each band on that metabolite's own limiting regime; check per-metabolite coverage, not row count |
+| P17 | LP solver cycling on a degenerate medium | One shard hangs at 100% CPU with no output; looks like a slow organism | Wall-clock limit on the FBA as well as the QP; a non-optimal row is dropped downstream (P2) |
 
 ### The four that will cost you time
 
@@ -675,6 +794,14 @@ mixes beautifully while sampling the wrong thing.
 
 M1 is new and comes before any training. It is a two-day job and it determines
 the shape of your entire label set.
+
+**M3 status (2026-07-27):** built and training on the real roster, gate not met —
+worst held-out gradient cosine 0.733 against 0.99 (§7 status block). The path to
+it, in order: (1) **§4.7 — make band placement automatic and per-metabolite**, so
+the design anchors itself on any GEM without a previous run or a human; then
+(2) architecture and D10 scale for the value R², which the label work traded down
+to 0.54 and which loss weights do not recover. Anything that reads as
+hand-tuning a metabolite is not the deliverable.
 
 ---
 
