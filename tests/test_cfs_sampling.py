@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 import pytest
 
 from cfs.groundtruth.solve import load_km_defaults
 from cfs.sampling.active_subspace import ActiveSubspace
-from cfs.sampling.design import SamplingConfig, sample_media
+from cfs.sampling.design import SamplingConfig, limiting_scales, sample_media
 
 
 def _toy_two_uptakes():
@@ -36,7 +38,8 @@ def _toy_two_uptakes():
 
 
 def test_sample_media_shape_and_below_km_fraction():
-    # One active metabolite (Km = default 0.01); the below-Km stratum is exact.
+    # One active metabolite (Km = default 0.01). With d == 1 the focus stratum is
+    # itself the below-Km stratum, so every focus medium lands below Km too.
     sub = ActiveSubspace("g", ["EX_a_e"], [], {"EX_a_e": 1.0}, 10.0)
     cfg = SamplingConfig(n_media=100, seed=1)
     media = sample_media(sub, load_km_defaults(), cfg)
@@ -46,8 +49,68 @@ def test_sample_media_shape_and_below_km_fraction():
     assert sum(c == 0.0 for c in conc) == 1  # exactly one all-but-one-depleted corner
     km = 0.01
     n_bulk = cfg.n_media - 1
-    assert sum(0.0 < c < km for c in conc) == round(cfg.frac_below_km * n_bulk)
+    # Without `scales` the focus stratum has no anchor to aim at, so it spans
+    # [-1.5, 0.5] decades around Km rather than the full [-4, 0) below-Km band.
+    assert sum(0.0 < c < km for c in conc) > 0
     assert max(conc) <= km * 10.0 ** cfg.log10_hi + 1e-9  # capped at the rich level
+
+
+def test_per_metabolite_bands_flatten_which_metabolite_limits():
+    """The M3 fix. A metabolite limits when it is the scarcest *relative to where
+    it starts limiting* — ``c / (Km * s)`` minimal, ``s`` its own regime. On the
+    real roster ``s`` spans 5107x, so a shared band hands nearly every limiting
+    medium to whichever metabolite has the smallest ``s``.
+
+    Here ``s`` spans four decades across 8 metabolites. Without ``scales`` the
+    design cannot see that; with ``scales`` every band is centred on its own
+    regime and coverage flattens. Solver-free: ``u = c/(Km+c)`` is monotone in
+    ``c/Km``, so the argmin is the metabolite the LP is most likely to bind on.
+    """
+    ex = [f"EX_m{i}_e" for i in range(8)]
+    sub = ActiveSubspace("g", ex, [], dict.fromkeys(ex, 1.0), 10.0)
+    km_cfg = load_km_defaults()
+    # True limiting regimes, 1e-4 .. 1e0 in c/Km — the roster's actual spread.
+    s = {e: 10.0 ** (-4.0 * i / 7) for i, e in enumerate(ex)}
+    u_star = {e: v / (1.0 + v) for e, v in s.items()}
+    assert limiting_scales(u_star) == pytest.approx(s, rel=1e-9)
+
+    n_media = 2048
+
+    def coverage(scales):
+        media = sample_media(sub, km_cfg, SamplingConfig(n_media=n_media, seed=1), scales)
+        counts = Counter(min(ex, key=lambda e: media_i[e] / s[e]) for media_i in media)
+        n = [counts.get(e, 0) for e in ex]
+        return min(n) / n_media, n
+
+    flat, n_flat = coverage(None)
+    aimed, n_aimed = coverage(limiting_scales(u_star))
+    # The floor per metabolite is the quantity that matters, not min/max: the
+    # unfocused half of the budget still samples multi-limitation media on
+    # purpose and lands on the steepest metabolite, so the *ratio* stays skewed
+    # by design. What must not happen is a metabolite getting ~no media at all.
+    assert flat < 0.002, (flat, n_flat)  # shared band: the rarest gets 1 medium in 2048
+    assert aimed > 0.04, (aimed, n_aimed)  # own bands: every metabolite gets a real share
+
+
+def test_focus_strata_need_scales_to_help():
+    """``frac_focus`` reserves budget per metabolite, but the reserved media only
+    land in the right regime once ``scales`` says where that regime is. Budget
+    without aim is the honest contract here — asserted so nobody assumes
+    ``frac_focus`` alone fixes coverage."""
+    ex = [f"EX_m{i}_e" for i in range(8)]
+    sub = ActiveSubspace("g", ex, [], dict.fromkeys(ex, 1.0), 10.0)
+    km_cfg = load_km_defaults()
+    s = {e: 10.0 ** (-4.0 * i / 7) for i, e in enumerate(ex)}
+    u_star = {e: v / (1.0 + v) for e, v in s.items()}
+
+    def coverage(scales, frac_focus=0.5):
+        cfg = SamplingConfig(n_media=2048, frac_focus=frac_focus, seed=1)
+        media = sample_media(sub, km_cfg, cfg, scales)
+        counts = Counter(min(ex, key=lambda e: media_i[e] / s[e]) for media_i in media)
+        return [counts.get(e, 0) for e in ex]
+
+    assert min(coverage(None)) <= 2  # budget alone: the small-s metabolites starve
+    assert min(coverage(limiting_scales(u_star))) > 20  # aimed budget reaches them
 
 
 def test_sample_media_falls_back_to_background_when_no_active():

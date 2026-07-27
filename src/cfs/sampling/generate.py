@@ -55,15 +55,25 @@ def _row(genome_id, index_hash, medium_id, medium, sol, ex_order):
 
 def generate_organism(model, genome_id: str, index_hash: str, outdir: Path,
                       cfg: SamplingConfig | None = None, km_cfg: dict | None = None,
-                      subspace=None) -> OrganismShards:
-    """Generate all label shards for one organism (plan §4.5)."""
+                      subspace=None, scales: dict[str, float] | None = None,
+                      focus_weights: dict[str, float] | None = None) -> OrganismShards:
+    """Generate all label shards for one organism (plan §4.5).
+
+    ``scales`` centres each metabolite's sampling band on its own limiting regime
+    (:func:`cfs.sampling.design.limiting_scales`). Omitting it reproduces the
+    original Km-relative design, whose coverage of "which metabolite limits" is
+    skewed ~1000:1 — see :func:`~cfs.sampling.design.sample_media`.
+
+    ``focus_weights`` skews the focus budget toward the metabolites a previous
+    run got measurably wrong (:func:`~cfs.sampling.design.topup_weights`).
+    """
     from cfs.groundtruth.solve import load_km_defaults, solve
 
     cfg = cfg if cfg is not None else SamplingConfig()
     km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
     subspace = subspace if subspace is not None else active_subspace(model, genome_id, km_cfg)
 
-    media = sample_media(subspace, km_cfg, cfg)
+    media = sample_media(subspace, km_cfg, cfg, scales, focus_weights)
     ex_order = [ex.id for ex in model.exchanges]
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -96,8 +106,16 @@ def generate_organism(model, genome_id: str, index_hash: str, outdir: Path,
 
 
 def generate_roster(roster, index_path: Path, outdir: Path,
-                    cfg: SamplingConfig | None = None) -> list[OrganismShards]:
-    """Run :func:`generate_organism` for every roster model (serial; see module doc)."""
+                    cfg: SamplingConfig | None = None,
+                    scales: dict[str, dict[str, float]] | None = None,
+                    focus_weights: dict[str, dict[str, float]] | None = None,
+                    ) -> list[OrganismShards]:
+    """Run :func:`generate_organism` for every roster model (serial; see module doc).
+
+    ``scales`` is keyed by ``genome_id`` — the limiting regime is per organism, not
+    a roster constant (measured spread across organisms: 2x for the ions, 2585x
+    for ``EX_arg__L_e``).
+    """
     from cobra.io import read_sbml_model
 
     from cfs.groundtruth.index import index_hash
@@ -106,8 +124,12 @@ def generate_roster(roster, index_path: Path, outdir: Path,
     cfg = cfg if cfg is not None else SamplingConfig()
     km_cfg = load_km_defaults()
     ihash = index_hash(index_path)
+    scales = scales or {}
+    focus_weights = focus_weights or {}
     shards = []
     for gm in roster:
         model = read_sbml_model(str(gm.model_path))
-        shards.append(generate_organism(model, gm.genome_id, ihash, outdir, cfg, km_cfg))
+        shards.append(generate_organism(model, gm.genome_id, ihash, outdir, cfg, km_cfg,
+                                        scales=scales.get(gm.genome_id),
+                                        focus_weights=focus_weights.get(gm.genome_id)))
     return shards

@@ -7,27 +7,35 @@ concave function, which is what an LP value function is in its bounds (§1).
 
 ```
 z_1     = softplus(W_x^0 x + b_0)
-z_{k+1} = softplus(W_z^k z_k + W_x^k x + b_k)      W_z^k >= 0
-out     = w_z . z_L + w_x . x + b                  w_z >= 0
+z_{k+1} = softplus(W_z^k z_k + W_x^k x + b_k)      W_z^k >= 0, W_x^k <= 0
+out     = w_z . z_L + w_x . x + b                  w_z >= 0, w_x <= 0
 mu_hat  = -out
 ```
+
+The sign constraint on the ``x`` skips is what makes ``mu_hat`` **non-decreasing**
+in every coordinate, and it is not decoration:
+
+- it is true of the target — relaxing an uptake bound enlarges the LP's feasible
+  set, so ``mu_max`` can only rise;
+- the input transform is itself concave (a second MM map, see
+  :mod:`cfs.surrogate.data`), and ``f(h(x))`` is concave only if ``f`` is
+  non-decreasing;
+- an unconstrained head put 19% of its predicted gradient magnitude on negative
+  components, which is pure loss against an all-non-negative shadow-price target.
 
 A concave piecewise-linear function is a *min of affine functions*, which is
 exactly what a negated softplus ICNN approximates — the structure matches the
 target. What the target also is, measured on a real GEM: a ramp that reaches its
-plateau by ``x ~ 5e-3`` and is flat over the remaining 99% of ``[0, 1]``. So the
-inputs arrive already divided by a per-metabolite kink scale
-(:func:`cfs.surrogate.data.load_value_dataset`), which puts those kinks at O(1)
-where a normally-initialised first layer can reach them. A diagonal positive
-rescale is affine, so it costs nothing in concavity.
+plateau by ``x ~ 5e-3`` and is flat over the remaining 99% of ``[0, 1]``. The
+input transform puts each metabolite's ramp at O(1) where a normally-initialised
+first layer can reach it.
 
 **Softplus, never ReLU** (P3): Newton in Phase 5 differentiates the *network*
 twice, and a ReLU net has zero Hessian almost everywhere — the gradients look
 fine right up until the composition stalls.
 
 Head A takes no conditioning inputs, so this is a plain ICNN rather than the
-partial one; the ``x`` skip connections are unconstrained in sign because ``x``
-enters affinely.
+partial one.
 
 The organism mask is applied on entry: a metabolite the organism cannot exchange
 contributes a hard zero, not a learned weight. That keeps one architecture across
@@ -42,18 +50,20 @@ import jax.numpy as jnp
 from jax import Array
 
 
-def _softplus_inv(y: float) -> float:
-    return float(jnp.log(jnp.expm1(y)))
+def _softplus_inv(y):
+    """Inverse of ``softplus``; the raw parameter that renders as magnitude ``y``."""
+    return jnp.log(jnp.expm1(y))
 
 
 class ValueHead(eqx.Module):
-    """Concave ``mu_max(x)`` over rescaled saturation ``x = c/(Km+c) / x_scale``."""
+    """Concave, non-decreasing ``mu_max(x)`` over ``x = s/(s + c/(Km+c))``-rescaled
+    saturation (:func:`cfs.surrogate.data.load_value_dataset`)."""
 
-    wx: list[Array]  # (H, M) input skips, unconstrained
+    wx: list[Array]  # (H, M) input skips, non-positive via -softplus (monotone)
     wz: list[Array]  # (H, H_prev) pass-through, non-negative via softplus
     b: list[Array]
     out_z: Array  # (H,) non-negative via softplus
-    out_x: Array  # (M,)
+    out_x: Array  # (M,) non-positive via -softplus (monotone)
     out_b: Array
     # Bool, so `eqx.is_inexact_array` filtering leaves it out of the trained
     # parameters and out of the optimiser state.
@@ -63,8 +73,12 @@ class ValueHead(eqx.Module):
         keys = jax.random.split(key, 3 * depth + 3)
         scale = jnp.sqrt(2.0 / n_in)
         widths = [width] * depth
+        # Raw parameters: the skip weights render as `-softplus(wx)`, so they are
+        # non-positive and the pre-negation output is non-increasing in x. Init at
+        # the raw value that reproduces the old |N(0, scale)| magnitudes.
         self.wx = [
-            jax.random.normal(keys[i], (w, n_in)) * scale for i, w in enumerate(widths)
+            _softplus_inv(jnp.abs(jax.random.normal(keys[i], (w, n_in)) * scale) + 1e-6)
+            for i, w in enumerate(widths)
         ]
         # The pass-through weights are a non-negative sum over `width` units, so
         # initialise them at softplus^-1(1/width): without the 1/width the output
@@ -84,16 +98,16 @@ class ValueHead(eqx.Module):
             for i, w in enumerate(widths)
         ]
         self.out_z = jax.random.normal(keys[-1], (width,)) * 0.1 + w0
-        self.out_x = jax.random.normal(keys[-2], (n_in,)) * scale
+        self.out_x = _softplus_inv(jnp.abs(jax.random.normal(keys[-2], (n_in,)) * scale) + 1e-6)
         self.out_b = jnp.zeros(())
         self.mask = jnp.asarray(mask, dtype=bool)
 
     def __call__(self, x: Array) -> Array:
         y = x * self.mask
-        z = jax.nn.softplus(self.wx[0] @ y + self.b[0])
+        z = jax.nn.softplus(-jax.nn.softplus(self.wx[0]) @ y + self.b[0])
         for wx, wz, b in zip(self.wx[1:], self.wz, self.b[1:], strict=True):
-            z = jax.nn.softplus(jax.nn.softplus(wz) @ z + wx @ y + b)
-        out = jax.nn.softplus(self.out_z) @ z + self.out_x @ y + self.out_b
+            z = jax.nn.softplus(jax.nn.softplus(wz) @ z - jax.nn.softplus(wx) @ y + b)
+        out = jax.nn.softplus(self.out_z) @ z - jax.nn.softplus(self.out_x) @ y + self.out_b
         return -out
 
 

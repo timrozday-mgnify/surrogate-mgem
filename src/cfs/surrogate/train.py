@@ -13,6 +13,10 @@ matters**: the master problem (§8) and HMC follow slopes and never look at
 values. It is masked to rows whose duals are usable and to the organism's own
 ``M_i``.
 
+Pick ``w_grad`` by held-out ``grad_cosine`` **subject to ``value_r2 >= 0.9``**:
+at ``w_grad = 10`` the value head collapses (R2 -0.61) while cosine still climbs,
+and the composition in §8 needs both.
+
 The milestone gate is held-out per-sample gradient cosine > 0.99. §7.3's other
 diagnostics ride along: concavity violation rate (structural — non-zero means the
 ICNN constraint is broken), Hessian condition number (the early warning for
@@ -45,10 +49,20 @@ LOGGER = logging.getLogger("cfs.surrogate.train")
 GRAD_COSINE_GATE = 0.99
 
 
-_GRAD_FLOOR = 1e-6  # keeps replete media (every dual 0) from dividing by ~nothing
+def _du(x, x_scale):
+    """``du/dx`` for the ``x = u/(u + s)`` input map, from ``x`` alone: ``(1-x)^2/s``.
+
+    Gradients are compared in ``u`` space — ``u = c/(Km+c)``, the coordinate the
+    stored duals live in — never in the network's own input space. A cosine taken
+    in the input space is a different number for every input transform, so it
+    cannot be compared between runs and improves for free when the transform is
+    changed: the previous linear-rescale checkpoint reported 0.72 in its own
+    coordinate and scores 0.09 here.
+    """
+    return (1.0 - x) ** 2 / x_scale[:, None, :]
 
 
-def _loss(heads, x, mu, g, gvalid, w_grad):
+def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad):
     mu_hat, g_hat = batched_value_and_grad(heads, x)
     value = jnp.mean((mu_hat - mu) ** 2)
     # (G, B, 1) row mask * the head's own (G, 1, M) exchange mask.
@@ -59,20 +73,29 @@ def _loss(heads, x, mu, g, gvalid, w_grad):
     # rows and ignores everything else — measured grad cosine ~ 0.05. Dividing by
     # the target norm makes every medium contribute equally and, when the
     # magnitudes match, this term IS 2(1 - cos), which is the milestone gate.
-    sq = jnp.sum(w * (g_hat - g) ** 2, axis=-1)
-    raw = jnp.sum(w * g**2, axis=-1)
-    # Media where nothing is limiting have an all-zero target: no direction to
-    # get right, and normalising them means dividing by ~nothing. Drop them from
-    # this term (~5% of rows); the value term still pins them.
-    rows = gvalid * (raw > 0)
-    grad = jnp.sum(rows * sq / (raw + _GRAD_FLOOR)) / jnp.maximum(jnp.sum(rows), 1.0)
+    du = _du(x, x_scale)
+    sq = jnp.sum(w * ((g_hat - g) * du) ** 2, axis=-1)
+    raw = jnp.sum(w * (g * du) ** 2, axis=-1)
+    # Media where nothing is limiting have an all-zero target — 23% of rows. They
+    # are not excused from this term: their true gradient is the zero vector, and
+    # dropping them is exactly what let the model spread 56% of its predicted
+    # gradient magnitude onto non-limiting metabolites for free. They divide by
+    # the per-organism denominator floor (the median row norm, `gfloor`) instead,
+    # which makes their ||g_hat||^2 penalty comparable to everyone else's error.
+    #
+    # The floor does downweight genuinely-small-but-non-zero rows (bottom raw-norm
+    # quintile: loss weight 0.006, held-out cosine 0.90, against 1.00 for the top
+    # quintile). Restricting it to the all-zero rows, or clamping it at 1e-3..0.3
+    # of gfloor, was measured across that whole range and moved the synthetic gate
+    # by <=0.01 either way — it is not the binding constraint.
+    grad = jnp.sum(gvalid * sq / (raw + gfloor[:, None])) / jnp.maximum(jnp.sum(gvalid), 1.0)
     return value + w_grad * grad, (value, grad)
 
 
 @eqx.filter_jit
-def _step(heads, opt_state, x, mu, g, gvalid, w_grad, optimiser):
+def _step(heads, opt_state, x, mu, g, gvalid, x_scale, gfloor, w_grad, optimiser):
     (total, parts), grads = eqx.filter_value_and_grad(_loss, has_aux=True)(
-        heads, x, mu, g, gvalid, w_grad
+        heads, x, mu, g, gvalid, x_scale, gfloor, w_grad
     )
     updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(heads, eqx.is_inexact_array))
     return eqx.apply_updates(heads, updates), opt_state, total, parts
@@ -88,6 +111,13 @@ def train_value_heads(ds: ValueDataset, *, width: int = 128, depth: int = 3,
     mu = jnp.asarray(ds.mu_train) / scale
     g = jnp.asarray(ds.g_train) / scale[..., None]
     gvalid = jnp.asarray(ds.gvalid_train, dtype=jnp.float32)
+    x_scale = jnp.asarray(ds.x_scale)
+    # Per-organism denominator floor for the Sobolev term: the median u-space row
+    # norm over the rows that do have a limiting metabolite.
+    raw = np.sum(np.asarray(g * _du(x, x_scale)) ** 2 * ds.mask[:, None, :], axis=-1)
+    ok = (raw > 0) & np.asarray(ds.gvalid_train)
+    gfloor = jnp.asarray([float(np.median(r[o])) if o.any() else 1.0
+                          for r, o in zip(raw, ok, strict=True)])
 
     heads = stack_heads(key, len(ds.genome_ids), x.shape[-1], ds.mask, width, depth)
     n = x.shape[1]
@@ -105,7 +135,7 @@ def train_value_heads(ds: ValueDataset, *, width: int = 128, depth: int = 3,
             idx = jnp.asarray(perm[s * batch:(s + 1) * batch])
             heads, opt_state, total, (v, gl) = _step(
                 heads, opt_state, x[:, idx], mu[:, idx], g[:, idx], gvalid[:, idx],
-                w_grad, optimiser,
+                x_scale, gfloor, w_grad, optimiser,
             )
         if epoch % 20 == 0 or epoch == epochs - 1:
             LOGGER.info("epoch %4d  loss=%.5f  value=%.5f  grad=%.5f  (%.0fs)",
@@ -159,6 +189,9 @@ def evaluate(heads: ValueHead, ds: ValueDataset, seed: int = 0) -> dict:
     gvalid = jnp.asarray(ds.gvalid_val)
 
     mu_hat, g_hat = batched_value_and_grad(heads, x)
+    # In u space (see `_du`), so the gate means the same thing across runs.
+    du = _du(x, jnp.asarray(ds.x_scale))
+    g_hat, g = g_hat * du, g * du
     cos = _cosine(g_hat, g, heads.mask[:, None, :])
     cos = jnp.where(gvalid, cos, jnp.nan)
     r2 = 1.0 - jnp.sum((mu_hat - mu) ** 2, axis=1) / jnp.sum((mu - mu.mean(1, keepdims=True)) ** 2,
@@ -167,19 +200,47 @@ def evaluate(heads: ValueHead, ds: ValueDataset, seed: int = 0) -> dict:
     viol = _concavity_violations(heads, x, jax.random.PRNGKey(seed))
     conds = _hessian_cond(heads, x)
 
+    # Share of predicted gradient norm landing on the *true* argmax metabolite.
+    # 54.7% of rows have a single non-zero dual, so this is the number that says
+    # why a cosine is what it is: a dense predictor scores near 1/|M_i| here even
+    # when its cosine looks respectable.
+    m = heads.mask[:, None, :]
+    top = jnp.take_along_axis(jnp.abs(g_hat * m), jnp.argmax(jnp.abs(g * m), axis=-1)[..., None],
+                              axis=-1)[..., 0]
+    share = jnp.where(jnp.linalg.norm(g_hat * m, axis=-1) > 0,
+                      top / jnp.linalg.norm(g_hat * m + 1e-30, axis=-1), jnp.nan)
+    share = jnp.where(gvalid & (jnp.linalg.norm(g * m, axis=-1) > 0), share, jnp.nan)
+
+    # Held-out cosine and row count *per limiting metabolite* — the unit the next
+    # label budget is allocated in (`cfs.sampling.design.topup_weights`). Cosine
+    # tracks the cell's training row count at Spearman 0.72 (<50 rows -> 0.49,
+    # >400 -> 0.95), so this is a direct read of where labels are missing. It is
+    # the measured-error signal an ensemble's predictive variance would only be a
+    # proxy for; we have a val split, so we do not need the proxy.
+    kt = np.asarray(jnp.argmax(jnp.abs(g * m), axis=-1))
+    okv = np.asarray(gvalid & (jnp.linalg.norm(g * m, axis=-1) > 0))
+    cos_np = np.asarray(cos)
+
     per = {}
     for i, gid in enumerate(ds.genome_ids):
         worst = np.argsort(-np.asarray(err[i].mean(axis=0)))[:5]
+        by_met = {}
+        for j in np.unique(kt[i][okv[i]]):
+            s = okv[i] & (kt[i] == j)
+            by_met[ds.exchanges[j]] = {"rows": int(s.sum()),
+                                       "grad_cosine": float(np.nanmean(cos_np[i][s]))}
         per[gid] = {
             "grad_cosine": float(jnp.nanmean(cos[i])),
             "grad_cosine_p05": float(jnp.nanpercentile(cos[i], 5)),
+            "grad_top1_share": float(jnp.nanmean(share[i])),
             "value_r2": float(r2[i]),
             "concavity_violation_rate": float(viol[i]),
             "hessian_cond_median": conds[i],
             "worst_grad_metabolites": [ds.exchanges[j] for j in worst],
+            "per_limiting_metabolite": by_met,
         }
     gate = min(v["grad_cosine"] for v in per.values())
-    return {"gate": "grad_cosine > 0.99", "worst_grad_cosine": gate,
+    return {"gate": "grad_cosine > 0.99, in u = c/(Km+c) space", "worst_grad_cosine": gate,
             "passed": bool(gate > GRAD_COSINE_GATE), "per_organism": per}
 
 
@@ -205,8 +266,9 @@ def save(heads: ValueHead, ds: ValueDataset, outdir: Path, arch: dict,
         "mask": ds.mask.astype(int).tolist(),
         "mu_scale": ds.mu_scale.tolist(),
         "x_scale": ds.x_scale.tolist(),
-        "input_transform": "x = c / (Km + c) / x_scale, Km from km_defaults.yaml",
-        "gradient_units": "d(mu_max)/dx = max(-shadow, 0) * Vmax * x_scale, Vmax = 1000",
+        "input_transform": "u = c / (Km + c), x = u / (u + x_scale); Km from km_defaults.yaml",
+        "gradient_units": ("d(mu_max)/dx = max(-shadow, 0) * Vmax * (u + x_scale)^2 / x_scale, "
+                           "Vmax = 1000"),
         "arch": arch,
     }, indent=2))
     (outdir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2))

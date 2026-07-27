@@ -16,22 +16,27 @@ jax = pytest.importorskip("jax")
 pytest.importorskip("equinox")
 
 from cfs.surrogate.data import ValueDataset, _organism_arrays  # noqa: E402
-from cfs.surrogate.picnn import batched_value, stack_heads  # noqa: E402
+from cfs.surrogate.picnn import (  # noqa: E402
+    batched_value,
+    batched_value_and_grad,
+    stack_heads,
+)
 from cfs.surrogate.train import evaluate, train_value_heads  # noqa: E402
 
 G, M, N = 3, 6, 400
 
 
 def _synthetic() -> ValueDataset:
-    """mu = -sum_m w_m (x_m - a_m)^2 — concave, gradient known exactly."""
+    """mu = sum_m w_m x_m / (x_m + a_m) — concave, *non-decreasing* (which the head
+    now is by construction), gradient known exactly."""
     rng = np.random.default_rng(0)
     mask = np.ones((G, M), dtype=bool)
     mask[1, -2:] = False  # one organism missing two metabolites
     x = rng.uniform(0, 1, (G, N, M)).astype(np.float32) * mask[:, None, :]
     a = rng.uniform(0.2, 0.8, (G, 1, M)).astype(np.float32)
     w = rng.uniform(0.5, 2.0, (G, 1, M)).astype(np.float32) * mask[:, None, :]
-    mu = -np.sum(w * (x - a) ** 2, axis=-1)
-    g = (-2 * w * (x - a)) * mask[:, None, :]
+    mu = np.sum(w * x / (x + a), axis=-1)
+    g = (w * a / (x + a) ** 2) * mask[:, None, :]
     gvalid = np.ones((G, N), dtype=bool)
     n_val = N // 5
     return ValueDataset(
@@ -47,15 +52,18 @@ def _synthetic() -> ValueDataset:
 
 def test_gate_on_a_known_concave_target():
     ds = _synthetic()
-    heads = train_value_heads(ds, width=64, depth=2, epochs=600, batch=64, lr=1e-2)
+    # The sign-constrained head converges slower than the unconstrained one did:
+    # 600 epochs at lr 1e-2 stops at cosine 0.84 on this target, which is a
+    # training budget, not a wiring fault.
+    heads = train_value_heads(ds, width=64, depth=2, epochs=2000, batch=64, lr=3e-2)
     diag = evaluate(heads, ds)
     assert diag["passed"], diag["per_organism"]
     for gid, d in diag["per_organism"].items():
         assert d["concavity_violation_rate"] == 0.0, gid
 
 
-def test_untrained_head_is_concave_and_masked():
-    """Concavity is structural, so it must hold at initialisation too."""
+def test_untrained_head_is_concave_monotone_and_masked():
+    """Concavity and monotonicity are structural, so they hold at initialisation."""
     mask = np.ones((2, M), dtype=bool)
     mask[0, 0] = False
     heads = stack_heads(jax.random.PRNGKey(1), 2, M, mask, width=16, depth=3)
@@ -65,6 +73,11 @@ def test_untrained_head_is_concave_and_masked():
     mid = batched_value(heads, lam * xa + (1 - lam) * xb)
     chord = lam * batched_value(heads, xa) + (1 - lam) * batched_value(heads, xb)
     assert np.all(np.asarray(mid) >= np.asarray(chord) - 1e-5)
+
+    # More nutrient never lowers mu_max: the input transform is concave, so the
+    # composition is concave only if this holds.
+    _, grad = batched_value_and_grad(heads, xa)
+    assert np.all(np.asarray(grad * heads.mask[:, None, :]) >= 0.0)
 
     # A masked metabolite cannot move the output.
     x0 = np.zeros((2, 1, M), dtype=np.float32)

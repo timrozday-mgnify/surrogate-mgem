@@ -24,7 +24,7 @@
 > | M1 degeneracy → D4 | **done, V1 complete** — **68.9%** of 371k exchange-FVA observations degenerate roster-wide (59.7–82.8% per genome; 88% at α=0.7 vs 50% at α=1.0) ⇒ **D4 = elastic net** | `src/cfs/validate/degeneracy.py` |
 > | M2 solve interface | **done, §3.4 gate verified on a real GEM** — MM uptake bounds (§3.3), FBA for `mu_max` + duals, then the **Clarabel** elastic-net QP for `z` | `src/cfs/groundtruth/solve.py` |
 > | §4 sampling + bulk labels | **done, generated** — active subspace, stratified-Sobol design, parquet driver | `src/cfs/sampling/`, `--stage labels` |
-> | M3 Head A (value) | **built and training on the real roster; gate NOT met** — held-out gradient cosine **worst 0.40 / mean 0.72 / best 0.94** against the required 0.99. Concavity violations ~0 (7e-5), so the structural prior holds | `src/cfs/surrogate/`, `cfs train-value` |
+> | M3 Head A (value) | **built and training on the real roster; gate NOT met** — held-out gradient cosine **worst 0.66 / mean 0.80** against the required 0.99, measured in `u` space (see below). Concavity violations exactly 0 (structural), Hessian cond 1.6e9 | `src/cfs/surrogate/`, `cfs train-value` |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
@@ -47,23 +47,52 @@
 > `cfs.surrogate.data._organism_arrays` (clamp at 0, `_DUAL_TOL`) — do not
 > "simplify" that back to a plain `-shadow`.
 >
-> **What shapes M3 and will shape M4.** On a real GEM `mu_max` is a *linear ramp*
-> in saturation `x = c/(Km+c)` that reaches its plateau by `x* ~ 5e-3`: 99% of the
-> input range carries no signal, and `d(mu)/dx` spans five decades within one
-> organism. Three fixes each bought a large jump and are load-bearing —
-> per-metabolite kink rescale of the inputs (`_kink_scale`, affine so concavity is
-> untouched), a **per-row norm-relative** Sobolev term instead of §7.1's absolute
-> `||grad - pi||^2` (absolute gave cosine 0.05: a few ion-limited rows absorbed the
-> whole term), and ICNN init at `softplus^-1(1/width)`.
+> **The gate is measured in `u = c/(Km+c)` space, never in the network's input
+> space** (`cfs.surrogate.train._du`). A cosine taken in the model's own input
+> coordinate is a different number for every input transform: it cannot be
+> compared between runs, and it improves for free when you change the transform.
+> The first M3 checkpoint reported 0.72 in its own coordinate and scores **0.09**
+> in `u` — the number the master problem and HMC will actually feel. Both the gate
+> and the Sobolev term now live in `u`.
 >
-> **Next: finish M3.** Cosine is still budget-bound (0.50 → 0.56 → 0.72 as capacity
-> and steps grew), and at `w_grad=10` the value head collapses late in training
-> (R2 -0.61) while cosine climbs — balance the two terms first. The worst gradient
-> errors are the ion-limited metabolites (`EX_mg2_e`, `EX_k_e`, `EX_cl_e`,
-> `EX_ca2_e` lead in 17–19 of 21 organisms), exactly where the ramp is steepest, as
-> §7.3 predicts. Checkpoint + diagnostics:
-> `~/Documents/surrogate-mgems_runs/20hm/value/`. Hessian condition number is 7e11
-> — recorded, not gated, and the early warning for M6.
+> **What shapes M3 and will shape M4.** On a real GEM `mu_max` is a *linear ramp*
+> in saturation `u = c/(Km+c)` that reaches its plateau by `u* ~ 1.4e-4` for the
+> ions: 99.9% of the input range carries no signal, and `d(mu)/du` spans five
+> decades within one organism. What is load-bearing, in the order it was found:
+>
+> - a **saturating** per-metabolite input rescale `x = u/(u+s)`, `s` = median `u`
+>   where that metabolite limits (`_kink_scale`, no floor). A *linear* rescale
+>   cannot work: reaching the ions' ramp at `u ~ 1.4e-4` sends replete dims to
+>   `x ~ 1e4`, and the floor that stopped that pinned **45%** of dims short of
+>   their kink. Composed with the MM map it is just a smaller effective `Km`;
+> - the head is **monotone non-decreasing** (`wx`, `out_x` = `-softplus(param)`).
+>   Required — the input map is concave, so `f(h(x))` is concave only if `f` is
+>   non-decreasing — and true of the target: relaxing an uptake bound can only
+>   enlarge the LP's feasible set. It converges ~3x slower than the unconstrained
+>   head, so a short run looks like a regression when it is a budget;
+> - a **per-row norm-relative** Sobolev term instead of §7.1's absolute
+>   `||grad - pi||^2` (absolute gave cosine 0.05: a few ion-limited rows absorbed
+>   the whole term), with the all-zero-target rows (23%) *included* — dropping
+>   them is what let the model spend most of its gradient magnitude on
+>   non-limiting metabolites for free;
+> - ICNN init at `softplus^-1(1/width)`.
+>
+> Measured in `u` space, worst/mean cosine: old linear-rescale checkpoint
+> 0.06/0.09 → saturating transform + monotone head 0.41/0.69 → same, trained on
+> the `u`-space objective for 1500 epochs 0.66/0.80. Predicted gradient magnitude
+> landing on zero-target metabolites fell 98% → 53% across the same sequence, and
+> the Hessian condition number 7e11 → 1.6e9.
+>
+> **Next: finish M3.** The remaining error is concentrated exactly where §7.3
+> predicts — `EX_mg2_e`, `EX_ca2_e`, `EX_cl_e`, `EX_k_e` lead in 12–19 of 21
+> organisms — and it is *sparsity*: the true dual vector has one non-zero in more
+> than half the rows, while a softplus ICNN spreads. The untried lever is a
+> sharpness parameter on the activation (`softplus(beta z)/beta`, convexity-safe,
+> anneal beta up) to localise the gradient. `w_grad` trades the two heads rather
+> than fixing this: 1 → cosine 0.63 with value R2 0.72, 10 → cosine 0.66 with R2
+> 0.62; neither reaches the "R2 >= 0.9" balance rule. Checkpoints:
+> `~/Documents/surrogate-mgems_runs/20hm/value_v2/{u_w1,u_w10}/` (the pre-fix one
+> is still at `value/`).
 
 ## Legacy package (surrogate_mgem)
 

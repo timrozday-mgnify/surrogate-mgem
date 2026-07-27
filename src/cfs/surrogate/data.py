@@ -8,6 +8,12 @@ value function is concave in -- ``log c`` is not (the MM map is a sigmoid in
 the target does not satisfy. Saturation is also bounded and finite at ``c = 0``,
 so the §4.3 depletion corners and the padded absent metabolites are both just 0.
 
+The saturation is then passed through a *second* MM map with a per-metabolite
+constant read off the labels (:func:`_kink_scale`), which is what puts each
+metabolite's ramp at O(1). That map is concave rather than affine, so the head is
+constrained monotone non-decreasing to keep the composition concave — see
+:mod:`cfs.surrogate.picnn`.
+
 Gradient targets come straight from the stored duals. ``check_v2.py`` pinned the
 sign convention: the stored ``shadow`` is the *negated* derivative w.r.t. supply,
 so ``dmu/du_m = -pi_m`` and ``dmu/dx_m = -pi_m * Vmax_m``.
@@ -35,7 +41,6 @@ LOGGER = logging.getLogger("cfs.surrogate.data")
 # models. Vmax only scales the gradient targets, so a per-exchange override lives
 # in the `<id>.exchanges.json` sidecar if a future roster breaks the assumption.
 _VMAX_DEFAULT = 1000.0
-_KINK_FLOOR = 0.05  # cap the rescale: unbounded, the replete dims reach x ~ 1e4
 _DUAL_TOL = 1e-9  # below this a dual is solver dust, not a sensitivity
 
 
@@ -55,7 +60,7 @@ class ValueDataset:
     g_val: np.ndarray
     gvalid_val: np.ndarray
     mu_scale: np.ndarray  # (G,) per-organism label std; loss is dimensionless
-    x_scale: np.ndarray  # (G, M) per-metabolite kink scale; x is already divided by it
+    x_scale: np.ndarray  # (G, M) per-metabolite saturation constant s; x is already x/(x+s)
     index_hash: str
 
 
@@ -117,19 +122,24 @@ def _organism_arrays(labels_dir: Path, gid: str, eps: float, col: dict[str, int]
     return x, mu.astype(np.float32), g, gvalid, mask, df["index_hash"].iloc[0]
 
 
-def _kink_scale(x: np.ndarray, g: np.ndarray, floor: float = _KINK_FLOOR) -> np.ndarray:
-    """Per-metabolite input scale: where the value function's ramp actually lives.
+def _kink_scale(x: np.ndarray, g: np.ndarray) -> np.ndarray:
+    """Per-metabolite saturation constant: where the value function's ramp lives.
 
     Measured on a real GEM, ``mu_max`` rises linearly in ``x`` up to ``x* ~ 5e-3``
     and is flat over the remaining 99% of ``[0, 1]`` — the uptake bound saturates
     almost immediately because ``Vmax = 1000`` dwarfs the demand. A first layer
     initialised at ``1/sqrt(M)`` cannot put a kink there; it would need weights of
-    order 200, and Adam does not travel that far in a training run. Dividing each
-    coordinate by its own ramp scale moves the kink to O(1).
+    order 200, and Adam does not travel that far in a training run.
 
     The scale is the median ``x`` over the rows where that metabolite is actually
     limiting (its dual is non-zero), so it is read off the labels rather than
     guessed. Metabolites that never limit keep scale 1 — nothing to resolve.
+
+    It is used as the constant of a *second* MM map (see
+    :func:`load_value_dataset`), not as a divisor, so there is no floor: the ion
+    metabolites have their ramp at ``x ~ 1.4e-4`` and a linear rescale big enough
+    to reach it sends the replete dimensions to ``x ~ 1e4``. That tension is what
+    a saturating rescale removes.
     """
     scale = np.ones(x.shape[-1], dtype=np.float32)
     lim = g > 0
@@ -137,7 +147,7 @@ def _kink_scale(x: np.ndarray, g: np.ndarray, floor: float = _KINK_FLOOR) -> np.
         vals = x[lim[:, m], m]
         vals = vals[vals > 0]
         if len(vals):
-            scale[m] = max(float(np.median(vals)), floor)
+            scale[m] = float(np.median(vals))
     return scale
 
 
@@ -188,12 +198,26 @@ def load_value_dataset(labels_dir: Path | str, index_path: Path | str,
     n_val = max(1, int(round(val_frac * n)))
     vi, ti = perm[:n_val], perm[n_val:]
 
-    # Rescale the inputs to their kink scale, and the gradient targets by the
-    # same factor (chain rule for a diagonal linear map). Concavity is preserved:
-    # a positive diagonal rescale is affine.
+    # Put each metabolite's ramp at O(1) with a second MM map, x' = x / (x + s_m).
+    # A *linear* rescale cannot do this: the ion metabolites limit at x ~ 1.4e-4,
+    # and dividing by that sends every replete dimension to x ~ 1e4. The
+    # saturating map takes the median limiting entry to exactly x' = 0.5 and the
+    # replete ones to ~1, and it shrinks the interquartile spread of ||dmu/dx||^2
+    # from 3.5 decades to 1.6. Composed with `_saturation` it is just a smaller
+    # effective Km (Km' ~ s * Km) — the nutrient's own demand, not the literature
+    # constant, sets where it saturates.
+    #
+    # Unlike the linear rescale this is *concave*, not affine, so the head must be
+    # non-decreasing for the composition to stay concave. `picnn.ValueHead`
+    # enforces that, and it is true of the target anyway: relaxing an uptake bound
+    # can only enlarge the LP's feasible set.
     x_scale = np.stack([_kink_scale(x[i], g[i]) for i in range(x.shape[0])])
-    x = x / x_scale[:, None, :]
-    g = g * x_scale[:, None, :]
+    s = x_scale[:, None, :]
+    # Chain rule: dx'/dx = s / (x + s)^2. A few depletion-corner rows (x = 0 with
+    # a huge dual on a metabolite that never limits elsewhere, so s = 1) stay
+    # extreme; the per-row normalisation in the Sobolev loss is what handles them.
+    g = g * (x + s) ** 2 / s
+    x = x / (x + s)
 
     mu_scale = mu.std(axis=1)
     mu_scale[mu_scale <= 0] = 1.0
