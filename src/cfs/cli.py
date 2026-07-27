@@ -57,8 +57,27 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--outdir", type=Path, required=True, help="Parquet shard root.")
     gen.add_argument("--n-media", type=int, help="Override media per organism (default 20000).")
     gen.add_argument("--scales", type=Path, help="JSON {genome_id: {exchange: scale}} from "
-                     "design.limiting_scales — per-metabolite sampling bands.")
+                     "design.limiting_scales — fallback bands for the metabolites the LP "
+                     "demand probe finds no limiting regime for (§4.7).")
+    gen.add_argument("--no-probe", action="store_true", help="Skip the §4.7 demand probe; "
+                     "band placement then falls back to --scales, roster median, 1.0.")
+    gen.add_argument("--focus-weights", type=Path, help="JSON {genome_id: {exchange: weight}} "
+                     "from `cfs topup` — skews the focus budget toward the metabolites the "
+                     "trained head gets measurably wrong (§4.6).")
+    gen.add_argument("--round", type=int, default=0, dest="round_idx",
+                     help="Top-up round index; >0 writes part.round<n>.parquet alongside the "
+                     "base shards instead of overwriting them.")
     gen.add_argument("--seed", type=int, default=0)
+
+    tu = sub.add_parser("topup", help="§4.6: held-out diagnostics -> focus weights for the "
+                        "next generate round.")
+    tu.add_argument("--diagnostics", type=Path, required=True,
+                    help="diagnostics.json from train-value.")
+    tu.add_argument("--labels", type=Path, required=True,
+                    help="Label root holding the <id>.subspace.json sidecars.")
+    tu.add_argument("--out", type=Path, required=True, help="Focus-weights JSON.")
+    tu.add_argument("--floor", type=float, default=0.25,
+                    help="Share reserved for metabolites already predicted well.")
 
     tv = sub.add_parser("train-value", help="M3: train Head A (concave mu_max) on label shards.")
     tv.add_argument("--labels", type=Path, required=True, help="Label shard root (§4.5).")
@@ -89,6 +108,39 @@ def main(argv: list[str] | None = None) -> int:
                           w_grad=args.w_grad, seed=args.seed)
         print(json.dumps(diagnostics, indent=2))
         return 0 if diagnostics["passed"] else 1
+
+    if args.command == "topup":
+        # Also label-side, no roster: last run's held-out error -> next run's focus
+        # budget (§4.6). Metabolites that never limited have no error to read, so
+        # they get the floor share rather than nothing — the probe (§4.7) has by
+        # now given them a band worth sampling.
+        from cfs.sampling.active_subspace import load_subspaces
+        from cfs.sampling.design import topup_weights
+        from cfs.surrogate.ensemble import unmeasured_metabolites
+
+        diagnostics = json.loads(args.diagnostics.read_text())
+        subspaces = {}
+        for path in sorted(Path(args.labels).glob("*.subspace.json")):
+            subspaces.update({gid: s.active for gid, s in load_subspaces(path).items()})
+        unmeasured = unmeasured_metabolites(diagnostics, subspaces)
+
+        weights = {}
+        for gid, d in diagnostics["per_organism"].items():
+            w = topup_weights(d.get("per_limiting_metabolite", {}), floor=args.floor)
+            blind = unmeasured.get(gid, [])
+            if blind:
+                # Give the never-measured metabolites the same per-metabolite share
+                # the floor gives a well-predicted one, then renormalise.
+                share = args.floor / max(len(w) + len(blind), 1)
+                w = {**w, **dict.fromkeys(blind, share)}
+                total = sum(w.values())
+                w = {ex: v / total for ex, v in w.items()}
+            weights[gid] = w
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(weights, indent=2, sort_keys=True))
+        print(f"wrote {args.out} — {len(weights)} organisms, "
+              f"{sum(len(v) for v in unmeasured.values())} never-measured metabolites")
+        return 0
 
     # Imports are deferred so `--help` works without the data extra installed.
     from surrogate_mgem.data import read_roster
@@ -150,11 +202,13 @@ def main(argv: list[str] | None = None) -> int:
         from cfs.sampling.design import SamplingConfig
         from cfs.sampling.generate import generate_roster
 
-        cfg = SamplingConfig(seed=args.seed)
+        cfg = SamplingConfig(seed=args.seed, probe=not args.no_probe)
         if args.n_media is not None:
             cfg = replace(cfg, n_media=args.n_media)
         scales = json.loads(args.scales.read_text()) if args.scales else None
-        shards = generate_roster(roster, args.index, args.outdir, cfg, scales=scales)
+        focus = json.loads(args.focus_weights.read_text()) if args.focus_weights else None
+        shards = generate_roster(roster, args.index, args.outdir, cfg, scales=scales,
+                                 focus_weights=focus, round_idx=args.round_idx)
         print(json.dumps(
             {s.genome_id: {"n_media": s.n_media, "shards": [str(p) for p in s.paths]}
              for s in shards}, indent=2))

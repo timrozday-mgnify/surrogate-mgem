@@ -304,8 +304,21 @@ have sampled — this is the P4 failure mode and passive sampling cannot fix it.
 
 ### 4.7 Band placement must be measured per (organism, metabolite)
 
-**This is the next piece of work, and the bar is that it holds for any metabolite
-on any GEM without hand-tuning.** The mechanism that produced the second run —
+> **Built (2026-07-27).** `cfs.sampling.active_subspace.demand_probe` +
+> `design.band_scales`, run inside `generate_organism` and on by default
+> (`SamplingConfig.probe`). On AAXE02 the probe anchors the same 12/16 metabolites
+> the two-pass `u*` did, in **2 s** for the whole organism, and agrees within 1.5
+> decades on all 12. Its target — the point where `mu_max` has recovered
+> `target_frac` of that metabolite's own range — is **calibrated, not chosen**:
+> median `log10` difference against the measured `u*` anchors over 4 organisms /
+> 64 metabolites is −0.15 at `target_frac=0.05`, **+0.09 at 0.1** (the default),
+> +0.46 at 0.25, +0.77 at the midpoint. At 200 media on 2 organisms the resulting
+> coverage matches the `--scales` path metabolite for metabolite (roster median
+> `top_share` 0.463 vs 0.466, `A_med` 9.75 both), with **no previous labels**.
+> Provenance is in the sidecar: `probe` 12/16 and 25/30, the rest `default`.
+
+**The bar is that it holds for any metabolite on any GEM without hand-tuning.**
+The mechanism that produced the second run —
 `limiting_scales` reading `u*` off the previous run's labels — works, but it is
 two-pass and therefore not a design: a genome with no labels yet falls back to
 scale 1.0 and its first pass is as skewed as the original. A roster-median prior
@@ -337,6 +350,14 @@ val split, and it inherits whatever the anchor got wrong. Ensemble gradient
 disagreement is for the 4–10 metabolites per organism that never limited at all
 and so have neither a probe result nor a measurable error; it is the last resort,
 not the first (see the ordering rationale in §4.6 and P4).
+
+Both now exist as the §4.6 top-up loop, *after* the anchor: `cfs topup` turns
+`train-value`'s held-out `per_limiting_metabolite` into focus weights (and gives
+the never-measured metabolites the floor share rather than nothing), and
+`cfs generate --focus-weights --round N` spends them, writing
+`part.round<N>.parquet` beside the base shards — `load_value_dataset` reads every
+parquet in an `(organism, eps)` directory, and round `N`'s `medium_id`s are
+offset so the by-medium train/val split cannot fuse two rounds' media.
 
 ---
 

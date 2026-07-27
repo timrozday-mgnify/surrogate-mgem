@@ -95,3 +95,29 @@ def test_unmeasured_metabolites_are_the_ones_with_no_evidence():
     out = unmeasured_metabolites(diag, {"g0": ["EX_a_e", "EX_b_e", "EX_c_e"]})
     # EX_a_e limited and so has both a u* and an error; the other two have neither.
     assert out == {"g0": ["EX_b_e", "EX_c_e"]}
+
+
+def test_topup_cli_weights_every_metabolite_including_the_never_measured(tmp_path):
+    """`cfs topup`: measured error where there is one, the floor where there is not."""
+    import json
+
+    from cfs.cli import main
+    from cfs.sampling.active_subspace import write_subspaces
+
+    ex = ["EX_seen_e", "EX_bad_e", "EX_blind_e"]
+    write_subspaces([ActiveSubspace("g0", ex, [], dict.fromkeys(ex, 1.0), 5.0)],
+                    tmp_path / "g0.subspace.json")
+    diag = {"per_organism": {"g0": {"per_limiting_metabolite": {
+        "EX_seen_e": {"grad_cosine": 0.95}, "EX_bad_e": {"grad_cosine": 0.1}}}}}
+    (tmp_path / "diagnostics.json").write_text(json.dumps(diag))
+
+    out = tmp_path / "weights.json"
+    assert main(["topup", "--diagnostics", str(tmp_path / "diagnostics.json"),
+                 "--labels", str(tmp_path), "--out", str(out)]) == 0
+
+    w = json.loads(out.read_text())["g0"]
+    assert set(w) == set(ex) and sum(w.values()) == pytest.approx(1.0)
+    assert w["EX_bad_e"] > w["EX_seen_e"]
+    # EX_blind_e never limited, so it has no error to read — it must still get a
+    # share, and the §4.7 probe has now given it a band worth sampling.
+    assert w["EX_blind_e"] > 0.0

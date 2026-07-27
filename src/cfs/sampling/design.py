@@ -45,6 +45,10 @@ class SamplingConfig:
     eps_levels: tuple[float, ...] = (1e-2, 1e-3, 1e-4)
     eps_primary_idx: int = 1
     subset_frac: float = 0.20  # non-primary eps run on a stratified subset (§4.5)
+    # §4.7: measure each metabolite's limiting regime by LP before sampling, so a
+    # genome with no previous labels still anchors its own bands.
+    probe: bool = True
+    probe_steps: int = 12  # bisection steps over the 5-decade band
     seed: int = 0
 
 
@@ -68,6 +72,32 @@ def limiting_scales(u_star: dict[str, float], clip: float = 1e4) -> dict[str, fl
             continue
         out[ex] = float(min(max(u / (1.0 - u), 1.0 / clip), clip))
     return out
+
+
+def band_scales(probe: dict[str, float] | None,
+                previous: dict[str, float] | None,
+                roster_median: dict[str, float] | None,
+                exchanges: list[str]) -> tuple[dict[str, float], dict[str, str]]:
+    """§4.7 fallback chain: probe -> previous ``u*`` -> roster median -> 1.0.
+
+    Returns the scales for :func:`sample_media` and, per metabolite, which link
+    of the chain supplied it. The order is not arbitrary: the probe is measured
+    on *this* organism with no labels needed; a previous run's ``u*`` is measured
+    but stale; the roster median is a prior that is fine for the ions (spread 2-5x
+    across organisms) and useless for ``EX_arg__L_e`` (2585x); 1.0 is the
+    un-anchored default whose coverage skew is the thing being fixed.
+    """
+    sources = ("probe", "previous", "roster_median")
+    tables = (probe or {}, previous or {}, roster_median or {})
+    scales, chosen = {}, {}
+    for ex in exchanges:
+        for src, table in zip(sources, tables, strict=True):
+            if ex in table:
+                scales[ex], chosen[ex] = float(table[ex]), src
+                break
+        else:
+            scales[ex], chosen[ex] = 1.0, "default"
+    return scales, chosen
 
 
 def topup_weights(per_limiting_metabolite: dict[str, dict],

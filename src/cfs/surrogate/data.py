@@ -83,7 +83,13 @@ def _organism_arrays(labels_dir: Path, gid: str, eps: float, col: dict[str, int]
         missing = [ex for ex, p in zip(ex_order, pos, strict=True) if p < 0]
         raise ValueError(f"{gid}: exchanges absent from the frozen index: {missing[:5]}")
 
-    df = pd.read_parquet(labels_dir / f"genome_id={gid}" / f"eps={eps:g}" / "part.parquet")
+    # Every parquet in the (organism, eps) directory: the base run writes
+    # `part.parquet`, each §4.6 top-up round adds `part.round<n>.parquet`.
+    shard_dir = labels_dir / f"genome_id={gid}" / f"eps={eps:g}"
+    parts = sorted(shard_dir.glob("*.parquet"))
+    if not parts:
+        raise FileNotFoundError(f"{gid}: no label shards under {shard_dir}")
+    df = pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True)
     df = df[df["alpha"] == 1.0].sort_values("medium_id").reset_index(drop=True)
 
     km = np.array([km_for_exchange(ex, km_cfg) for ex in ex_order])

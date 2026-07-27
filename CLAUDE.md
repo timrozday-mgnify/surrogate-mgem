@@ -108,12 +108,34 @@
 > soft-min ("Liebig") head that matches the target's sparsity exactly scored
 > *worse*, 0.55, with 6–16 orders worse conditioning (`20hm/value_v3/`).
 >
-> **Next, in order.** (1) **Plan §4.7 — make band placement automatic**: an LP
-> demand probe per (organism, metabolite) inside `cfs generate`, so a genome the
-> roster has never seen anchors its own bands, with a stated fallback chain
-> (probe → previous `u*` → roster median → 1.0) recorded per metabolite. The
-> current `--scales` path works but is two-pass and dead on a new GEM, and nothing
-> that amounts to hand-tuning a metabolite is the deliverable. (2) R² from
+> **§4.7 is done — bands anchor themselves.** `active_subspace.demand_probe`
+> bisects `log10(c/Km)` per (organism, metabolite in `A_i`) for the point where
+> `mu_max` has recovered `target_frac` of that metabolite's own range, holding
+> every other uptake at the *design's* rich level (`Km * 10**log10_hi`, not
+> `_C_RICH`). `design.band_scales` then resolves probe → previous `u*` (`--scales`,
+> now a fallback) → roster median → 1.0 and records the choice per metabolite in
+> `<id>.subspace.json`. On by default (`SamplingConfig.probe`), ~2 s and ~350 LPs
+> per organism, and it needs no labels — a new GEM anchors itself.
+>
+> `target_frac=0.1` is **calibrated against the measured `u*`** (median `log10`
+> difference over 4 organisms / 64 metabolites: −0.15 at 0.05, +0.09 at 0.1, +0.77
+> at the range midpoint) — do not "simplify" it to the midpoint, which shifts every
+> band 0.8 decades above the regime the labels actually found. At 200 media the
+> probe path reproduces the `--scales` path's coverage exactly (`top_share` 0.463
+> vs 0.466), with no previous run.
+>
+> **§4.6 top-up loop, in the order the signals are worth spending.** `cfs topup`
+> reads `train-value`'s held-out `per_limiting_metabolite` → focus weights (
+> `design.topup_weights`, plus the floor share for the metabolites
+> `ensemble.unmeasured_metabolites` finds never limited); `cfs generate
+> --focus-weights --round N` spends them into `part.round<N>.parquet` beside the
+> base shards. `load_value_dataset` globs every parquet in an `(organism, eps)`
+> dir, and round `N` offsets `medium_id` by `N * 1e6` because the train/val split
+> is by medium. Loop: train → topup → generate round → retrain, ~20% of the base
+> budget per round, stop when the worst cell stops moving.
+>
+> **Next, in order.** (1) Regenerate the roster with probe-anchored bands and run
+> the top-up loop on it. (2) R² from
 > **architecture and D10 scale**, not loss weights: `w_grad` only trades the heads
 > (1 → 0.63 cosine / 0.72 R², 10 → 0.66 / 0.62) and neither end reaches the
 > "R² ≥ 0.9" balance rule. Checkpoints: `20hm_bands/value_b1/` (current),

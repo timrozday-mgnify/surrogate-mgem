@@ -75,16 +75,86 @@ def active_subspace(model, genome_id: str = "", km_cfg: dict | None = None,
     return ActiveSubspace(genome_id, active, background, sensitivity, float(mu_rich))
 
 
-def write_subspaces(subspaces: list[ActiveSubspace], path: Path) -> None:
-    """Write per-organism active subspaces to one JSON (fed to ``generate``)."""
+def demand_probe(model, exchanges: list[str], km_cfg: dict | None = None, *,
+                 lo: float = -4.0, hi: float = 1.0, steps: int = 12,
+                 target_frac: float = 0.1, tol: float = 1e-3) -> dict[str, float]:
+    """Where each metabolite starts limiting, in ``c/Km`` — before any labels (§4.7).
+
+    This is what makes the design self-anchoring. ``limiting_scales`` reads the
+    same quantity off a *previous run's* labels, so a genome the roster has never
+    seen falls back to scale 1.0 and its first pass carries the ~1137:9:1 coverage
+    skew that holds the M3 gate down. A bisection is a few LPs per metabolite
+    against the ~32 000 solves its labels cost.
+
+    Every other uptake is held at ``Km * 10**hi`` — the *design's* rich level, not
+    ``active_subspace``'s absolute ``_C_RICH``, so the probe measures the geometry
+    the focus strata will actually sample. Bisects ``log10(c/Km)`` for the point
+    where ``mu_max`` has recovered ``target_frac`` of that metabolite's *own*
+    range, so a metabolite that only costs 5% of growth is anchored as well as an
+    essential one. ``mu_max`` is non-decreasing in an uptake bound (relaxing it
+    only enlarges the LP's feasible set), so bisection is sound.
+
+    ``target_frac`` is calibrated, not chosen: measured against the ``u*`` anchors
+    the second run produced (4 organisms, 64 shared metabolites), the median
+    ``log10`` difference is -0.15 at 0.05, **+0.09 at 0.1**, +0.46 at 0.25 and
+    +0.77 at the range midpoint. 0.1 is the fraction at which a probe with no
+    labels lands where a full labelled run measured; the onset of limitation sits
+    well below the midpoint because the MM ramp is concave.
+
+    Metabolites that never limit inside ``[lo, hi]`` are **absent** from the
+    result rather than defaulted — that is the caller's fallback chain to decide
+    (:func:`cfs.sampling.design.band_scales`).
+    """
+    from cfs.groundtruth.solve import apply_mm_bounds, km_for_exchange, load_km_defaults
+
+    km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
+    uptakes = _uptake_exchanges(model)
+    km = {ex: km_for_exchange(ex, km_cfg) for ex in uptakes}
+    rich = {ex: km[ex] * 10.0**hi for ex in uptakes}
+
+    def mu_at(ex: str, a: float) -> float:
+        with model:
+            apply_mm_bounds(model, {**rich, ex: km[ex] * 10.0**a}, km_cfg)
+            return model.optimize().objective_value or 0.0
+
+    out = {}
+    for ex in exchanges:
+        if ex not in km:  # not an uptake exchange on this model
+            continue
+        mu_hi, mu_lo = mu_at(ex, hi), mu_at(ex, lo)
+        if mu_hi <= 0.0 or (mu_hi - mu_lo) <= tol * mu_hi:
+            continue  # never limits inside the band: no probe result
+        target = mu_lo + target_frac * (mu_hi - mu_lo)
+        a_lo, a_hi = lo, hi  # mu(a_lo) < target <= mu(a_hi)
+        for _ in range(steps):
+            mid = 0.5 * (a_lo + a_hi)
+            if mu_at(ex, mid) < target:
+                a_lo = mid
+            else:
+                a_hi = mid
+        out[ex] = float(10.0 ** (0.5 * (a_lo + a_hi)))
+    LOGGER.info("demand probe: %d/%d metabolites anchored", len(out), len(exchanges))
+    return out
+
+
+def write_subspaces(subspaces: list[ActiveSubspace], path: Path,
+                    bands: dict[str, dict] | None = None) -> None:
+    """Write per-organism active subspaces to one JSON (fed to ``generate``).
+
+    ``bands`` (``{genome_id: {exchange: {"scale": s, "source": src}}}``) records
+    where each sampling band came from — §4.7: a band anchored at the default is
+    a known blind spot, not a silent one.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    bands = bands or {}
     blob = {
         s.genome_id: {
             "active": s.active,
             "background": s.background,
             "sensitivity": s.sensitivity,
             "mu_rich": s.mu_rich,
+            **({"bands": bands[s.genome_id]} if s.genome_id in bands else {}),
         }
         for s in subspaces
     }

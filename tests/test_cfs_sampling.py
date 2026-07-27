@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 import pytest
@@ -129,6 +130,35 @@ def test_active_subspace_separates_essential_from_inert():
     assert sub.mu_rich == pytest.approx(10.0, rel=1e-3)
 
 
+def test_demand_probe_anchors_the_limiting_metabolite_without_labels():
+    """§4.7: the band comes from an LP on *this* model, not a previous run."""
+    pytest.importorskip("cobra")
+    from cfs.sampling.active_subspace import demand_probe
+
+    model = _toy_two_uptakes()
+    probe = demand_probe(model, ["EX_a_e", "EX_b_e"], load_km_defaults(), steps=14)
+
+    # 'a' limits growth through MM: mu = vmax * c/(Km+c), so the half-way point of
+    # its own mu range sits within a decade of Km, i.e. scale ~ 1.
+    assert 0.1 < probe["EX_a_e"] < 10.0
+    # 'b' feeds nothing: no limiting regime, so no anchor — the chain decides.
+    assert "EX_b_e" not in probe
+
+
+def test_band_scales_follows_the_stated_fallback_chain():
+    from cfs.sampling.design import band_scales
+
+    scales, source = band_scales(
+        probe={"EX_a_e": 0.5},
+        previous={"EX_a_e": 9.0, "EX_b_e": 2.0},
+        roster_median={"EX_b_e": 3.0, "EX_c_e": 4.0},
+        exchanges=["EX_a_e", "EX_b_e", "EX_c_e", "EX_d_e"],
+    )
+    assert scales == {"EX_a_e": 0.5, "EX_b_e": 2.0, "EX_c_e": 4.0, "EX_d_e": 1.0}
+    assert source == {"EX_a_e": "probe", "EX_b_e": "previous",
+                      "EX_c_e": "roster_median", "EX_d_e": "default"}
+
+
 def test_generate_organism_writes_readable_shards(tmp_path):
     pytest.importorskip("highspy")
     pytest.importorskip("pyarrow")
@@ -147,3 +177,27 @@ def test_generate_organism_writes_readable_shards(tmp_path):
     assert set(df.columns) >= {"genome_id", "index_hash", "alpha", "eps", "mu_max", "z"}
     assert len(df["z"].iloc[0]) == len(model.exchanges)  # z aligned to this organism's M_i
     assert (df["index_hash"] == "deadbeef").all()  # P13 provenance on every row
+
+    # §4.7: every sampled metabolite records where its band came from.
+    blob = json.loads((tmp_path / "toy2.subspace.json").read_text())
+    assert blob["toy2"]["bands"]["EX_a_e"]["source"] == "probe"
+
+
+def test_topup_round_appends_a_shard_and_both_rounds_load(tmp_path):
+    """§4.6: a top-up round must add to the label set, not overwrite it."""
+    pytest.importorskip("highspy")
+    pytest.importorskip("pyarrow")
+    import pandas as pd
+
+    from cfs.sampling.generate import generate_organism
+
+    model = _toy_two_uptakes()
+    cfg = SamplingConfig(n_media=4, alphas=(1.0,), eps_levels=(1e-3,), eps_primary_idx=0,
+                         probe=False, seed=0)
+    base = generate_organism(model, "toy2", "deadbeef", tmp_path, cfg)
+    topup = generate_organism(model, "toy2", "deadbeef", tmp_path, cfg, round_idx=1)
+
+    assert base.paths[0] != topup.paths[0] and base.paths[0].exists()
+    both = pd.concat([pd.read_parquet(p) for p in base.paths + topup.paths])
+    # Media ids stay disjoint: the train/val split is by medium_id.
+    assert both["medium_id"].nunique() == len(both)
