@@ -16,13 +16,27 @@
 > The existing **`src/surrogate_mgem/`** package (PyTorch + MICOM growth
 > surrogate, documented below) is **legacy/reference** — kept, not deleted.
 >
-> **Progress:** M0 + M1 done (`src/cfs/groundtruth/qc.py`, `index.py`,
-> `src/cfs/validate/degeneracy.py`) — QC, frozen/hashed metabolite index, and the
-> degeneracy survey that settled **D4 = elastic net** (§5.4). M2 solve interface
-> done (`src/cfs/groundtruth/solve.py`) — MM uptake bounds (§3.3), two-stage
-> FBA + **HiGHS elastic-net QP** for `mu_max`, exchange fluxes `z`, and metabolite
-> shadow prices. **Next: the sampling design (§4)** — active-subspace reduction +
-> stratified low-concentration media — then bulk parquet label generation.
+> ### Progress — M0–M2 and §4 are done *and run on the real roster*
+>
+> | Milestone | State | Code |
+> | --- | --- | --- |
+> | M0 QC + frozen index | **done, V0 passes** — 21/21 EGC-free; index = 444 exchanges, **365 shared / 79 private** (so the Newton Jacobian is 365×365) | `src/cfs/groundtruth/{qc,index}.py` |
+> | M1 degeneracy → D4 | **done, V1 complete** — **68.9%** of 371k exchange-FVA observations degenerate roster-wide (59.7–82.8% per genome; 88% at α=0.7 vs 50% at α=1.0) ⇒ **D4 = elastic net** | `src/cfs/validate/degeneracy.py` |
+> | M2 solve interface | **done, §3.4 gate verified on a real GEM** — MM uptake bounds (§3.3), FBA for `mu_max` + duals, then the **Clarabel** elastic-net QP for `z` | `src/cfs/groundtruth/solve.py` |
+> | §4 sampling + bulk labels | **done, generated** — active subspace, stratified-Sobol design, parquet driver | `src/cfs/sampling/`, `--stage labels` |
+>
+> **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm/`
+> from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
+> 1/5 of the D10 budget, laptop-sized; `SamplingConfig.n_media` still defaults to
+> 20000 for HPC. **940 800 rows, 573 MB, 21/21 organisms, 0 failures, 100% optimal
+> solves**, one `index_hash` throughout (P13). Per organism: 32 000 rows at the
+> primary `eps=1e-3` and 6400 at each of `1e-2`/`1e-4`. `|A_i|` = 11–32, median 24.
+> The run dir also holds `check_v2.py` (the §3.4 gate) and `check_labels.py`
+> (shard sanity), plus `local.config` — the external `-c` site config for this box.
+>
+> **Next: M3** — the JAX/Equinox concave value head (`mu_max`) trained on those
+> parquet shards, vmapped across the 21 organisms; gate is gradient cosine > 0.99
+> held-out.
 
 ## Legacy package (surrogate_mgem)
 
@@ -54,15 +68,22 @@ House style mirrors `../subspecies-phylogeny`: DSL2, meta maps, `conf/base.confi
 labels + retry, `conf/modules.config` for `ext.args`/publishDir, nf-test stub
 tests, per-process container ternary.
 
-`main.nf` has two stages via `--stage` (default `train`):
+`main.nf` has three stages via `--stage` (default `train`):
 
 - **`qc`** — M0+M1 ground-truth QC (`workflows/groundtruth_qc.nf`, the v2 pivot).
   `QC_MODELS` (whole roster: EGC gate + MEMOTE, freeze
   `${outdir}/qc/metabolite_index.json`) → `DEGENERACY_SURVEY` (per organism,
-  exchange-FVA — the FVA is the cost, hence per-genome fan-out + `process_high`)
+  exchange-FVA — the FVA is the cost, hence the per-genome fan-out)
   → `COLLECT_D4` (roster-wide `d4_recommendation.json`; advisory — the human
   records D4). CLI: `cfs {qc, freeze-index, degeneracy}` (`src/cfs/cli.py`).
   Run this first, before any `train`. Stub: `tests/qc.nf.test`.
+- **`labels`** — §4.5 bulk ground-truth labels (`workflows/label_generation.nf`).
+  `GENERATE_LABELS`, one task per organism: active subspace (§4.2) → stratified
+  Sobol design (§4.3-4.4) → elastic-net solves, sharded to
+  `${outdir}/labels/genome_id=<id>/eps=<e>/part.parquet` plus `<id>.subspace.json`
+  / `<id>.exchanges.json` sidecars. Needs `--index` (the `metabolite_index.json`
+  the `qc` stage freezes) and `--label_media` (4000 here; the D10 scale is 20000).
+  CLI: `cfs generate`. Stub: `tests/labels.nf.test`.
 - **`train`** — the legacy sweep below.
 
 DAG (`workflows/surrogate_training.nf`):
@@ -80,6 +101,7 @@ GENERATE_DATA (per shard) ─┐
 
 | Module | Image | Label |
 | --- | --- | --- |
+| `GENERATE_LABELS` | `surrogate-mgem-data` | process_low |
 | `GENERATE_DATA` | `surrogate-mgem-data` | process_high |
 | `MERGE_DATA` | `surrogate-mgem-train` | process_low |
 | `ACTIVE_LEARN` | `surrogate-mgem-data` | process_medium |
@@ -126,8 +148,17 @@ GENERATE_DATA (per shard) ─┐
   It is a sweep axis (`params.n_features_list`, cell suffix `__f<n>`) because the
   best width moves with dataset size and community: on one community at 2400 rows,
   8/16/32 features gave R2 0.56/0.86/0.70 against 0.44 for all 96.
+- **Never let cobra parallelise inside a task.** `flux_variability_analysis`
+  defaults to a worker pool; each worker re-pickles the GEM, and one exchange-FVA
+  on a CarveMe model went from ~1 s to *not finishing in 30 minutes*. Everything
+  in `src/cfs/` is single-threaded on purpose (FVA `processes=1`, HiGHS
+  `threads=1` for label repeatability) — parallelism is the per-organism Nextflow
+  fan-out.
 - **HiGHS backs the default `hybrid` solver** — no CPLEX/Gurobi licence (`highspy`
-  is in the `data` extra).
+  is in the `data` extra). **But not the QP**: the M2 elastic-net labels go
+  through **Clarabel**, because HiGHS's QP active-set method failed on ~30% of
+  real CarveMe solves at the primary `eps` and stalled for minutes at `eps=1e-4`
+  (design doc §5.4). Do not "simplify" it back to one solver.
 - **No slurm/test profile in-repo** — layer the executor via an external
   `-c site.config`; `max_cpus/max_memory/max_time` cap `process.resourceLimits`.
 - **Community fan-out** picks the top `n_communities_augment` communities by

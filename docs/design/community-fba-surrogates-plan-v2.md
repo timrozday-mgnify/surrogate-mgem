@@ -174,11 +174,33 @@ D2 at 100+ dimensions makes this the part of the plan that changed most.
 > the primary `eps`, 20% subset at the others; stores `mu_max`/`z`/shadow/status/
 > medium, records `index_hash` per row per P13). CLI: `cfs active-subspace`,
 > `cfs generate`. `pyarrow` added to the `data` extra. Tested (`tests/test_cfs_sampling.py`).
+>
+> **Run at scale (2026-07-26), 21-genome roster** (`~/Documents/20hm_carveme_models`,
+> run dir `~/Documents/surrogate-mgems_runs/20hm`). Nextflow `GENERATE_LABELS` +
+> `--stage labels` now exist (`workflows/label_generation.nf`), one task per
+> organism, publishing `labels/genome_id=<id>/eps=<e>/part.parquet` plus
+> `<id>.subspace.json` / `<id>.exchanges.json` sidecars. First bulk set generated
+> at **4000 media/organism** (1/5 of the D10 budget — the design is unchanged, the
+> count is laptop-sized; 20000 is still the `SamplingConfig` default for HPC).
+>
+> Result: **21/21 organisms, 0 failures, 940 800 label rows, 573 MB parquet**,
+> ~58 min for the slowest organism (12 concurrent, 12 cores). Per organism and
+> `eps` the shard shapes are exactly the §4.5 design — 32 000 rows at the primary
+> `eps=1e-3` (4000 media × 8 α) and 6400 at each of `1e-2`/`1e-4` (the 20% subset).
+> **100% of solves optimal**, one `index_hash` across every row (P13), `mu_max`
+> std 7–28 per organism with 0–0.5% zero-growth media — neither flat nor
+> mostly-infeasible. **`|A_i|` = 11–32, median 24** across the roster, confirming
+> §4.2's 15–30 estimate on real models (two organisms fall just outside).
+>
+> Three things the scale-up found and fixed (all were latent, none visible on toy
+> models): `km_defaults.yaml` had to move into the package (`src/cfs/config/`) —
+> the repo-root lookup resolved to `site-packages/../config` in the container;
+> cobra's FVA had to be pinned to `processes=1` (its default worker pool turned a
+> 1-second exchange-FVA into a >30-minute one); and **the elastic-net QP moved
+> from HiGHS to Clarabel** (§5.4 note).
+>
 > **Not yet:** §4.6 active-learning reserve (needs Phase 5); `config/sampling.yaml`
-> (defaults live on `SamplingConfig`); a Nextflow `GENERATE_LABELS` process. Two
-> things to check before bulk generation — the roster-wide `cfs degeneracy` re-run
-> (§5.4 caveat) and that `A_i` selection is stable across cobra-default vs. HiGHS
-> solvers on a real CarveMe model.
+> (defaults live on `SamplingConfig`).
 
 ### 4.1 Per-organism designs, not shared media
 
@@ -366,6 +388,38 @@ so there is one regularisation parameter, not two.
 Caveat (P15-adjacent): this is a single-model read. Re-run `cfs degeneracy` on
 the full roster before generating the bulk label set; the decision holds unless
 the roster-wide survey is dramatically cleaner.
+
+##### Roster-wide confirmation (2026-07-26) — the caveat is closed
+
+`--stage qc` over all 21 CarveMe models (50 media × α ∈ {1.0, 0.7} each,
+371 400 exchange-FVA observations):
+
+- **68.9% of observations degenerate** roster-wide; `recommend_d4` → `"genuine"`.
+- Per organism the range is **59.7% – 82.8%** — not one outlier, the whole roster.
+- Split by growth fraction: **88% at α = 0.7 vs 50% at α = 1.0**, exactly the §5.2
+  prediction that sub-maximal growth opens alternate optima. The K=8 grid spends
+  most of its mass at α < 1.
+- V0 also passes: **21/21 models EGC-free**. Frozen index: 444 exchanges,
+  **365 shared / 79 private**, so the Newton Jacobian is 365 × 365.
+
+Elastic net stands as D4.
+
+##### QP backend: Clarabel, not HiGHS (2026-07-26)
+
+The scheme above is unchanged; the solver behind it is. HiGHS's QP active-set
+method returned `"solve error"` / `"not set"` on **~30% of real CarveMe solves at
+the primary `eps = 1e-3`**, and at `eps = 1e-4` it stalled for minutes on media
+where growth is zero. Clarabel (sparse interior point, MIT, `pip install
+clarabel`) solved the same batch **48/48 at every `eps` level and ~6× faster**;
+`mu_max` is identical and `z` agrees with HiGHS's successful solves to its looser
+convergence (median difference exactly 0). Zero-growth solves now short-circuit
+to `v = 0` analytically — with growth fixed at 0 and the origin feasible, that is
+the exact elastic-net optimum, not an approximation.
+
+§3.4 re-verified on a real GEM after the swap (`check_v2.py` in the run dir):
+repeat solves agree to 5e-13; a 1e-6 concentration perturbation moves `z` by
+3e-8; finite-differenced `dmu_max/d(uptake bound)` matches the returned duals to
+2e-12 (`corr = -1.0000` — the dual is the negated derivative).
 
 ### 5.5 D4 and D7 are the same knob
 

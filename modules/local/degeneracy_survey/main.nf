@@ -3,9 +3,14 @@
 // per model); 20 organisms run in parallel rather than serially. Each task gets
 // one model and writes a one-row roster for it. The roster-wide D4 recommendation
 // is assembled downstream by COLLECT_D4. Heavy data image (cobra) -- container-only.
+//
+// Single-CPU on purpose: cobra's FVA is pinned to processes=1 (see
+// validate/degeneracy.py -- its default worker pool re-pickles the model per
+// worker and costs orders of magnitude more than it saves). Parallelism is the
+// per-genome fan-out, so the whole roster fits in one node's cores.
 process DEGENERACY_SURVEY {
     tag "$meta.id"
-    label 'process_high'
+    label 'process_single'
 
     container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.2"
 

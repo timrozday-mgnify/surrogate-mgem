@@ -1,0 +1,40 @@
+nextflow_pipeline {
+    name "Pipeline stub: §4.5 bulk label generation (labels stage)"
+    script "../main.nf"
+    tag "pipeline"
+
+    test("stub wires the labels stage") {
+        options "-stub"
+        when {
+            params {
+                stage  = "labels"
+                roster = "$projectDir/tests/roster.csv"
+                index  = "$projectDir/tests/roster.csv"  // any existing file; the stub ignores it
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert path("$outputDir/labels/genome_id=gA/eps=0.001/part.parquet").exists() },
+                { assert path("$outputDir/labels/gA.subspace.json").exists() },
+                { assert path("$outputDir/labels/gA.exchanges.json").exists() },
+            )
+        }
+    }
+
+    test("labels stage requires --index") {
+        options "-stub"
+        when {
+            params {
+                stage  = "labels"
+                roster = "$projectDir/tests/roster.csv"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            assert workflow.stdout.any { it.contains("needs --index") } || workflow.errorReport.contains("needs --index")
+        }
+    }
+}

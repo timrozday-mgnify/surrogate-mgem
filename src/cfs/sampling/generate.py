@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from cfs.sampling.active_subspace import active_subspace
+from cfs.sampling.active_subspace import active_subspace, write_subspaces
 from cfs.sampling.design import SamplingConfig, sample_media
 
 LOGGER = logging.getLogger("cfs.generate")
@@ -70,6 +70,9 @@ def generate_organism(model, genome_id: str, index_hash: str, outdir: Path,
     (outdir / f"{genome_id}.exchanges.json").write_text(
         json.dumps({"index_hash": index_hash, "exchanges": ex_order}, indent=2)
     )
+    # The design's own record: which metabolites were sampled vs. held rich. Needed
+    # to audit |A_i| after a bulk run and to target the §4.6 active-learning reserve.
+    write_subspaces([subspace], outdir / f"{genome_id}.subspace.json")
 
     primary = cfg.eps_levels[cfg.eps_primary_idx]
     step = max(1, round(1.0 / cfg.subset_frac))

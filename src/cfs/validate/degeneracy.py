@@ -52,8 +52,13 @@ def exchange_degeneracy(model, alpha: float = 1.0) -> pd.Series:
     mu_max = sol.objective_value or 0.0
     with model:
         biomass.bounds = (alpha * mu_max, alpha * mu_max)
+        # processes=1 is not a small tuning knob: cobra's default spawns a worker
+        # pool per FVA call, and re-pickling a CarveMe model per worker turns a
+        # 1-second survey into a >30-minute one (measured, 1740 reactions / 208
+        # exchanges). Parallelism belongs to the per-organism Nextflow fan-out,
+        # where each task holds a single CPU anyway.
         fva = flux_variability_analysis(
-            model, reaction_list=list(model.exchanges), fraction_of_optimum=1.0
+            model, reaction_list=list(model.exchanges), fraction_of_optimum=1.0, processes=1
         )
     return (fva["maximum"] - fva["minimum"]).rename("range")
 

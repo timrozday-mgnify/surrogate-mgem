@@ -12,11 +12,12 @@ concentrations ``c`` and a normalised growth rate ``alpha``:
        min ||v||_1 + (eps/2)||v||^2   s.t.  S v = 0, lb <= v <= ub, v_bio = alpha*mu_max
    The L2 term makes the primal (hence ``z``) unique and continuous in ``c``;
    ``eps`` is the smoothing scale ``tau`` (D7/§5.5). Solved as a convex QP with
-   HiGHS (already the pipeline solver) — a first-order method (OSQP) does not
-   converge tightly enough for repeatable labels (§3.4).
+   **Clarabel** (sparse interior point) — HiGHS's QP fails on ~30% of real
+   CarveMe solves (see :func:`elastic_net_fluxes`), and a first-order method
+   (OSQP) does not converge tightly enough for repeatable labels (§3.4).
 
-COBRApy + HiGHS (``highspy``), both in the ``data`` extra. No JAX. Imports are
-function-local so the module loads without the solver stack.
+COBRApy (LP stage) + Clarabel (QP stage), both in the ``data`` extra. No JAX.
+Imports are function-local so the module loads without the solver stack.
 """
 
 from __future__ import annotations
@@ -30,7 +31,11 @@ import numpy as np
 LOGGER = logging.getLogger("cfs.solve")
 
 _FLUX_EPS = 1e-6  # below this a flux is treated as zero (sparsity / z reporting)
-_DEFAULT_KM = Path(__file__).resolve().parents[3] / "config" / "km_defaults.yaml"
+_QP_TIME_LIMIT = 60.0  # seconds; a solve this slow is a degenerate outlier, not a label
+# Package data, not a repo-root path: the container installs cfs into
+# site-packages, where a "walk up to the repo root" lookup resolves to
+# /usr/local/lib/python3.11/config/ and the labels stage dies on the first solve.
+_DEFAULT_KM = Path(__file__).resolve().parents[1] / "config" / "km_defaults.yaml"
 
 
 @dataclass
@@ -106,9 +111,15 @@ def elastic_net_fluxes(model, biomass_flux: float, eps: float) -> tuple[np.ndarr
     """Min ``||v||_1 + (eps/2)||v||^2`` s.t. ``Sv=0``, bounds, biomass fixed (§5.4).
 
     Returns the full flux vector (aligned to ``model.reactions``) and a status
-    string. Solved as a convex QP with HiGHS. ``biomass_flux`` is ``alpha*mu_max``.
+    string. ``biomass_flux`` is ``alpha*mu_max``.
+
+    Solved with **Clarabel** (sparse interior point). HiGHS runs the LP stage but
+    not this: its QP active-set method returned "solve error"/"not set" on ~30% of
+    real CarveMe solves at the primary ``eps=1e-3``, and stalled for minutes as
+    ``eps`` shrank. Clarabel solved the same batch 48/48 at every ``eps`` level and
+    ~6x faster (measured on CP009913.1).
     """
-    import highspy
+    import clarabel
     import scipy.sparse as sp
     from cobra.util import create_stoichiometric_matrix
 
@@ -123,53 +134,43 @@ def elastic_net_fluxes(model, biomass_flux: float, eps: float) -> tuple[np.ndarr
     ub = np.array([r.upper_bound for r in rxns], dtype=float)
     lb[bi] = ub[bi] = biomass_flux  # fix growth
 
-    # Variables x = [v (n); t (n)] with t_i >= |v_i| (L1 epigraph).
+    # No growth (a depleted medium, or alpha=0) and the origin is feasible: the
+    # objective is >= 0 and vanishes at v=0, so that IS the optimum -- no solve
+    # needed. Corner-depleted media (§4.3) hit this on every alpha.
+    if biomass_flux == 0.0 and (lb <= 0.0).all() and (ub >= 0.0).all():
+        return np.zeros(n), "Optimal"
+
+    # Variables x = [v (n); t (n)] with t_i >= |v_i| (L1 epigraph), so the
+    # objective is (eps/2)||v||^2 + sum(t) -- linear in t, hence P is PSD, not PD.
     ident = sp.eye(n, format="csc")
+    zero_n = sp.csc_matrix((n, n))
     a = sp.vstack(
         [
-            sp.hstack([S, sp.csc_matrix((nm, n))]),   # S v = 0
-            sp.hstack([ident, -ident]),               # v - t <= 0
-            sp.hstack([-ident, -ident]),              # -v - t <= 0
-        ]
-    ).tocsc()
-    inf = highspy.kHighsInf
+            sp.hstack([S, sp.csc_matrix((nm, n))]),  # S v = 0        (zero cone)
+            sp.hstack([ident, -ident]),              # v - t <= 0     |
+            sp.hstack([-ident, -ident]),             # -v - t <= 0    | t >= |v|
+            sp.hstack([ident, zero_n]),              # v <= ub
+            sp.hstack([-ident, zero_n]),             # -v <= -lb
+        ],
+        format="csc",
+    )
+    b = np.concatenate([np.zeros(nm + 2 * n), ub, -lb])
+    p = sp.diags(np.concatenate([np.full(n, float(eps)), np.zeros(n)])).tocsc()
+    q = np.concatenate([np.zeros(n), np.ones(n)])
+    cones = [clarabel.ZeroConeT(nm), clarabel.NonnegativeConeT(4 * n)]
 
-    model_h = highspy.HighsModel()
-    lp = model_h.lp_
-    lp.num_col_ = 2 * n
-    lp.num_row_ = a.shape[0]
-    lp.col_cost_ = np.concatenate([np.zeros(n), np.ones(n)])         # L1 weight on t
-    lp.col_lower_ = np.concatenate([lb, np.zeros(n)])                # t >= 0
-    lp.col_upper_ = np.concatenate([ub, np.full(n, inf)])
-    lp.row_lower_ = np.concatenate([np.zeros(nm), np.full(2 * n, -inf)])
-    lp.row_upper_ = np.zeros(nm + 2 * n)
-    lp.a_matrix_.format_ = highspy.MatrixFormat.kColwise
-    lp.a_matrix_.num_col_ = 2 * n
-    lp.a_matrix_.num_row_ = a.shape[0]
-    lp.a_matrix_.start_ = a.indptr
-    lp.a_matrix_.index_ = a.indices
-    lp.a_matrix_.value_ = a.data
-
-    # Hessian: (eps/2)||v||^2 -> diag(eps) on the v-block only (lower-triangular CSC).
-    hess = model_h.hessian_
-    hess.dim_ = 2 * n
-    hess.format_ = highspy.HessianFormat.kTriangular
-    hess.start_ = np.concatenate([np.arange(n + 1), np.full(n, n)]).astype(np.int32)
-    hess.index_ = np.arange(n, dtype=np.int32)
-    hess.value_ = np.full(n, float(eps))
-
-    h = highspy.Highs()
-    h.setOptionValue("output_flag", False)
-    # Single-threaded + fixed seed for repeatability. The elastic-net optimum is
-    # unique (strictly convex in v), so solves agree to solver tolerance (~1e-8);
-    # not literally bitwise, which is fine for labels (§3.4).
-    h.setOptionValue("threads", 1)
-    h.setOptionValue("random_seed", 0)
-    h.passModel(model_h)
-    h.run()
-    status = h.modelStatusToString(h.getModelStatus())
-    v = np.array(h.getSolution().col_value[:n], dtype=float)
-    return v, status
+    settings = clarabel.DefaultSettings()
+    settings.verbose = False
+    # The elastic-net optimum is unique (strictly convex in v), so repeat solves
+    # agree to solver tolerance (~1e-11 measured); not literally bitwise, which is
+    # fine for labels (§3.4). The time limit is a backstop so one pathological
+    # medium cannot hold up a whole shard -- a hit lands as a non-"solved" status
+    # on the row.
+    settings.time_limit = _QP_TIME_LIMIT
+    solution = clarabel.DefaultSolver(p, q, a, b, cones, settings).solve()
+    # Clarabel says "Solved"; the label schema (and every consumer) says "optimal".
+    status = "Optimal" if str(solution.status) == "Solved" else str(solution.status)
+    return np.array(solution.x[:n], dtype=float), status
 
 
 # --------------------------------------------------------------------------- #

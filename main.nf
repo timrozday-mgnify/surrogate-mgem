@@ -3,6 +3,7 @@
 
 include { SURROGATE_TRAINING } from './workflows/surrogate_training'
 include { GROUNDTRUTH_QC     } from './workflows/groundtruth_qc'
+include { LABEL_GENERATION   } from './workflows/label_generation'
 
 workflow {
     // --- param validation (imperative, like the reference pipeline) -----------
@@ -16,19 +17,22 @@ workflow {
         Stages (--stage):
           qc     M0+M1 ground-truth QC: EGC + MEMOTE, freeze metabolite index,
                  exchange-FVA degeneracy survey (decides D4). Run this first.
+          labels §4.5 bulk ground-truth labels -> parquet, one task per organism.
+                 Needs --index <metabolite_index.json> from the qc stage.
           train  the training sweep (default).
 
         Key params (see nextflow.config for all + defaults):
-          --outdir, --num_shards, --n_communities, --n_communities_augment,
-          --active_rounds, --hidden_configs, --n_models_list, --train_sizes
+          --outdir, --index, --label_media, --num_shards, --n_communities,
+          --n_communities_augment, --active_rounds, --hidden_configs,
+          --n_models_list, --train_sizes
         """.stripIndent()
         return
     }
     if (!params.roster) {
         error "Provide --roster <roster.csv> (columns: genome_id, model_path)."
     }
-    if (!(params.stage in ['qc', 'train'])) {
-        error "Unknown --stage '${params.stage}' (expected 'qc' or 'train')."
+    if (!(params.stage in ['qc', 'labels', 'train'])) {
+        error "Unknown --stage '${params.stage}' (expected 'qc', 'labels' or 'train')."
     }
 
     ch_roster = file(params.roster, checkIfExists: true)
@@ -36,6 +40,12 @@ workflow {
     if (params.stage == 'qc') {
         GROUNDTRUTH_QC(ch_roster)
         ch_versions = GROUNDTRUTH_QC.out.versions
+    } else if (params.stage == 'labels') {
+        if (!params.index) {
+            error "Stage 'labels' needs --index <metabolite_index.json> (frozen by --stage qc)."
+        }
+        LABEL_GENERATION(ch_roster, file(params.index, checkIfExists: true))
+        ch_versions = LABEL_GENERATION.out.versions
     } else {
         if ((params.num_shards as int) < 1) {
             error "num_shards must be >= 1 (got ${params.num_shards})."
