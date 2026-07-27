@@ -197,11 +197,24 @@ def solve(model, concentrations: dict[str, float], alpha: float, eps: float,
     organism's own exchanges only), and exchange shadow prices. The model is not
     mutated (bounds are applied inside a context).
     """
+    from cobra.exceptions import OptimizationError
+
     km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
+    # The LP gets the same wall-clock guard as the QP. GLPK's simplex (cobra's
+    # default solver here) can cycle indefinitely on a near-degenerate medium:
+    # one organism in the banded 4000-media run sat at 100% CPU for 4.5 h inside
+    # `glp_simplex` on a single solve while its 20 siblings finished in ~1 h each.
+    # A typical solve is ~1 s, so anything past the limit is that pathology, and a
+    # non-optimal row is dropped downstream (P2) instead of stalling the shard.
+    # int(): optlang's GLPK interface multiplies this into glpk's int tm_lim.
+    model.solver.configuration.timeout = int(_QP_TIME_LIMIT)
     with model:
         apply_mm_bounds(model, concentrations, km_cfg)
 
-        fba = model.optimize()
+        try:
+            fba = model.optimize()
+        except OptimizationError as err:  # timeout leaves no primal to read
+            return Solution(0.0, alpha, eps, {}, {}, str(err).lower())
         mu_max = fba.objective_value or 0.0
         if fba.status != "optimal":
             return Solution(0.0, alpha, eps, {}, {}, fba.status)
