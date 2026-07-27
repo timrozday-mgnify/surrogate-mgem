@@ -42,7 +42,11 @@
 > predicts the gate), `run_labels.sh` + `one_organism.sh` (21-way local fan-out —
 > **not** nextflow: the `0.1.2` data image predates the band code and would
 > silently regenerate the old design). `20hm/` still holds `check_v2.py` (the §3.4
-> gate), `check_labels.py` and `local.config` (the external `-c` site config).
+> gate), `check_labels.py`, `local.config` (the external `-c` site config) and —
+> load-bearing — `results/qc/metabolite_index.json`, the frozen index every run
+> passes as `--index`. Its **label shards were deleted** (disk, 2026-07-27); so
+> were the `value/` and `value_v3/softmin_*` weights, whose `diagnostics.json`
+> (the measured record cited below) were kept.
 >
 > Generating a set costs ~30 MB/organism and ~1 h/organism at 10-way concurrency;
 > it dies mid-shard on a full disk, and the resulting partial shard must be
