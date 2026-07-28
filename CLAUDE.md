@@ -138,11 +138,41 @@
 > is by medium. Loop: train → topup → generate round → retrain, ~20% of the base
 > budget per round, stop when the worst cell stops moving.
 >
-> **Next, in order.** (1) Regenerate the roster with probe-anchored bands and run
-> the top-up loop on it. (2) R² from
-> **architecture and D10 scale**, not loss weights: `w_grad` only trades the heads
-> (1 → 0.63 cosine / 0.72 R², 10 → 0.66 / 0.62) and neither end reaches the
-> "R² ≥ 0.9" balance rule. Checkpoints: `20hm_bands/value_b1/` (current),
+> ### The gate is **not** a sampling problem — measured, 2026-07-28
+>
+> The full roster ran on probe-anchored bands (`20hm_probe/`: 21/21, 63/63 shards,
+> 940 800 rows, 100% optimal, one `index_hash`; band sources **377 probe / 16
+> roster-median / 3 previous / 100 default**). Coverage matched or beat the
+> two-pass set — roster median metabolite 174.5 vs 173.5 media, `A_ge50` 17 both,
+> `top_share` 0.597 vs 0.606, `EX_mg2_e` 122 vs 110 — **with no previous run**.
+> Then two top-up rounds:
+>
+> | run | worst cosine | mean | R² |
+> | --- | --- | --- | --- |
+> | `value_b1` two-pass bands (baseline) | 0.733 | 0.800 | 0.538 |
+> | `value_p1` probe bands | 0.695 | 0.783 | 0.548 |
+> | `value_p2` + round 1 (20% budget, `1-cos` over ~35 mets) | 0.696 | 0.780 | 0.517 |
+> | `value_p3` + round 2 (40% budget, **80% on the 5 worst cells**) | **0.648** | 0.771 | 0.524 |
+>
+> **More media where the model is worst makes it worse.** On the worst organism
+> `EX_mg2_e` went 30 → 89 held-out rows and its cosine *fell* 0.140 → 0.082; every
+> targeted cell fell (`asp__L` 0.195 → 0.105, `malthp` 0.386 → 0.297, `so4` 0.436 →
+> 0.352) and so did the roster mean. So the Spearman-0.72 coverage↔cosine relation
+> is **correlational, not causal**: cells with many rows are the easy dominant
+> metabolites, and buying rows for the ions spends head capacity on rows this
+> architecture cannot fit. Do not re-run this experiment expecting a different
+> answer, and do not read `check_coverage.py` numbers as a gate predictor.
+>
+> **Next.** Architecture and D10 scale, item (2) below — the ions are the
+> remaining error on 21/21 organisms and neither band placement nor label volume
+> touches them. The §4.7/§4.6 machinery stays: it removed the two-pass dependency
+> and it is how a *new* genome gets labelled at all. (1) was tried and is closed.
+>
+> Gate and R² both have to come from **architecture and D10 scale**, not loss
+> weights: `w_grad` only trades the heads (1 → 0.63 cosine / 0.72 R², 10 → 0.66 /
+> 0.62) and neither end reaches the "R² ≥ 0.9" balance rule. Checkpoints:
+> `20hm_bands/value_b1/` (best worst-cosine to date, 0.733),
+> `20hm_probe/value_p{1,2,3}/` (probe bands + the two top-up rounds),
 > `20hm/value_v2/{u_w1,u_w10}/` (pre-band baseline).
 
 ## Legacy package (surrogate_mgem)
