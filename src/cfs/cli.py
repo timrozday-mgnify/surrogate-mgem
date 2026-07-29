@@ -90,6 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
                     "measurement, not a usable head.")
     tv.add_argument("--emb-dim", type=int, default=8,
                     help="Metabolite embedding width (deepset only).")
+    tv.add_argument("--phi-hidden", type=int, default=None,
+                    help="deepset only: `phi` trunk width. Default derives it from "
+                         "--width (width // 8), which was a laptop-runtime choice.")
+    tv.add_argument("--k-code", type=int, default=None,
+                    help="deepset only: pooled code width (default 16).")
     tv.add_argument("--width", type=int, default=128)
     tv.add_argument("--depth", type=int, default=3)
     tv.add_argument("--epochs", type=int, default=400)
@@ -122,7 +127,8 @@ def main(argv: list[str] | None = None) -> int:
         diagnostics = run(args.labels, args.index, args.out, eps=args.eps, arch=args.arch,
                           width=args.width, depth=args.depth, epochs=args.epochs,
                           batch=args.batch, lr=args.lr, w_grad=args.w_grad,
-                          emb_dim=args.emb_dim, seed=args.seed)
+                          emb_dim=args.emb_dim, phi_hidden=args.phi_hidden,
+                          k_code=args.k_code, seed=args.seed)
         print(json.dumps(diagnostics, indent=2))
         return 0 if diagnostics["passed"] else 1
 

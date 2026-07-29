@@ -4,6 +4,7 @@
 include { SURROGATE_TRAINING } from './workflows/surrogate_training'
 include { GROUNDTRUTH_QC     } from './workflows/groundtruth_qc'
 include { LABEL_GENERATION   } from './workflows/label_generation'
+include { VALUE_SWEEP        } from './workflows/value_sweep'
 
 workflow {
     // --- param validation (imperative, like the reference pipeline) -----------
@@ -11,7 +12,7 @@ workflow {
         log.info """
         surrogate-mgem
 
-        Required:
+        Required (every stage but 'sweep'):
           --roster <file>        Roster CSV with genome_id, model_path columns.
 
         Stages (--stage):
@@ -19,25 +20,39 @@ workflow {
                  exchange-FVA degeneracy survey (decides D4). Run this first.
           labels §4.5 bulk ground-truth labels -> parquet, one task per organism.
                  Needs --index <metabolite_index.json> from the qc stage.
-          train  the training sweep (default).
+          sweep  M3b/§7.4 Head A sweep: one training cell per row of
+                 --sweep <sweep.csv>. Needs --index; needs no --roster.
+                 See examples/value_sweep/.
+          train  the legacy MICOM training sweep (default).
 
         Key params (see nextflow.config for all + defaults):
-          --outdir, --index, --label_media, --num_shards, --n_communities,
-          --n_communities_augment, --active_rounds, --hidden_configs,
-          --n_models_list, --train_sizes
+          --outdir, --index, --label_media, --sweep, --xla_devices, --num_shards,
+          --n_communities, --n_communities_augment, --active_rounds,
+          --hidden_configs, --n_models_list, --train_sizes
         """.stripIndent()
         return
     }
-    if (!params.roster) {
+    if (!(params.stage in ['qc', 'labels', 'train', 'sweep'])) {
+        error "Unknown --stage '${params.stage}' (expected 'qc', 'labels', 'sweep' or 'train')."
+    }
+    // The sweep reads label shards, not GEMs -- it is the one stage with no roster.
+    if (params.stage != 'sweep' && !params.roster) {
         error "Provide --roster <roster.csv> (columns: genome_id, model_path)."
     }
-    if (!(params.stage in ['qc', 'labels', 'train'])) {
-        error "Unknown --stage '${params.stage}' (expected 'qc', 'labels' or 'train')."
-    }
 
-    ch_roster = file(params.roster, checkIfExists: true)
+    ch_roster = params.roster ? file(params.roster, checkIfExists: true) : null
 
-    if (params.stage == 'qc') {
+    if (params.stage == 'sweep') {
+        if (!params.sweep) {
+            error "Stage 'sweep' needs --sweep <sweep.csv> (columns: cell_id, arch, labels, args)."
+        }
+        if (!params.index) {
+            error "Stage 'sweep' needs --index <metabolite_index.json> (frozen by --stage qc)."
+        }
+        VALUE_SWEEP(file(params.sweep, checkIfExists: true),
+                    file(params.index, checkIfExists: true))
+        ch_versions = VALUE_SWEEP.out.versions
+    } else if (params.stage == 'qc') {
         GROUNDTRUTH_QC(ch_roster)
         ch_versions = GROUNDTRUTH_QC.out.versions
     } else if (params.stage == 'labels') {

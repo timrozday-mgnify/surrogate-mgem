@@ -58,11 +58,11 @@ _ARCH = {"icnn": picnn, "deepset": deepset, "deepset-private": deepset, "mlp": m
 
 
 def _build(arch: str, key, n_organisms: int, n_in: int, mask, width: int, depth: int,
-           emb_dim: int):
+           emb_dim: int, phi_hidden: int | None = None, k_code: int | None = None):
     mod = _ARCH[arch]
     if mod is deepset:
         return mod.stack_heads(key, n_organisms, n_in, mask, width, depth, emb_dim,
-                               shared=arch == "deepset")
+                               shared=arch == "deepset", phi_hidden=phi_hidden, k_code=k_code)
     return mod.stack_heads(key, n_organisms, n_in, mask, width, depth)
 
 
@@ -160,7 +160,8 @@ def _shard_organisms(n_organisms: int, tree):
 
 def train_value_heads(ds: ValueDataset, *, arch: str = "icnn", width: int = 128, depth: int = 3,
                       epochs: int = 400, batch: int = 512, lr: float = 3e-3,
-                      w_grad: float = 1.0, emb_dim: int = 8, seed: int = 0) -> eqx.Module:
+                      w_grad: float = 1.0, emb_dim: int = 8, phi_hidden: int | None = None,
+                      k_code: int | None = None, seed: int = 0) -> eqx.Module:
     """Fit the stacked Head A. Labels are scaled by ``ds.mu_scale`` (§7.1)."""
     bvg = _ARCH[arch].batched_value_and_grad
     key = jax.random.PRNGKey(seed)
@@ -177,7 +178,8 @@ def train_value_heads(ds: ValueDataset, *, arch: str = "icnn", width: int = 128,
     gfloor = jnp.asarray([float(np.median(r[o])) if o.any() else 1.0
                           for r, o in zip(raw, ok, strict=True)])
 
-    heads = _build(arch, key, len(ds.genome_ids), x.shape[-1], ds.mask, width, depth, emb_dim)
+    heads = _build(arch, key, len(ds.genome_ids), x.shape[-1], ds.mask, width, depth, emb_dim,
+                   phi_hidden=phi_hidden, k_code=k_code)
     n = x.shape[1]
     steps_per_epoch = max(1, n // batch)
     optimiser = optax.adam(optax.cosine_decay_schedule(lr, epochs * steps_per_epoch))
@@ -377,22 +379,31 @@ def load(outdir: Path, width: int = 128, depth: int = 3) -> tuple[eqx.Module, di
     arch = meta.get("arch", {})
     like = _build(arch.get("arch", "icnn"), jax.random.PRNGKey(0), len(meta["genome_ids"]),
                   len(meta["exchanges"]), np.array(meta["mask"], dtype=bool),
-                  arch.get("width", width), arch.get("depth", depth), arch.get("emb_dim", 8))
+                  arch.get("width", width), arch.get("depth", depth), arch.get("emb_dim", 8),
+                  phi_hidden=arch.get("phi_hidden"), k_code=arch.get("k_code"))
     return eqx.tree_deserialise_leaves(outdir / "value_heads.eqx", like), meta
 
 
 def run(labels_dir: Path, index_path: Path, outdir: Path, *, eps: float = 1e-3,
         arch: str = "icnn", width: int = 128, depth: int = 3, epochs: int = 400,
         batch: int = 512, lr: float = 3e-3, w_grad: float = 1.0, emb_dim: int = 8,
-        seed: int = 0) -> dict:
+        phi_hidden: int | None = None, k_code: int | None = None, seed: int = 0) -> dict:
     """Load labels, train, evaluate, checkpoint. Returns the diagnostics."""
     ds = load_value_dataset(labels_dir, index_path, eps=eps, seed=seed)
     heads = train_value_heads(ds, arch=arch, width=width, depth=depth, epochs=epochs,
-                              batch=batch, lr=lr, w_grad=w_grad, emb_dim=emb_dim, seed=seed)
+                              batch=batch, lr=lr, w_grad=w_grad, emb_dim=emb_dim,
+                              phi_hidden=phi_hidden, k_code=k_code, seed=seed)
     diagnostics = evaluate(heads, ds, seed=seed, arch=arch)
     meta = {"arch": arch, "width": width, "depth": depth, "epochs": epochs, "lr": lr,
             "w_grad": w_grad, "eps": eps, "seed": seed}
     if arch.startswith("deepset"):
+        # Only when set: an absent key is what makes `load` fall back to the
+        # width-derived default, so a checkpoint written before these flags existed
+        # still reconstructs.
         meta["emb_dim"] = emb_dim
+        if phi_hidden is not None:
+            meta["phi_hidden"] = phi_hidden
+        if k_code is not None:
+            meta["k_code"] = k_code
     save(heads, ds, outdir, meta, diagnostics)
     return diagnostics

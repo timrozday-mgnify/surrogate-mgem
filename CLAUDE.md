@@ -40,8 +40,11 @@
 > ≥50 media 15 → 17, the top metabolite's share 0.58 → 0.55. The run dir holds
 > `make_scales.py` (labels → `scales.json`), `check_coverage.py` (the number that
 > predicts the gate), `run_labels.sh` + `one_organism.sh` (21-way local fan-out —
-> **not** nextflow: the `0.1.2` data image predates the band code and would
-> silently regenerate the old design). `20hm/` still holds `check_v2.py` (the §3.4
+> **not** nextflow: the `0.1.2` data image predated the band code and would have
+> silently regenerated the old design. Fixed at `0.1.3` — the image rebuilds from
+> `src/`, and `GENERATE_LABELS` now passes the band flags via
+> `params.label_{probe,scales,round,focus_weights}`, so `--stage labels` reproduces
+> the banded design). `20hm/` still holds `check_v2.py` (the §3.4
 > gate), `check_labels.py`, `local.config` (the external `-c` site config) and —
 > load-bearing — `results/qc/metabolite_index.json`, the frozen index every run
 > passes as `--index`. Its **label shards were deleted** (disk, 2026-07-27); so
@@ -257,6 +260,18 @@
 > 5× rows and 8× width, localisation is confirmed and the answer is a
 > per-metabolite architecture, not scale.
 >
+> **The pipeline for it is built and end-to-end verified** (`--stage sweep`,
+> `workflows/value_sweep.nf`, `examples/value_sweep/`). One task per row of a
+> samplesheet (`cell_id,arch,labels,args`, where `args` is the cell's literal flag
+> string and `arch=rf` routes to `baseline-rf`), collected into
+> `sweep_leaderboard.csv`. `examples/value_sweep/sweep_full.csv` is the four arms
+> above as 54 cells; `make_sweep.py --demo` self-checks the generator. Two traps
+> baked into the modules: `cfs train-value` **exits 1 whenever the gate is unmet**,
+> so `TRAIN_VALUE` tolerates that and gates on `diagnostics.json` existing instead
+> (read `passed`, not the exit status); and `params.xla_devices` must **divide** the
+> organism count. Arm 3 needed `--phi-hidden`/`--k-code` on the CLI — they were
+> hardcoded at `width // 8` and `16`, and the defaults still are.
+>
 > Sharding note for the cluster: the organism axis splits cleanly via
 > `train._shard_organisms` (1.8× on CPU with
 > `XLA_FLAGS=--xla_force_host_platform_device_count=N`, N must divide the organism
@@ -302,7 +317,7 @@ House style mirrors `../subspecies-phylogeny`: DSL2, meta maps, `conf/base.confi
 labels + retry, `conf/modules.config` for `ext.args`/publishDir, nf-test stub
 tests, per-process container ternary.
 
-`main.nf` has three stages via `--stage` (default `train`):
+`main.nf` has four stages via `--stage` (default `train`):
 
 - **`qc`** — M0+M1 ground-truth QC (`workflows/groundtruth_qc.nf`, the v2 pivot).
   `QC_MODELS` (whole roster: EGC gate + MEMOTE, freeze
@@ -317,7 +332,19 @@ tests, per-process container ternary.
   `${outdir}/labels/genome_id=<id>/eps=<e>/part.parquet` plus `<id>.subspace.json`
   / `<id>.exchanges.json` sidecars. Needs `--index` (the `metabolite_index.json`
   the `qc` stage freezes) and `--label_media` (4000 here; the D10 scale is 20000).
-  CLI: `cfs generate`. Stub: `tests/labels.nf.test`.
+  CLI: `cfs generate`. Stub: `tests/labels.nf.test`. `--label_probe` (§4.7 demand
+  probe, on by default), `--label_scales`, `--label_round` and
+  `--label_focus_weights` (§4.6) are all wired; the last two are staged files, so
+  `GENERATE_LABELS` builds those two flags itself rather than from `ext.args`.
+- **`sweep`** — M3b/§7.4 Head A sweep (`workflows/value_sweep.nf`). One task per row
+  of `--sweep <sweep.csv>` (`cell_id,arch,labels,args`): `TRAIN_VALUE`
+  (`cfs train-value`) or, for `arch=rf`, `BASELINE_RF` (`cfs baseline-rf`) →
+  `COLLECT_VALUE_METRICS` → `${outdir}/sweep_leaderboard.csv`. Needs `--index`;
+  needs **no `--roster`** — the only stage that reads labels rather than GEMs, which
+  is why the roster check in `main.nf` is stage-aware. The per-cell knobs live in the
+  samplesheet, not in params, so there is no param per sweep axis; `params.sweep` and
+  `params.xla_devices` are the only two. Worked example plus generator:
+  `examples/value_sweep/`. Stub: `tests/sweep.nf.test`.
 - **`train`** — the legacy sweep below.
 
 DAG (`workflows/surrogate_training.nf`):
@@ -336,6 +363,9 @@ GENERATE_DATA (per shard) ─┐
 | Module | Image | Label |
 | --- | --- | --- |
 | `GENERATE_LABELS` | `surrogate-mgem-data` | process_low |
+| `TRAIN_VALUE` | `surrogate-mgem-train` | process_high |
+| `BASELINE_RF` | `surrogate-mgem-train` | process_medium |
+| `COLLECT_VALUE_METRICS` | `surrogate-mgem-train` | process_single |
 | `GENERATE_DATA` | `surrogate-mgem-data` | process_high |
 | `MERGE_DATA` | `surrogate-mgem-train` | process_low |
 | `ACTIVE_LEARN` | `surrogate-mgem-data` | process_medium |
@@ -354,8 +384,11 @@ GENERATE_DATA (per shard) ─┐
 - **Containers only** (no bioconda package) — the modules are container-only with
   no `environment.yml`; the `conda` profile won't cover them. Two images, built
   out-of-repo via `docker/{train,data}.Dockerfile`, referenced by GHCR convention
-  (`ghcr.io/timrozday-mgnify/surrogate-mgem-{train,data}:0.1.2`). Bump the tag in
-  all five modules together. No `-sif` ORAS artifacts are published, so the
+  (`ghcr.io/timrozday-mgnify/surrogate-mgem-{train,data}:0.1.3`). Bump the tag in
+  every module together. The **train image carries `.[jax]`** (M3 Head A) as well as
+  torch — including `pyyaml`, which `load_value_dataset` needs for
+  `km_defaults.yaml` and which was only in the `data` extra until the sweep hit it.
+  No `-sif` ORAS artifacts are published, so the
   modules name the Docker image plainly (no nf-core `oras://` ternary) and
   singularity/apptainer converts on first pull.
 - **Media sampling is the whole ballgame — use `titrate`.** A random nutrient

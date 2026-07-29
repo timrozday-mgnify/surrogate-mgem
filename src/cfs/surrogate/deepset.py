@@ -131,11 +131,15 @@ class DeepSetHead(eqx.Module):
 
 
 def stack_heads(key, n_organisms: int, n_in: int, mask, width: int = 128, depth: int = 3,
-                emb_dim: int = 8, shared: bool = True) -> DeepSetHead:
+                emb_dim: int = 8, shared: bool = True, phi_hidden: int | None = None,
+                k_code: int | None = None) -> DeepSetHead:
     """Stack ``n_organisms`` heads. Only ``rho``/``mask`` get the organism axis.
 
-    ``phi``'s internals are derived from ``width`` rather than given their own
-    flags: hidden ``width // 8``, code width 16, context ``2 * emb_dim``.
+    ``phi``'s internals default to being derived from ``width`` — hidden
+    ``width // 8``, code width 16, context ``2 * emb_dim`` — and ``phi_hidden`` /
+    ``k_code`` override those. The derivation was a laptop-runtime choice, not a
+    measured optimum (see below); the M3b sweep varies them directly, which is why
+    they are flags and not just ``width``.
 
     ``phi`` is deliberately much narrower than ``rho``. It runs **once per
     metabolite**, so the trunk costs ``|M| * hidden^2`` per row against the ICNN's
@@ -147,7 +151,8 @@ def stack_heads(key, n_organisms: int, n_in: int, mask, width: int = 128, depth:
     metabolite.
     """
     kt, kr = jax.random.split(key)
-    k_code, hidden = 16, max(8, width // 8)
+    k_code = k_code or 16
+    hidden = phi_hidden or max(8, width // 8)
     rho = eqx.filter_vmap(
         lambda k_: ValueHead(k_, k_code, jnp.ones(k_code, dtype=bool), width, depth)
     )(jax.random.split(kr, n_organisms))
@@ -158,9 +163,11 @@ def stack_heads(key, n_organisms: int, n_in: int, mask, width: int = 128, depth:
 
 
 def stack_heads_private(key, n_organisms: int, n_in: int, mask, width: int = 128,
-                        depth: int = 3, emb_dim: int = 8) -> DeepSetHead:
+                        depth: int = 3, emb_dim: int = 8, phi_hidden: int | None = None,
+                        k_code: int | None = None) -> DeepSetHead:
     """The D1-preserving ablation: same architecture, nothing shared."""
-    return stack_heads(key, n_organisms, n_in, mask, width, depth, emb_dim, shared=False)
+    return stack_heads(key, n_organisms, n_in, mask, width, depth, emb_dim, shared=False,
+                       phi_hidden=phi_hidden, k_code=k_code)
 
 
 def _slice(tree, i: int):

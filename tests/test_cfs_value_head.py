@@ -105,6 +105,28 @@ def test_untrained_head_is_concave_monotone_and_masked():
     assert np.allclose(batched_value(heads, x0)[0], batched_value(heads, x1)[0])
 
 
+def test_deepset_phi_knobs_override_the_width_derivation():
+    """`--phi-hidden` / `--k-code` are the M3b sweep's arm-3 axes.
+
+    Default must stay exactly the old derivation (hidden ``width // 8``, code 16), or
+    the trial's deepset numbers stop being reproducible.
+    """
+    from cfs.surrogate.deepset import batched_value as ds_value
+    from cfs.surrogate.deepset import stack_heads as ds_stack
+
+    mask = np.ones((2, M), dtype=bool)
+    default = ds_stack(jax.random.PRNGKey(0), 2, M, mask, width=64, depth=2)
+    assert default.trunk.b[0].shape == (64 // 8,)
+    assert default.trunk.ob.shape == (16,)
+
+    wide = ds_stack(jax.random.PRNGKey(0), 2, M, mask, width=64, depth=2,
+                    phi_hidden=32, k_code=48)
+    assert wide.trunk.b[0].shape == (32,)
+    assert wide.trunk.ob.shape == (48,)
+    # `rho` reads the pooled code, so k_code must have moved its input width too.
+    assert ds_value(wide, np.zeros((2, 3, M), np.float32)).shape == (2, 3)
+
+
 def test_organism_arrays_signs_and_scatter(tmp_path):
     """The loader's saturation transform, dual sign, and zero-growth masking."""
     import json

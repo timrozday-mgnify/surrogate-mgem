@@ -36,6 +36,7 @@ jax = [
     "equinox>=0.11",
     "optax>=0.2",
     "pyarrow>=14",  # the label shards the value head trains on
+    "pyyaml>=6.0",  # load_value_dataset reads km_defaults.yaml to rebuild u = c/(Km+c)
 ]
 dev = [
     "pytest>=7.4",
