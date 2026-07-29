@@ -13,6 +13,10 @@ import numpy as np
 import pytest
 
 pytest.importorskip("sklearn")
+# The forest itself is sklearn-only, but `baseline.py` imports `train.score` so both
+# models are scored by identical code on identical rows — that is the whole point of
+# the baseline, and it makes the jax extra a hard requirement here too.
+pytest.importorskip("equinox")
 
 from cfs.surrogate.baseline import _u_space_gradients  # noqa: E402
 
