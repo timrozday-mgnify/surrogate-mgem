@@ -10,10 +10,12 @@ process GENERATE_LABELS {
     tag "$meta.id"
     label 'process_low'
 
-    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.2"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.3"
 
     input:
-    tuple val(meta), path(model), path(index)
+    // `scales` and `focus` are optional -- pass [] to omit. Both are staged files,
+    // so the flags are built below rather than in conf/modules.config's ext.args.
+    tuple val(meta), path(model), path(index), path(scales), path(focus)
 
     output:
     // Written straight into the task dir, not a subdir: publishDir keeps each
@@ -27,9 +29,10 @@ process GENERATE_LABELS {
 
     script:
     def args = task.ext.args ?: ''
+    def opt = (scales ? " --scales ${scales}" : '') + (focus ? " --focus-weights ${focus}" : '')
     """
     printf 'genome_id,model_path\\n${meta.id},${model}\\n' > roster.csv
-    cfs generate --roster roster.csv --index ${index} --outdir . $args
+    cfs generate --roster roster.csv --index ${index} --outdir . $args${opt}
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

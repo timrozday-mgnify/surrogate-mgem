@@ -55,6 +55,7 @@ class Solution:
 # Michaelis-Menten uptake bounds (§3.3)
 # --------------------------------------------------------------------------- #
 
+
 def mm_lower_bound(vmax: float, c: float, km: float) -> float:
     """Uptake lower bound from concentration (negative = uptake). ``c=0 -> 0``."""
     if c <= 0.0:
@@ -107,6 +108,7 @@ def apply_mm_bounds(model, concentrations: dict[str, float], km_cfg: dict) -> No
 # Elastic-net QP for the exchange fluxes (§5.4)
 # --------------------------------------------------------------------------- #
 
+
 def elastic_net_fluxes(model, biomass_flux: float, eps: float) -> tuple[np.ndarray, str]:
     """Min ``||v||_1 + (eps/2)||v||^2`` s.t. ``Sv=0``, bounds, biomass fixed (§5.4).
 
@@ -147,10 +149,10 @@ def elastic_net_fluxes(model, biomass_flux: float, eps: float) -> tuple[np.ndarr
     a = sp.vstack(
         [
             sp.hstack([S, sp.csc_matrix((nm, n))]),  # S v = 0        (zero cone)
-            sp.hstack([ident, -ident]),              # v - t <= 0     |
-            sp.hstack([-ident, -ident]),             # -v - t <= 0    | t >= |v|
-            sp.hstack([ident, zero_n]),              # v <= ub
-            sp.hstack([-ident, zero_n]),             # -v <= -lb
+            sp.hstack([ident, -ident]),  # v - t <= 0     |
+            sp.hstack([-ident, -ident]),  # -v - t <= 0    | t >= |v|
+            sp.hstack([ident, zero_n]),  # v <= ub
+            sp.hstack([-ident, zero_n]),  # -v <= -lb
         ],
         format="csc",
     )
@@ -177,6 +179,7 @@ def elastic_net_fluxes(model, biomass_flux: float, eps: float) -> tuple[np.ndarr
 # The solve interface (§3.2)
 # --------------------------------------------------------------------------- #
 
+
 def _biomass_reaction(model):
     """The biomass/objective reaction (CarveMe id starts with Growth/BIOMASS)."""
     obj = [r for r in model.reactions if r.objective_coefficient != 0]
@@ -189,8 +192,9 @@ def _biomass_reaction(model):
     raise ValueError(f"{model.id}: cannot identify biomass reaction")
 
 
-def solve(model, concentrations: dict[str, float], alpha: float, eps: float,
-          km_cfg: dict | None = None) -> Solution:
+def solve(
+    model, concentrations: dict[str, float], alpha: float, eps: float, km_cfg: dict | None = None
+) -> Solution:
     """Ground-truth solve for one (medium, alpha, eps) (plan §3.2).
 
     Returns :class:`Solution` with ``mu_max``, exchange fluxes ``z`` (this
@@ -223,8 +227,7 @@ def solve(model, concentrations: dict[str, float], alpha: float, eps: float,
         # `reduced_costs` carry a convention scaling and do not match finite
         # differences. Each exchange has exactly one metabolite.
         shadow = {
-            ex.id: float(fba.shadow_prices[next(iter(ex.metabolites)).id])
-            for ex in model.exchanges
+            ex.id: float(fba.shadow_prices[next(iter(ex.metabolites)).id]) for ex in model.exchanges
         }
 
         v, status = elastic_net_fluxes(model, alpha * mu_max, eps)
@@ -233,6 +236,11 @@ def solve(model, concentrations: dict[str, float], alpha: float, eps: float,
     idx = {r.id: i for i, r in enumerate(model.reactions)}
     z = {ex: float(v[idx[ex]]) for ex in ex_ids if abs(v[idx[ex]]) > _FLUX_EPS}
     return Solution(
-        mu_max=float(mu_max), alpha=alpha, eps=eps, z=z,
-        shadow_prices=shadow, status=status.lower(), fluxes=v,
+        mu_max=float(mu_max),
+        alpha=alpha,
+        eps=eps,
+        z=z,
+        shadow_prices=shadow,
+        status=status.lower(),
+        fluxes=v,
     )

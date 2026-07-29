@@ -46,9 +46,10 @@ def test_sharded_training_survives_evaluate(tmp_path):
     script = tmp_path / "shard_check.py"
     script.write_text(_SCRIPT.format(tests=str(__import__("pathlib").Path(__file__).parent)))
     proc = subprocess.run(
-        [sys.executable, str(script)], capture_output=True, text=True,
-        env={**__import__("os").environ,
-             "XLA_FLAGS": "--xla_force_host_platform_device_count=3"},
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        env={**__import__("os").environ, "XLA_FLAGS": "--xla_force_host_platform_device_count=3"},
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "OK" in proc.stdout, proc.stdout + proc.stderr

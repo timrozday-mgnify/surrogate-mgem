@@ -49,11 +49,10 @@ def test_sample_media_shape_and_below_km_fraction():
     conc = [m["EX_a_e"] for m in media]
     assert sum(c == 0.0 for c in conc) == 1  # exactly one all-but-one-depleted corner
     km = 0.01
-    n_bulk = cfg.n_media - 1
     # Without `scales` the focus stratum has no anchor to aim at, so it spans
     # [-1.5, 0.5] decades around Km rather than the full [-4, 0) below-Km band.
     assert sum(0.0 < c < km for c in conc) > 0
-    assert max(conc) <= km * 10.0 ** cfg.log10_hi + 1e-9  # capped at the rich level
+    assert max(conc) <= km * 10.0**cfg.log10_hi + 1e-9  # capped at the rich level
 
 
 def test_per_metabolite_bands_flatten_which_metabolite_limits():
@@ -155,8 +154,12 @@ def test_band_scales_follows_the_stated_fallback_chain():
         exchanges=["EX_a_e", "EX_b_e", "EX_c_e", "EX_d_e"],
     )
     assert scales == {"EX_a_e": 0.5, "EX_b_e": 2.0, "EX_c_e": 4.0, "EX_d_e": 1.0}
-    assert source == {"EX_a_e": "probe", "EX_b_e": "previous",
-                      "EX_c_e": "roster_median", "EX_d_e": "default"}
+    assert source == {
+        "EX_a_e": "probe",
+        "EX_b_e": "previous",
+        "EX_c_e": "roster_median",
+        "EX_d_e": "default",
+    }
 
 
 def test_generate_organism_writes_readable_shards(tmp_path):
@@ -192,8 +195,9 @@ def test_topup_round_appends_a_shard_and_both_rounds_load(tmp_path):
     from cfs.sampling.generate import generate_organism
 
     model = _toy_two_uptakes()
-    cfg = SamplingConfig(n_media=4, alphas=(1.0,), eps_levels=(1e-3,), eps_primary_idx=0,
-                         probe=False, seed=0)
+    cfg = SamplingConfig(
+        n_media=4, alphas=(1.0,), eps_levels=(1e-3,), eps_primary_idx=0, probe=False, seed=0
+    )
     base = generate_organism(model, "toy2", "deadbeef", tmp_path, cfg)
     topup = generate_organism(model, "toy2", "deadbeef", tmp_path, cfg, round_idx=1)
 

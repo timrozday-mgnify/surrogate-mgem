@@ -35,7 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
     fi = sub.add_parser("freeze-index", help="M0: derive + freeze the metabolite index.")
     fi.add_argument("--roster", type=Path, required=True, help="CSV: genome_id, model_path.")
     fi.add_argument(
-        "--out", type=Path, default=Path("config/metabolite_index.json"),
+        "--out",
+        type=Path,
+        default=Path("config/metabolite_index.json"),
         help="Index JSON path (default config/metabolite_index.json).",
     )
 
@@ -56,40 +58,81 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--index", type=Path, required=True, help="Frozen metabolite_index.json.")
     gen.add_argument("--outdir", type=Path, required=True, help="Parquet shard root.")
     gen.add_argument("--n-media", type=int, help="Override media per organism (default 20000).")
-    gen.add_argument("--scales", type=Path, help="JSON {genome_id: {exchange: scale}} from "
-                     "design.limiting_scales — fallback bands for the metabolites the LP "
-                     "demand probe finds no limiting regime for (§4.7).")
-    gen.add_argument("--no-probe", action="store_true", help="Skip the §4.7 demand probe; "
-                     "band placement then falls back to --scales, roster median, 1.0.")
-    gen.add_argument("--focus-weights", type=Path, help="JSON {genome_id: {exchange: weight}} "
-                     "from `cfs topup` — skews the focus budget toward the metabolites the "
-                     "trained head gets measurably wrong (§4.6).")
-    gen.add_argument("--round", type=int, default=0, dest="round_idx",
-                     help="Top-up round index; >0 writes part.round<n>.parquet alongside the "
-                     "base shards instead of overwriting them.")
+    gen.add_argument(
+        "--scales",
+        type=Path,
+        help="JSON {genome_id: {exchange: scale}} from "
+        "design.limiting_scales — fallback bands for the metabolites the LP "
+        "demand probe finds no limiting regime for (§4.7).",
+    )
+    gen.add_argument(
+        "--no-probe",
+        action="store_true",
+        help="Skip the §4.7 demand probe; "
+        "band placement then falls back to --scales, roster median, 1.0.",
+    )
+    gen.add_argument(
+        "--focus-weights",
+        type=Path,
+        help="JSON {genome_id: {exchange: weight}} "
+        "from `cfs topup` — skews the focus budget toward the metabolites the "
+        "trained head gets measurably wrong (§4.6).",
+    )
+    gen.add_argument(
+        "--round",
+        type=int,
+        default=0,
+        dest="round_idx",
+        help="Top-up round index; >0 writes part.round<n>.parquet alongside the "
+        "base shards instead of overwriting them.",
+    )
     gen.add_argument("--seed", type=int, default=0)
 
-    tu = sub.add_parser("topup", help="§4.6: held-out diagnostics -> focus weights for the "
-                        "next generate round.")
-    tu.add_argument("--diagnostics", type=Path, required=True,
-                    help="diagnostics.json from train-value.")
-    tu.add_argument("--labels", type=Path, required=True,
-                    help="Label root holding the <id>.subspace.json sidecars.")
+    tu = sub.add_parser(
+        "topup", help="§4.6: held-out diagnostics -> focus weights for the " "next generate round."
+    )
+    tu.add_argument(
+        "--diagnostics", type=Path, required=True, help="diagnostics.json from train-value."
+    )
+    tu.add_argument(
+        "--labels",
+        type=Path,
+        required=True,
+        help="Label root holding the <id>.subspace.json sidecars.",
+    )
     tu.add_argument("--out", type=Path, required=True, help="Focus-weights JSON.")
-    tu.add_argument("--floor", type=float, default=0.25,
-                    help="Share reserved for metabolites already predicted well.")
+    tu.add_argument(
+        "--floor",
+        type=float,
+        default=0.25,
+        help="Share reserved for metabolites already predicted well.",
+    )
 
     tv = sub.add_parser("train-value", help="M3: train Head A (concave mu_max) on label shards.")
     tv.add_argument("--labels", type=Path, required=True, help="Label shard root (§4.5).")
     tv.add_argument("--index", type=Path, required=True, help="Frozen metabolite_index.json.")
     tv.add_argument("--out", type=Path, required=True, help="Checkpoint + diagnostics dir.")
     tv.add_argument("--eps", type=float, default=1e-3, help="Which eps family level to train on.")
-    tv.add_argument("--arch", default="icnn",
-                    choices=["icnn", "deepset", "deepset-private", "mlp"],
-                    help="Head architecture. `mlp` is unconstrained — a ceiling "
-                    "measurement, not a usable head.")
-    tv.add_argument("--emb-dim", type=int, default=8,
-                    help="Metabolite embedding width (deepset only).")
+    tv.add_argument(
+        "--arch",
+        default="icnn",
+        choices=["icnn", "deepset", "deepset-private", "mlp"],
+        help="Head architecture. `mlp` is unconstrained — a ceiling "
+        "measurement, not a usable head.",
+    )
+    tv.add_argument(
+        "--emb-dim", type=int, default=8, help="Metabolite embedding width (deepset only)."
+    )
+    tv.add_argument(
+        "--phi-hidden",
+        type=int,
+        default=None,
+        help="deepset only: `phi` trunk width. Default derives it from "
+        "--width (width // 8), which was a laptop-runtime choice.",
+    )
+    tv.add_argument(
+        "--k-code", type=int, default=None, help="deepset only: pooled code width (default 16)."
+    )
     tv.add_argument("--width", type=int, default=128)
     tv.add_argument("--depth", type=int, default=3)
     tv.add_argument("--epochs", type=int, default=400)
@@ -104,8 +147,12 @@ def build_parser() -> argparse.ArgumentParser:
     rf.add_argument("--out", type=Path, required=True, help="Diagnostics dir.")
     rf.add_argument("--eps", type=float, default=1e-3)
     rf.add_argument("--n-estimators", type=int, default=100)
-    rf.add_argument("--delta", type=float, default=0.05,
-                    help="Finite-difference step, in units of each metabolite's kink scale.")
+    rf.add_argument(
+        "--delta",
+        type=float,
+        default=0.05,
+        help="Finite-difference step, in units of each metabolite's kink scale.",
+    )
     rf.add_argument("--seed", type=int, default=0)
     return parser
 
@@ -119,10 +166,23 @@ def main(argv: list[str] | None = None) -> int:
         # solver stack, and the jax extra instead of the data one.
         from cfs.surrogate.train import run
 
-        diagnostics = run(args.labels, args.index, args.out, eps=args.eps, arch=args.arch,
-                          width=args.width, depth=args.depth, epochs=args.epochs,
-                          batch=args.batch, lr=args.lr, w_grad=args.w_grad,
-                          emb_dim=args.emb_dim, seed=args.seed)
+        diagnostics = run(
+            args.labels,
+            args.index,
+            args.out,
+            eps=args.eps,
+            arch=args.arch,
+            width=args.width,
+            depth=args.depth,
+            epochs=args.epochs,
+            batch=args.batch,
+            lr=args.lr,
+            w_grad=args.w_grad,
+            emb_dim=args.emb_dim,
+            phi_hidden=args.phi_hidden,
+            k_code=args.k_code,
+            seed=args.seed,
+        )
         print(json.dumps(diagnostics, indent=2))
         return 0 if diagnostics["passed"] else 1
 
@@ -130,9 +190,20 @@ def main(argv: list[str] | None = None) -> int:
         # A measurement, not a gate: it always exits 0, however it scores.
         from cfs.surrogate.baseline import run as run_rf
 
-        print(json.dumps(run_rf(args.labels, args.index, args.out, eps=args.eps,
-                                n_estimators=args.n_estimators, delta=args.delta,
-                                seed=args.seed), indent=2))
+        print(
+            json.dumps(
+                run_rf(
+                    args.labels,
+                    args.index,
+                    args.out,
+                    eps=args.eps,
+                    n_estimators=args.n_estimators,
+                    delta=args.delta,
+                    seed=args.seed,
+                ),
+                indent=2,
+            )
+        )
         return 0
 
     if args.command == "topup":
@@ -164,8 +235,10 @@ def main(argv: list[str] | None = None) -> int:
             weights[gid] = w
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(weights, indent=2, sort_keys=True))
-        print(f"wrote {args.out} — {len(weights)} organisms, "
-              f"{sum(len(v) for v in unmeasured.values())} never-measured metabolites")
+        print(
+            f"wrote {args.out} — {len(weights)} organisms, "
+            f"{sum(len(v) for v in unmeasured.values())} never-measured metabolites"
+        )
         return 0
 
     # Imports are deferred so `--help` works without the data extra installed.
@@ -218,8 +291,10 @@ def main(argv: list[str] | None = None) -> int:
             for gm in roster
         ]
         write_subspaces(subspaces, args.out)
-        print(f"wrote {args.out} — {sum(len(s.active) for s in subspaces)} active "
-              f"metabolites across {len(subspaces)} organisms")
+        print(
+            f"wrote {args.out} — {sum(len(s.active) for s in subspaces)} active "
+            f"metabolites across {len(subspaces)} organisms"
+        )
         return 0
 
     if args.command == "generate":
@@ -233,11 +308,24 @@ def main(argv: list[str] | None = None) -> int:
             cfg = replace(cfg, n_media=args.n_media)
         scales = json.loads(args.scales.read_text()) if args.scales else None
         focus = json.loads(args.focus_weights.read_text()) if args.focus_weights else None
-        shards = generate_roster(roster, args.index, args.outdir, cfg, scales=scales,
-                                 focus_weights=focus, round_idx=args.round_idx)
-        print(json.dumps(
-            {s.genome_id: {"n_media": s.n_media, "shards": [str(p) for p in s.paths]}
-             for s in shards}, indent=2))
+        shards = generate_roster(
+            roster,
+            args.index,
+            args.outdir,
+            cfg,
+            scales=scales,
+            focus_weights=focus,
+            round_idx=args.round_idx,
+        )
+        print(
+            json.dumps(
+                {
+                    s.genome_id: {"n_media": s.n_media, "shards": [str(p) for p in s.paths]}
+                    for s in shards
+                },
+                indent=2,
+            )
+        )
         return 0
 
     return 1

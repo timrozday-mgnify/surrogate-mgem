@@ -9,8 +9,8 @@ from cfs.groundtruth.solve import km_for_exchange, load_km_defaults, mm_lower_bo
 
 
 def test_mm_lower_bound():
-    assert mm_lower_bound(10.0, 0.0, 1.0) == 0.0        # no substrate -> no uptake
-    assert mm_lower_bound(10.0, 1.0, 1.0) == -5.0       # c == Km -> half Vmax
+    assert mm_lower_bound(10.0, 0.0, 1.0) == 0.0  # no substrate -> no uptake
+    assert mm_lower_bound(10.0, 1.0, 1.0) == -5.0  # c == Km -> half Vmax
     assert mm_lower_bound(10.0, 1e9, 1.0) == pytest.approx(-10.0, rel=1e-6)  # saturated
 
 

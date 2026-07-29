@@ -1,0 +1,4 @@
+cell_id,arch,labels,args
+stub__icnn,icnn,labels_stub,--width 64 --depth 2 --epochs 20 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
+stub__mlp,mlp,labels_stub,--width 64 --depth 2 --epochs 20 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
+stub__rf,rf,labels_stub,--eps 1e-3 --n-estimators 100 --delta 0.05 --seed 0

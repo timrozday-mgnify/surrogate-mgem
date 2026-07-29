@@ -31,13 +31,9 @@ def has_egc(model) -> bool:
     ``False`` (and warns) if the model has no recognisable maintenance reaction,
     since the test cannot be posed.
     """
-    atpm = next(
-        (rid for rid in _ATPM_CANDIDATES if rid in model.reactions), None
-    )
+    atpm = next((rid for rid in _ATPM_CANDIDATES if rid in model.reactions), None)
     if atpm is None:
-        LOGGER.warning(
-            "%s has no ATPM/NGAM reaction; cannot test for EGC", model.id
-        )
+        LOGGER.warning("%s has no ATPM/NGAM reaction; cannot test for EGC", model.id)
         return False
     with model:  # context manager restores bounds/objective on exit
         for ex in model.exchanges:
@@ -61,8 +57,11 @@ def run_memote(model_path: Path, out_html: Path) -> Path:
     out_html = Path(out_html)
     out_html.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        "memote", "report", "snapshot",
-        "--filename", str(out_html),
+        "memote",
+        "report",
+        "snapshot",
+        "--filename",
+        str(out_html),
         str(model_path),
     ]
     try:

@@ -74,10 +74,12 @@ def limiting_scales(u_star: dict[str, float], clip: float = 1e4) -> dict[str, fl
     return out
 
 
-def band_scales(probe: dict[str, float] | None,
-                previous: dict[str, float] | None,
-                roster_median: dict[str, float] | None,
-                exchanges: list[str]) -> tuple[dict[str, float], dict[str, str]]:
+def band_scales(
+    probe: dict[str, float] | None,
+    previous: dict[str, float] | None,
+    roster_median: dict[str, float] | None,
+    exchanges: list[str],
+) -> tuple[dict[str, float], dict[str, str]]:
     """§4.7 fallback chain: probe -> previous ``u*`` -> roster median -> 1.0.
 
     Returns the scales for :func:`sample_media` and, per metabolite, which link
@@ -100,8 +102,9 @@ def band_scales(probe: dict[str, float] | None,
     return scales, chosen
 
 
-def topup_weights(per_limiting_metabolite: dict[str, dict],
-                  floor: float = 0.25) -> dict[str, float]:
+def topup_weights(
+    per_limiting_metabolite: dict[str, dict], floor: float = 0.25
+) -> dict[str, float]:
     """Held-out per-metabolite diagnostics -> a focus-budget split for the next run.
 
     Takes ``diagnostics["per_organism"][gid]["per_limiting_metabolite"]`` from
@@ -121,8 +124,7 @@ def topup_weights(per_limiting_metabolite: dict[str, dict],
     """
     if not per_limiting_metabolite:
         return {}
-    err = {ex: max(0.0, 1.0 - float(d["grad_cosine"]))
-           for ex, d in per_limiting_metabolite.items()}
+    err = {ex: max(0.0, 1.0 - float(d["grad_cosine"])) for ex, d in per_limiting_metabolite.items()}
     n = len(err)
     total = sum(err.values())
     if total <= 0:  # everything already perfect: split evenly
@@ -130,9 +132,13 @@ def topup_weights(per_limiting_metabolite: dict[str, dict],
     return {ex: floor / n + (1.0 - floor) * e / total for ex, e in err.items()}
 
 
-def sample_media(subspace, km_cfg: dict, cfg: SamplingConfig | None = None,
-                 scales: dict[str, float] | None = None,
-                 focus_weights: dict[str, float] | None = None) -> list[dict]:
+def sample_media(
+    subspace,
+    km_cfg: dict,
+    cfg: SamplingConfig | None = None,
+    scales: dict[str, float] | None = None,
+    focus_weights: dict[str, float] | None = None,
+) -> list[dict]:
     """Return ``[{exchange_id: concentration}]`` media for one organism (§4.3).
 
     Varies the active subspace ``A_i`` (or the background if ``A_i`` is empty),
@@ -184,8 +190,8 @@ def sample_media(subspace, km_cfg: dict, cfg: SamplingConfig | None = None,
     # 27 to 7 — `EX_k_e` and `EX_acnam_e` took 85% of media between them and
     # `EX_o2_e` never limited at all.
     anchor = {ex: np.log10(float(scales.get(ex, 1.0))) for ex in sampled}
-    held_rich = {ex: km[ex] * 10.0 ** cfg.log10_hi for ex in held}
-    sampled_rich = {ex: km[ex] * 10.0 ** cfg.log10_hi for ex in sampled}
+    held_rich = {ex: km[ex] * 10.0**cfg.log10_hi for ex in held}
+    sampled_rich = {ex: km[ex] * 10.0**cfg.log10_hi for ex in sampled}
 
     media: list[dict] = []
     # All-but-one-depleted corners: single-limitation facets (§4.3).

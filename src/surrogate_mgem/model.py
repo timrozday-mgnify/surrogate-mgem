@@ -18,9 +18,7 @@ from torch import nn
 _STD_FLOOR = 1e-8  # guard against divide-by-zero on constant features/targets
 
 
-def inverse_density_weights(
-    X: np.ndarray, k: int = 15, cap: float = 10.0
-) -> np.ndarray:
+def inverse_density_weights(X: np.ndarray, k: int = 15, cap: float = 10.0) -> np.ndarray:
     """Per-row weights that down-weight densely-sampled regions of feature space.
 
     The active-learning loop deliberately clusters real solves in "tricky"
@@ -237,9 +235,11 @@ class GrowthSurrogate(nn.Module):
                 print(f"epoch {epoch}: train={tr:.4g} val={va:.4g} bs={batch_size} lr={cur_lr:.2g}")
 
             if va < best_val - 1e-9:
-                best_val, best_epoch, best_state = va, epoch, {
-                    k: v.detach().clone() for k, v in self.state_dict().items()
-                }
+                best_val, best_epoch, best_state = (
+                    va,
+                    epoch,
+                    {k: v.detach().clone() for k, v in self.state_dict().items()},
+                )
                 since_improve = 0
                 continue
             since_improve += 1

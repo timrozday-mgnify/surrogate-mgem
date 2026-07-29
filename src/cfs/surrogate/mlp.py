@@ -39,8 +39,10 @@ class MLPHead(eqx.Module):
     def __init__(self, key, n_in: int, mask, width: int = 128, depth: int = 3):
         keys = jax.random.split(key, depth + 1)
         sizes = [n_in] + [width] * depth + [1]
-        self.w = [jax.random.normal(k, (o, i)) * jnp.sqrt(2.0 / i)
-                  for k, i, o in zip(keys, sizes[:-1], sizes[1:], strict=True)]
+        self.w = [
+            jax.random.normal(k, (o, i)) * jnp.sqrt(2.0 / i)
+            for k, i, o in zip(keys, sizes[:-1], sizes[1:], strict=True)
+        ]
         self.b = [jnp.zeros(o) for o in sizes[1:]]
         self.mask = jnp.asarray(mask, dtype=bool)
 
@@ -51,8 +53,9 @@ class MLPHead(eqx.Module):
         return (self.w[-1] @ h + self.b[-1])[0]
 
 
-def stack_heads(key, n_organisms: int, n_in: int, mask, width: int = 128,
-                depth: int = 3) -> MLPHead:
+def stack_heads(
+    key, n_organisms: int, n_in: int, mask, width: int = 128, depth: int = 3
+) -> MLPHead:
     keys = jax.random.split(key, n_organisms)
     make = eqx.filter_vmap(lambda k, m: MLPHead(k, n_in, m, width, depth), in_axes=(0, 0))
     return make(keys, jnp.asarray(mask, dtype=bool))

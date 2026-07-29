@@ -43,8 +43,9 @@ def _uptake_exchanges(model) -> list[str]:
     return [ex.id for ex in model.exchanges if ex.lower_bound < 0]
 
 
-def active_subspace(model, genome_id: str = "", km_cfg: dict | None = None,
-                    *, tol: float = 1e-3) -> ActiveSubspace:
+def active_subspace(
+    model, genome_id: str = "", km_cfg: dict | None = None, *, tol: float = 1e-3
+) -> ActiveSubspace:
     """Coarse one-at-a-time sensitivity sweep for one model (plan §4.2)."""
     from cfs.groundtruth.solve import apply_mm_bounds, load_km_defaults
 
@@ -57,8 +58,7 @@ def active_subspace(model, genome_id: str = "", km_cfg: dict | None = None,
         mu_rich = model.optimize().objective_value or 0.0
     if mu_rich <= 0.0:
         LOGGER.warning("%s: no growth on rich medium; active subspace empty", genome_id)
-        return ActiveSubspace(genome_id, [], sorted(uptakes),
-                              dict.fromkeys(uptakes, 0.0), 0.0)
+        return ActiveSubspace(genome_id, [], sorted(uptakes), dict.fromkeys(uptakes, 0.0), 0.0)
 
     sensitivity = {}
     for ex in uptakes:
@@ -75,9 +75,17 @@ def active_subspace(model, genome_id: str = "", km_cfg: dict | None = None,
     return ActiveSubspace(genome_id, active, background, sensitivity, float(mu_rich))
 
 
-def demand_probe(model, exchanges: list[str], km_cfg: dict | None = None, *,
-                 lo: float = -4.0, hi: float = 1.0, steps: int = 12,
-                 target_frac: float = 0.1, tol: float = 1e-3) -> dict[str, float]:
+def demand_probe(
+    model,
+    exchanges: list[str],
+    km_cfg: dict | None = None,
+    *,
+    lo: float = -4.0,
+    hi: float = 1.0,
+    steps: int = 12,
+    target_frac: float = 0.1,
+    tol: float = 1e-3,
+) -> dict[str, float]:
     """Where each metabolite starts limiting, in ``c/Km`` — before any labels (§4.7).
 
     This is what makes the design self-anchoring. ``limiting_scales`` reads the
@@ -137,8 +145,9 @@ def demand_probe(model, exchanges: list[str], km_cfg: dict | None = None, *,
     return out
 
 
-def write_subspaces(subspaces: list[ActiveSubspace], path: Path,
-                    bands: dict[str, dict] | None = None) -> None:
+def write_subspaces(
+    subspaces: list[ActiveSubspace], path: Path, bands: dict[str, dict] | None = None
+) -> None:
     """Write per-organism active subspaces to one JSON (fed to ``generate``).
 
     ``bands`` (``{genome_id: {exchange: {"scale": s, "source": src}}}``) records

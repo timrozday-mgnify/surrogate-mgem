@@ -74,21 +74,29 @@ class Trunk(eqx.Module):
         # `phi` takes one scalar, so the picnn init's sqrt(2/n_in) is sqrt(2) here:
         # slopes of order 1, which is where the rescaled input's ramp already is.
         s = jnp.sqrt(2.0)
-        self.wx = [_softplus_inv(jnp.abs(jax.random.normal(keys[2 + i], (hidden,)) * s) + 1e-6)
-                   for i in range(depth)]
+        self.wx = [
+            _softplus_inv(jnp.abs(jax.random.normal(keys[2 + i], (hidden,)) * s) + 1e-6)
+            for i in range(depth)
+        ]
         w0 = _softplus_inv(1.0 / hidden)
-        self.wz = [jax.random.normal(keys[2 + depth + i], (hidden, hidden)) * 0.1 + w0
-                   for i in range(1, depth)]
+        self.wz = [
+            jax.random.normal(keys[2 + depth + i], (hidden, hidden)) * 0.1 + w0
+            for i in range(1, depth)
+        ]
         # Diverse biases: the head is a non-negative sum of softplus ridges, and at
         # a shared offset they all sit on the same part of the curve (picnn.py:92).
-        self.b = [jax.random.uniform(keys[2 + 2 * depth + i], (hidden,), minval=-1.0, maxval=1.0)
-                  for i in range(depth)]
+        self.b = [
+            jax.random.uniform(keys[2 + 2 * depth + i], (hidden,), minval=-1.0, maxval=1.0)
+            for i in range(depth)
+        ]
         # Conditioning starts near zero, so phi begins as one shape for every
         # metabolite and differentiates as the embeddings train.
-        self.cx = [jax.random.normal(keys[2 + 3 * depth + i], (hidden, dh)) * 0.1
-                   for i in range(depth)]
-        self.cb = [jax.random.normal(keys[2 + 4 * depth + i], (hidden, dh)) * 0.1
-                   for i in range(depth)]
+        self.cx = [
+            jax.random.normal(keys[2 + 3 * depth + i], (hidden, dh)) * 0.1 for i in range(depth)
+        ]
+        self.cb = [
+            jax.random.normal(keys[2 + 4 * depth + i], (hidden, dh)) * 0.1 for i in range(depth)
+        ]
         self.oz = jax.random.normal(keys[-4], (k, hidden)) * 0.1 + w0
         self.ox = _softplus_inv(jnp.abs(jax.random.normal(keys[-3], (k,)) * s) + 1e-6)
         self.cox = jax.random.normal(keys[-2], (k, dh)) * 0.1
@@ -98,14 +106,21 @@ class Trunk(eqx.Module):
     def phi(self, e: Array, y: Array) -> Array:
         """``(d,), () -> (k,)``, concave and non-decreasing in ``y``."""
         h = jnp.tanh(self.ce_w @ e + self.ce_b)
-        z = jax.nn.softplus(-jax.nn.softplus(self.wx[0] + self.cx[0] @ h) * y
-                            + self.b[0] + self.cb[0] @ h)
-        for wx, cx, wz, b, cb in zip(self.wx[1:], self.cx[1:], self.wz, self.b[1:], self.cb[1:],
-                                     strict=True):
-            z = jax.nn.softplus(jax.nn.softplus(wz) @ z
-                                - jax.nn.softplus(wx + cx @ h) * y + b + cb @ h)
-        out = (jax.nn.softplus(self.oz) @ z - jax.nn.softplus(self.ox + self.cox @ h) * y
-               + self.ob + self.cob @ h)
+        z = jax.nn.softplus(
+            -jax.nn.softplus(self.wx[0] + self.cx[0] @ h) * y + self.b[0] + self.cb[0] @ h
+        )
+        for wx, cx, wz, b, cb in zip(
+            self.wx[1:], self.cx[1:], self.wz, self.b[1:], self.cb[1:], strict=True
+        ):
+            z = jax.nn.softplus(
+                jax.nn.softplus(wz) @ z - jax.nn.softplus(wx + cx @ h) * y + b + cb @ h
+            )
+        out = (
+            jax.nn.softplus(self.oz) @ z
+            - jax.nn.softplus(self.ox + self.cox @ h) * y
+            + self.ob
+            + self.cob @ h
+        )
         return -out
 
     def __call__(self, x: Array, mask: Array) -> Array:
@@ -130,12 +145,25 @@ class DeepSetHead(eqx.Module):
         return self.rho(self.trunk(x, self.mask))
 
 
-def stack_heads(key, n_organisms: int, n_in: int, mask, width: int = 128, depth: int = 3,
-                emb_dim: int = 8, shared: bool = True) -> DeepSetHead:
+def stack_heads(
+    key,
+    n_organisms: int,
+    n_in: int,
+    mask,
+    width: int = 128,
+    depth: int = 3,
+    emb_dim: int = 8,
+    shared: bool = True,
+    phi_hidden: int | None = None,
+    k_code: int | None = None,
+) -> DeepSetHead:
     """Stack ``n_organisms`` heads. Only ``rho``/``mask`` get the organism axis.
 
-    ``phi``'s internals are derived from ``width`` rather than given their own
-    flags: hidden ``width // 8``, code width 16, context ``2 * emb_dim``.
+    ``phi``'s internals default to being derived from ``width`` — hidden
+    ``width // 8``, code width 16, context ``2 * emb_dim`` — and ``phi_hidden`` /
+    ``k_code`` override those. The derivation was a laptop-runtime choice, not a
+    measured optimum (see below); the M3b sweep varies them directly, which is why
+    they are flags and not just ``width``.
 
     ``phi`` is deliberately much narrower than ``rho``. It runs **once per
     metabolite**, so the trunk costs ``|M| * hidden^2`` per row against the ICNN's
@@ -147,20 +175,42 @@ def stack_heads(key, n_organisms: int, n_in: int, mask, width: int = 128, depth:
     metabolite.
     """
     kt, kr = jax.random.split(key)
-    k_code, hidden = 16, max(8, width // 8)
+    k_code = k_code or 16
+    hidden = phi_hidden or max(8, width // 8)
     rho = eqx.filter_vmap(
         lambda k_: ValueHead(k_, k_code, jnp.ones(k_code, dtype=bool), width, depth)
     )(jax.random.split(kr, n_organisms))
     make_trunk = lambda k_: Trunk(k_, n_in, emb_dim, k_code, hidden, depth)  # noqa: E731
-    trunk = (make_trunk(kt) if shared
-             else eqx.filter_vmap(make_trunk)(jax.random.split(kt, n_organisms)))
+    trunk = (
+        make_trunk(kt) if shared else eqx.filter_vmap(make_trunk)(jax.random.split(kt, n_organisms))
+    )
     return DeepSetHead(trunk, rho, jnp.asarray(mask, dtype=bool), shared)
 
 
-def stack_heads_private(key, n_organisms: int, n_in: int, mask, width: int = 128,
-                        depth: int = 3, emb_dim: int = 8) -> DeepSetHead:
+def stack_heads_private(
+    key,
+    n_organisms: int,
+    n_in: int,
+    mask,
+    width: int = 128,
+    depth: int = 3,
+    emb_dim: int = 8,
+    phi_hidden: int | None = None,
+    k_code: int | None = None,
+) -> DeepSetHead:
     """The D1-preserving ablation: same architecture, nothing shared."""
-    return stack_heads(key, n_organisms, n_in, mask, width, depth, emb_dim, shared=False)
+    return stack_heads(
+        key,
+        n_organisms,
+        n_in,
+        mask,
+        width,
+        depth,
+        emb_dim,
+        shared=False,
+        phi_hidden=phi_hidden,
+        k_code=k_code,
+    )
 
 
 def _slice(tree, i: int):

@@ -69,8 +69,9 @@ def _saturation(c: np.ndarray, km: np.ndarray) -> np.ndarray:
     return c / (km + c)
 
 
-def _organism_arrays(labels_dir: Path, gid: str, eps: float, col: dict[str, int],
-                     km_cfg: dict, n_shared: int):
+def _organism_arrays(
+    labels_dir: Path, gid: str, eps: float, col: dict[str, int], km_cfg: dict, n_shared: int
+):
     """Read one organism's primary-eps shard into shared-index arrays."""
     from cfs.groundtruth.solve import km_for_exchange
 
@@ -126,8 +127,15 @@ def _organism_arrays(labels_dir: Path, gid: str, eps: float, col: dict[str, int]
 
     mask = np.zeros(n_shared, dtype=bool)
     mask[pos] = True
-    return (x, mu.astype(np.float32), g, gvalid, mask, df["index_hash"].iloc[0],
-            df["medium_id"].to_numpy(dtype=np.int64))
+    return (
+        x,
+        mu.astype(np.float32),
+        g,
+        gvalid,
+        mask,
+        df["index_hash"].iloc[0],
+        df["medium_id"].to_numpy(dtype=np.int64),
+    )
 
 
 def _kink_scale(x: np.ndarray, g: np.ndarray) -> np.ndarray:
@@ -159,9 +167,13 @@ def _kink_scale(x: np.ndarray, g: np.ndarray) -> np.ndarray:
     return scale
 
 
-def load_value_dataset(labels_dir: Path | str, index_path: Path | str,
-                       eps: float = 1e-3, val_frac: float = 0.2,
-                       seed: int = 0) -> ValueDataset:
+def load_value_dataset(
+    labels_dir: Path | str,
+    index_path: Path | str,
+    eps: float = 1e-3,
+    val_frac: float = 0.2,
+    seed: int = 0,
+) -> ValueDataset:
     """Load every organism's primary-eps labels into stacked train/val arrays.
 
     The split is by ``medium_id``, never by row: media are the independent unit.
@@ -253,14 +265,32 @@ def load_value_dataset(labels_dir: Path | str, index_path: Path | str,
     mu_scale = mu.std(axis=1)
     mu_scale[mu_scale <= 0] = 1.0
     present = sorted(int(r) for r in np.unique(rounds))
-    LOGGER.info("%d organisms x %d media (%d train / %d held out, base design only), "
-                "rounds %s, %d shared exchanges, |M_i| %d-%d",
-                len(gids), len(rounds), len(ti), len(vi), present, len(exchanges),
-                mask.sum(1).min(), mask.sum(1).max())
+    LOGGER.info(
+        "%d organisms x %d media (%d train / %d held out, base design only), "
+        "rounds %s, %d shared exchanges, |M_i| %d-%d",
+        len(gids),
+        len(rounds),
+        len(ti),
+        len(vi),
+        present,
+        len(exchanges),
+        mask.sum(1).min(),
+        mask.sum(1).max(),
+    )
     return ValueDataset(
-        genome_ids=gids, exchanges=exchanges, mask=mask,
-        x_train=x[:, ti], mu_train=mu[:, ti], g_train=g[:, ti], gvalid_train=gvalid[:, ti],
-        x_val=x[:, vi], mu_val=mu[:, vi], g_val=g[:, vi], gvalid_val=gvalid[:, vi],
-        mu_scale=mu_scale.astype(np.float32), x_scale=x_scale, index_hash=hashes.pop(),
+        genome_ids=gids,
+        exchanges=exchanges,
+        mask=mask,
+        x_train=x[:, ti],
+        mu_train=mu[:, ti],
+        g_train=g[:, ti],
+        gvalid_train=gvalid[:, ti],
+        x_val=x[:, vi],
+        mu_val=mu[:, vi],
+        g_val=g[:, vi],
+        gvalid_val=gvalid[:, vi],
+        mu_scale=mu_scale.astype(np.float32),
+        x_scale=x_scale,
+        index_hash=hashes.pop(),
         rounds_present=present,
     )

@@ -50,8 +50,9 @@ from cfs.surrogate.picnn import ValueHead
 from cfs.surrogate.train import _du, train_value_heads
 
 
-def train_ensemble(ds: ValueDataset, *, n_models: int = 5, seed: int = 0,
-                   **kwargs) -> list[ValueHead]:
+def train_ensemble(
+    ds: ValueDataset, *, n_models: int = 5, seed: int = 0, **kwargs
+) -> list[ValueHead]:
     """``n_models`` independently-seeded stacked heads (§4.6 acquisition ensemble).
 
     Deliberately a plain list rather than a further ``vmap`` axis: members differ
@@ -61,8 +62,7 @@ def train_ensemble(ds: ValueDataset, *, n_models: int = 5, seed: int = 0,
     return [train_value_heads(ds, seed=seed + i, **kwargs) for i in range(n_models)]
 
 
-def gradient_disagreement(members: list[ValueHead], x, x_scale, mask,
-                          floor: float = 1e-12):
+def gradient_disagreement(members: list[ValueHead], x, x_scale, mask, floor: float = 1e-12):
     """``(G, B)`` mean pairwise angle between members' predicted duals, in ``u`` space.
 
     0 where the members agree on direction (or all predict ~no gradient), rising
@@ -96,8 +96,9 @@ def _grads(heads: ValueHead, x):
     return batched_value_and_grad(heads, jnp.asarray(x))[1]
 
 
-def unmeasured_metabolites(diagnostics: dict, subspaces: dict[str, list[str]]
-                           ) -> dict[str, list[str]]:
+def unmeasured_metabolites(
+    diagnostics: dict, subspaces: dict[str, list[str]]
+) -> dict[str, list[str]]:
     """Per organism, the ``A_i`` metabolites with no held-out evidence at all.
 
     These never limited in the previous run, so they carry neither a ``u*`` for
@@ -111,8 +112,7 @@ def unmeasured_metabolites(diagnostics: dict, subspaces: dict[str, list[str]]
     return out
 
 
-def rank_media(members: list[ValueHead], x, x_scale, mask, k: int = 256
-               ) -> list[np.ndarray]:
+def rank_media(members: list[ValueHead], x, x_scale, mask, k: int = 256) -> list[np.ndarray]:
     """Per organism, indices of the ``k`` most disagreed-on media in ``x``.
 
     Candidates are scored, not proposed, here: generate them with

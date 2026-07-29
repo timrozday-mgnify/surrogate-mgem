@@ -111,17 +111,16 @@ class ValueHead(eqx.Module):
         return -out
 
 
-def stack_heads(key, n_organisms: int, n_in: int, mask, width: int = 128,
-                depth: int = 3) -> ValueHead:
+def stack_heads(
+    key, n_organisms: int, n_in: int, mask, width: int = 128, depth: int = 3
+) -> ValueHead:
     """One :class:`ValueHead` PyTree with a leading organism axis (§6.1).
 
     20 organisms then cost about what 1 costs — this is the single biggest
     engineering win at this scale, and it has to be in from the start.
     """
     keys = jax.random.split(key, n_organisms)
-    make = eqx.filter_vmap(
-        lambda k, m: ValueHead(k, n_in, m, width, depth), in_axes=(0, 0)
-    )
+    make = eqx.filter_vmap(lambda k, m: ValueHead(k, n_in, m, width, depth), in_axes=(0, 0))
     return make(keys, jnp.asarray(mask, dtype=bool))
 
 

@@ -50,8 +50,7 @@ class GrowthEnsemble:
         if fit_kwargs.get("sample_weight", "auto") == "auto":
             fit_kwargs["sample_weight"] = inverse_density_weights(np.asarray(X))
         self.last_history = [
-            model.fit(X, Y, seed=base_seed + i, **fit_kwargs)
-            for i, model in enumerate(self.models)
+            model.fit(X, Y, seed=base_seed + i, **fit_kwargs) for i, model in enumerate(self.models)
         ]
         return self.last_history
 

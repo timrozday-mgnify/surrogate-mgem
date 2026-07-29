@@ -82,8 +82,16 @@ def _u_space_gradients(rf, xv: np.ndarray, s: np.ndarray, delta: float) -> np.nd
     return out
 
 
-def run(labels_dir: Path, index_path: Path, outdir: Path, *, eps: float = 1e-3,
-        n_estimators: int = 100, delta: float = 0.05, seed: int = 0) -> dict:
+def run(
+    labels_dir: Path,
+    index_path: Path,
+    outdir: Path,
+    *,
+    eps: float = 1e-3,
+    n_estimators: int = 100,
+    delta: float = 0.05,
+    seed: int = 0,
+) -> dict:
     """Fit one forest per organism on the same split, score it on the same gate."""
     from sklearn.ensemble import RandomForestRegressor
 
@@ -99,14 +107,19 @@ def run(labels_dir: Path, index_path: Path, outdir: Path, *, eps: float = 1e-3,
         rf.fit(ds.x_train[i][:, dims], ds.mu_train[i] / ds.mu_scale[i])
         xv = ds.x_val[i][:, dims].astype(np.float64)
         mu_hat[i] = rf.predict(xv)
-        g_hat[i][:, dims] = _u_space_gradients(rf, xv, ds.x_scale[i, dims].astype(np.float64),
-                                               delta)
+        g_hat[i][:, dims] = _u_space_gradients(
+            rf, xv, ds.x_scale[i, dims].astype(np.float64), delta
+        )
         LOGGER.info("%s (%d/%d): %d dims, %.0fs", gid, i + 1, n_org, len(dims), time.time() - t0)
 
     diagnostics = score(ds, mu_hat, g_hat, arch="random-forest")
-    diagnostics["baseline"] = {"model": "RandomForestRegressor", "n_estimators": n_estimators,
-                               "gradient": f"central finite difference, step {delta} * s_m in u",
-                               "eps": eps, "seed": seed}
+    diagnostics["baseline"] = {
+        "model": "RandomForestRegressor",
+        "n_estimators": n_estimators,
+        "gradient": f"central finite difference, step {delta} * s_m in u",
+        "eps": eps,
+        "seed": seed,
+    }
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2))

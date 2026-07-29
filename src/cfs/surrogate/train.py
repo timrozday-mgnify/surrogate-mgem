@@ -57,12 +57,32 @@ GRAD_COSINE_GATE = 0.99
 _ARCH = {"icnn": picnn, "deepset": deepset, "deepset-private": deepset, "mlp": mlp}
 
 
-def _build(arch: str, key, n_organisms: int, n_in: int, mask, width: int, depth: int,
-           emb_dim: int):
+def _build(
+    arch: str,
+    key,
+    n_organisms: int,
+    n_in: int,
+    mask,
+    width: int,
+    depth: int,
+    emb_dim: int,
+    phi_hidden: int | None = None,
+    k_code: int | None = None,
+):
     mod = _ARCH[arch]
     if mod is deepset:
-        return mod.stack_heads(key, n_organisms, n_in, mask, width, depth, emb_dim,
-                               shared=arch == "deepset")
+        return mod.stack_heads(
+            key,
+            n_organisms,
+            n_in,
+            mask,
+            width,
+            depth,
+            emb_dim,
+            shared=arch == "deepset",
+            phi_hidden=phi_hidden,
+            k_code=k_code,
+        )
     return mod.stack_heads(key, n_organisms, n_in, mask, width, depth)
 
 
@@ -139,8 +159,7 @@ def _shard_organisms(n_organisms: int, tree):
     n_dev = jax.device_count()
     if n_dev < 2 or n_organisms % n_dev:
         if n_dev >= 2:
-            LOGGER.info("%d organisms do not divide %d devices — not sharding",
-                        n_organisms, n_dev)
+            LOGGER.info("%d organisms do not divide %d devices — not sharding", n_organisms, n_dev)
         return tree
     # Auto, not the `jax.make_mesh` default of Explicit: under Explicit axis types
     # the shard spec is part of the array's *type*, so it propagates into traces
@@ -154,13 +173,30 @@ def _shard_organisms(n_organisms: int, tree):
     # Leaves without a leading organism axis (the deepset's shared trunk, scalars)
     # replicate; everything else splits.
     return jax.tree.map(
-        lambda a: jax.device_put(a, org if getattr(a, "shape", ()) and a.shape[0] == n_organisms
-                                 else repl) if eqx.is_array(a) else a, tree)
+        lambda a: jax.device_put(
+            a, org if getattr(a, "shape", ()) and a.shape[0] == n_organisms else repl
+        )
+        if eqx.is_array(a)
+        else a,
+        tree,
+    )
 
 
-def train_value_heads(ds: ValueDataset, *, arch: str = "icnn", width: int = 128, depth: int = 3,
-                      epochs: int = 400, batch: int = 512, lr: float = 3e-3,
-                      w_grad: float = 1.0, emb_dim: int = 8, seed: int = 0) -> eqx.Module:
+def train_value_heads(
+    ds: ValueDataset,
+    *,
+    arch: str = "icnn",
+    width: int = 128,
+    depth: int = 3,
+    epochs: int = 400,
+    batch: int = 512,
+    lr: float = 3e-3,
+    w_grad: float = 1.0,
+    emb_dim: int = 8,
+    phi_hidden: int | None = None,
+    k_code: int | None = None,
+    seed: int = 0,
+) -> eqx.Module:
     """Fit the stacked Head A. Labels are scaled by ``ds.mu_scale`` (§7.1)."""
     bvg = _ARCH[arch].batched_value_and_grad
     key = jax.random.PRNGKey(seed)
@@ -174,16 +210,29 @@ def train_value_heads(ds: ValueDataset, *, arch: str = "icnn", width: int = 128,
     # norm over the rows that do have a limiting metabolite.
     raw = np.sum(np.asarray(g * _du(x, x_scale)) ** 2 * ds.mask[:, None, :], axis=-1)
     ok = (raw > 0) & np.asarray(ds.gvalid_train)
-    gfloor = jnp.asarray([float(np.median(r[o])) if o.any() else 1.0
-                          for r, o in zip(raw, ok, strict=True)])
+    gfloor = jnp.asarray(
+        [float(np.median(r[o])) if o.any() else 1.0 for r, o in zip(raw, ok, strict=True)]
+    )
 
-    heads = _build(arch, key, len(ds.genome_ids), x.shape[-1], ds.mask, width, depth, emb_dim)
+    heads = _build(
+        arch,
+        key,
+        len(ds.genome_ids),
+        x.shape[-1],
+        ds.mask,
+        width,
+        depth,
+        emb_dim,
+        phi_hidden=phi_hidden,
+        k_code=k_code,
+    )
     n = x.shape[1]
     steps_per_epoch = max(1, n // batch)
     optimiser = optax.adam(optax.cosine_decay_schedule(lr, epochs * steps_per_epoch))
     opt_state = optimiser.init(eqx.filter(heads, eqx.is_inexact_array))
     heads, opt_state, x, mu, g, gvalid, x_scale, gfloor = _shard_organisms(
-        len(ds.genome_ids), (heads, opt_state, x, mu, g, gvalid, x_scale, gfloor))
+        len(ds.genome_ids), (heads, opt_state, x, mu, g, gvalid, x_scale, gfloor)
+    )
 
     rng = np.random.default_rng(seed)
     t0 = time.time()
@@ -192,14 +241,29 @@ def train_value_heads(ds: ValueDataset, *, arch: str = "icnn", width: int = 128,
         for s in range(steps_per_epoch):
             # The same media indices for every organism: the batch axis is media,
             # and all organisms share the design size (checked by the loader).
-            idx = jnp.asarray(perm[s * batch:(s + 1) * batch])
+            idx = jnp.asarray(perm[s * batch : (s + 1) * batch])
             heads, opt_state, total, (v, gl) = _step(
-                heads, opt_state, x[:, idx], mu[:, idx], g[:, idx], gvalid[:, idx],
-                x_scale, gfloor, w_grad, optimiser, bvg,
+                heads,
+                opt_state,
+                x[:, idx],
+                mu[:, idx],
+                g[:, idx],
+                gvalid[:, idx],
+                x_scale,
+                gfloor,
+                w_grad,
+                optimiser,
+                bvg,
             )
         if epoch % 20 == 0 or epoch == epochs - 1:
-            LOGGER.info("epoch %4d  loss=%.5f  value=%.5f  grad=%.5f  (%.0fs)",
-                        epoch, float(total), float(v), float(gl), time.time() - t0)
+            LOGGER.info(
+                "epoch %4d  loss=%.5f  value=%.5f  grad=%.5f  (%.0fs)",
+                epoch,
+                float(total),
+                float(v),
+                float(gl),
+                time.time() - t0,
+            )
     # Gather back onto one device before returning. Sharding is an optimisation
     # internal to this function, and everything downstream (`evaluate`, `save`)
     # builds its own unsharded arrays from `ds` -- vmap rejects a sharded head
@@ -211,6 +275,7 @@ def train_value_heads(ds: ValueDataset, *, arch: str = "icnn", width: int = 128,
 # --------------------------------------------------------------------------- #
 # Diagnostics (§7.3)
 # --------------------------------------------------------------------------- #
+
 
 def _cosine(a, b, mask):
     """Per-row cosine over the masked dims; NaN where the target vector is 0."""
@@ -258,8 +323,9 @@ def held_out_targets(ds: ValueDataset):
     return x, jnp.asarray(ds.mu_val) / scale, jnp.asarray(ds.g_val) / scale[..., None] * du
 
 
-def score(ds: ValueDataset, mu_hat, g_hat, extra: dict[str, dict] | None = None,
-          arch: str = "") -> dict:
+def score(
+    ds: ValueDataset, mu_hat, g_hat, extra: dict[str, dict] | None = None, arch: str = ""
+) -> dict:
     """Assemble §7.3's diagnostics from held-out predictions.
 
     ``mu_hat`` is ``(G, B)`` on the ``mu_scale``d target and ``g_hat`` is
@@ -274,8 +340,9 @@ def score(ds: ValueDataset, mu_hat, g_hat, extra: dict[str, dict] | None = None,
 
     cos = _cosine(g_hat, g, mask[:, None, :])
     cos = jnp.where(gvalid, cos, jnp.nan)
-    r2 = 1.0 - jnp.sum((mu_hat - mu) ** 2, axis=1) / jnp.sum((mu - mu.mean(1, keepdims=True)) ** 2,
-                                                             axis=1)
+    r2 = 1.0 - jnp.sum((mu_hat - mu) ** 2, axis=1) / jnp.sum(
+        (mu - mu.mean(1, keepdims=True)) ** 2, axis=1
+    )
     err = jnp.abs(g_hat - g) * mask[:, None, :]
 
     # Share of predicted gradient norm landing on the *true* argmax metabolite.
@@ -283,10 +350,14 @@ def score(ds: ValueDataset, mu_hat, g_hat, extra: dict[str, dict] | None = None,
     # why a cosine is what it is: a dense predictor scores near 1/|M_i| here even
     # when its cosine looks respectable.
     m = mask[:, None, :]
-    top = jnp.take_along_axis(jnp.abs(g_hat * m), jnp.argmax(jnp.abs(g * m), axis=-1)[..., None],
-                              axis=-1)[..., 0]
-    share = jnp.where(jnp.linalg.norm(g_hat * m, axis=-1) > 0,
-                      top / jnp.linalg.norm(g_hat * m + 1e-30, axis=-1), jnp.nan)
+    top = jnp.take_along_axis(
+        jnp.abs(g_hat * m), jnp.argmax(jnp.abs(g * m), axis=-1)[..., None], axis=-1
+    )[..., 0]
+    share = jnp.where(
+        jnp.linalg.norm(g_hat * m, axis=-1) > 0,
+        top / jnp.linalg.norm(g_hat * m + 1e-30, axis=-1),
+        jnp.nan,
+    )
     share = jnp.where(gvalid & (jnp.linalg.norm(g * m, axis=-1) > 0), share, jnp.nan)
 
     # Held-out cosine and row count *per limiting metabolite* — the unit the next
@@ -305,8 +376,10 @@ def score(ds: ValueDataset, mu_hat, g_hat, extra: dict[str, dict] | None = None,
         by_met = {}
         for j in np.unique(kt[i][okv[i]]):
             s = okv[i] & (kt[i] == j)
-            by_met[ds.exchanges[j]] = {"rows": int(s.sum()),
-                                       "grad_cosine": float(np.nanmean(cos_np[i][s]))}
+            by_met[ds.exchanges[j]] = {
+                "rows": int(s.sum()),
+                "grad_cosine": float(np.nanmean(cos_np[i][s])),
+            }
         per[gid] = {
             "grad_cosine": float(jnp.nanmean(cos[i])),
             "grad_cosine_p05": float(jnp.nanpercentile(cos[i], 5)),
@@ -320,10 +393,16 @@ def score(ds: ValueDataset, mu_hat, g_hat, extra: dict[str, dict] | None = None,
     # The split provenance is part of the result: two runs are only comparable if
     # they were scored on the same held-out media, and the §4.6 rounds are exactly
     # what can silently change that (see `load_value_dataset`).
-    return {"gate": "grad_cosine > 0.99, in u = c/(Km+c) space", "worst_grad_cosine": gate,
-            "passed": bool(gate > GRAD_COSINE_GATE), "arch": arch,
-            "n_val_media": int(ds.x_val.shape[1]), "n_train_media": int(ds.x_train.shape[1]),
-            "rounds_present": ds.rounds_present, "per_organism": per}
+    return {
+        "gate": "grad_cosine > 0.99, in u = c/(Km+c) space",
+        "worst_grad_cosine": gate,
+        "passed": bool(gate > GRAD_COSINE_GATE),
+        "arch": arch,
+        "n_val_media": int(ds.x_val.shape[1]),
+        "n_train_media": int(ds.x_train.shape[1]),
+        "rounds_present": ds.rounds_present,
+        "per_organism": per,
+    }
 
 
 def evaluate(heads: eqx.Module, ds: ValueDataset, seed: int = 0, arch: str = "icnn") -> dict:
@@ -335,8 +414,10 @@ def evaluate(heads: eqx.Module, ds: ValueDataset, seed: int = 0, arch: str = "ic
     g_hat = g_hat * _du(x, jnp.asarray(ds.x_scale))
     viol = _concavity_violations(heads, x, jax.random.PRNGKey(seed), mod.batched_value)
     conds = _hessian_cond(heads, x, mod.organism)
-    extra = {gid: {"concavity_violation_rate": float(viol[i]), "hessian_cond_median": conds[i]}
-             for i, gid in enumerate(ds.genome_ids)}
+    extra = {
+        gid: {"concavity_violation_rate": float(viol[i]), "hessian_cond_median": conds[i]}
+        for i, gid in enumerate(ds.genome_ids)
+    }
     return score(ds, mu_hat, g_hat, extra, arch=arch)
 
 
@@ -344,8 +425,8 @@ def evaluate(heads: eqx.Module, ds: ValueDataset, seed: int = 0, arch: str = "ic
 # Checkpoint (P13 / P14)
 # --------------------------------------------------------------------------- #
 
-def save(heads: eqx.Module, ds: ValueDataset, outdir: Path, arch: dict,
-         diagnostics: dict) -> None:
+
+def save(heads: eqx.Module, ds: ValueDataset, outdir: Path, arch: dict, diagnostics: dict) -> None:
     """Serialise the stacked heads plus everything needed to use them again.
 
     The metadata is not optional: the input transform, ``Vmax``, the label scale
@@ -355,18 +436,27 @@ def save(heads: eqx.Module, ds: ValueDataset, outdir: Path, arch: dict,
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     eqx.tree_serialise_leaves(outdir / "value_heads.eqx", heads)
-    (outdir / "value_heads.json").write_text(json.dumps({
-        "index_hash": ds.index_hash,
-        "genome_ids": ds.genome_ids,
-        "exchanges": ds.exchanges,
-        "mask": ds.mask.astype(int).tolist(),
-        "mu_scale": ds.mu_scale.tolist(),
-        "x_scale": ds.x_scale.tolist(),
-        "input_transform": "u = c / (Km + c), x = u / (u + x_scale); Km from km_defaults.yaml",
-        "gradient_units": ("d(mu_max)/dx = max(-shadow, 0) * Vmax * (u + x_scale)^2 / x_scale, "
-                           "Vmax = 1000"),
-        "arch": arch,
-    }, indent=2))
+    (outdir / "value_heads.json").write_text(
+        json.dumps(
+            {
+                "index_hash": ds.index_hash,
+                "genome_ids": ds.genome_ids,
+                "exchanges": ds.exchanges,
+                "mask": ds.mask.astype(int).tolist(),
+                "mu_scale": ds.mu_scale.tolist(),
+                "x_scale": ds.x_scale.tolist(),
+                "input_transform": (
+                    "u = c / (Km + c), x = u / (u + x_scale); Km from km_defaults.yaml"
+                ),
+                "gradient_units": (
+                    "d(mu_max)/dx = max(-shadow, 0) * Vmax * (u + x_scale)^2 / x_scale, "
+                    "Vmax = 1000"
+                ),
+                "arch": arch,
+            },
+            indent=2,
+        )
+    )
     (outdir / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2))
 
 
@@ -375,24 +465,74 @@ def load(outdir: Path, width: int = 128, depth: int = 3) -> tuple[eqx.Module, di
     outdir = Path(outdir)
     meta = json.loads((outdir / "value_heads.json").read_text())
     arch = meta.get("arch", {})
-    like = _build(arch.get("arch", "icnn"), jax.random.PRNGKey(0), len(meta["genome_ids"]),
-                  len(meta["exchanges"]), np.array(meta["mask"], dtype=bool),
-                  arch.get("width", width), arch.get("depth", depth), arch.get("emb_dim", 8))
+    like = _build(
+        arch.get("arch", "icnn"),
+        jax.random.PRNGKey(0),
+        len(meta["genome_ids"]),
+        len(meta["exchanges"]),
+        np.array(meta["mask"], dtype=bool),
+        arch.get("width", width),
+        arch.get("depth", depth),
+        arch.get("emb_dim", 8),
+        phi_hidden=arch.get("phi_hidden"),
+        k_code=arch.get("k_code"),
+    )
     return eqx.tree_deserialise_leaves(outdir / "value_heads.eqx", like), meta
 
 
-def run(labels_dir: Path, index_path: Path, outdir: Path, *, eps: float = 1e-3,
-        arch: str = "icnn", width: int = 128, depth: int = 3, epochs: int = 400,
-        batch: int = 512, lr: float = 3e-3, w_grad: float = 1.0, emb_dim: int = 8,
-        seed: int = 0) -> dict:
+def run(
+    labels_dir: Path,
+    index_path: Path,
+    outdir: Path,
+    *,
+    eps: float = 1e-3,
+    arch: str = "icnn",
+    width: int = 128,
+    depth: int = 3,
+    epochs: int = 400,
+    batch: int = 512,
+    lr: float = 3e-3,
+    w_grad: float = 1.0,
+    emb_dim: int = 8,
+    phi_hidden: int | None = None,
+    k_code: int | None = None,
+    seed: int = 0,
+) -> dict:
     """Load labels, train, evaluate, checkpoint. Returns the diagnostics."""
     ds = load_value_dataset(labels_dir, index_path, eps=eps, seed=seed)
-    heads = train_value_heads(ds, arch=arch, width=width, depth=depth, epochs=epochs,
-                              batch=batch, lr=lr, w_grad=w_grad, emb_dim=emb_dim, seed=seed)
+    heads = train_value_heads(
+        ds,
+        arch=arch,
+        width=width,
+        depth=depth,
+        epochs=epochs,
+        batch=batch,
+        lr=lr,
+        w_grad=w_grad,
+        emb_dim=emb_dim,
+        phi_hidden=phi_hidden,
+        k_code=k_code,
+        seed=seed,
+    )
     diagnostics = evaluate(heads, ds, seed=seed, arch=arch)
-    meta = {"arch": arch, "width": width, "depth": depth, "epochs": epochs, "lr": lr,
-            "w_grad": w_grad, "eps": eps, "seed": seed}
+    meta = {
+        "arch": arch,
+        "width": width,
+        "depth": depth,
+        "epochs": epochs,
+        "lr": lr,
+        "w_grad": w_grad,
+        "eps": eps,
+        "seed": seed,
+    }
     if arch.startswith("deepset"):
+        # Only when set: an absent key is what makes `load` fall back to the
+        # width-derived default, so a checkpoint written before these flags existed
+        # still reconstructs.
         meta["emb_dim"] = emb_dim
+        if phi_hidden is not None:
+            meta["phi_hidden"] = phi_hidden
+        if k_code is not None:
+            meta["k_code"] = k_code
     save(heads, ds, outdir, meta, diagnostics)
     return diagnostics

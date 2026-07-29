@@ -1,0 +1,43 @@
+nextflow_pipeline {
+    name "Pipeline stub: M3b Head A sweep (sweep stage)"
+    script "../main.nf"
+    tag "pipeline"
+
+    test("stub wires the sweep stage, both arch branches") {
+        options "-stub"
+        when {
+            params {
+                stage  = "sweep"
+                // The example's smoke sheet: icnn + mlp -> TRAIN_VALUE, rf -> BASELINE_RF.
+                sweep  = "$projectDir/examples/value_sweep/sweep.csv"
+                index  = "$projectDir/examples/value_sweep/index_stub.json"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert path("$outputDir/sweep/stub__icnn/diagnostics.json").exists() },
+                { assert path("$outputDir/sweep/stub__mlp/value_heads.eqx").exists() },
+                { assert path("$outputDir/sweep/stub__rf/diagnostics.json").exists() },
+                // One header + one row per cell: the collect step saw all three.
+                { assert path("$outputDir/sweep_leaderboard.csv").readLines().size() == 4 },
+            )
+        }
+    }
+
+    test("sweep stage requires --sweep") {
+        options "-stub"
+        when {
+            params {
+                stage  = "sweep"
+                index  = "$projectDir/examples/value_sweep/index_stub.json"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            assert workflow.stdout.any { it.contains("needs --sweep") } || workflow.errorReport.contains("needs --sweep")
+        }
+    }
+}

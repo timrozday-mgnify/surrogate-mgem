@@ -218,9 +218,7 @@ class MediumSpec:
         return {
             "bound": float(self.bound),
             "essential": [e for e, keep in zip(exchanges, self.essential, strict=True) if keep],
-            "demand": {
-                e: float(d) for e, d in zip(exchanges, self.demand, strict=True) if d > 0
-            },
+            "demand": {e: float(d) for e, d in zip(exchanges, self.demand, strict=True) if d > 0},
         }
 
     @classmethod
@@ -342,9 +340,7 @@ def medium_spec(
         dropped = base.copy()
         dropped[i] = 0.0
         essential[i] = growth(dropped) < 0.01 * base_growth
-    demand = estimate_demand(
-        community, exchanges, tradeoff, bound, essential, n_probes=n_probes
-    )
+    demand = estimate_demand(community, exchanges, tradeoff, bound, essential, n_probes=n_probes)
     # An exchange the community never draws on cannot change growth; keeping it in
     # the design only adds a dimension the surrogate can memorise noise in.
     demand[essential & (demand <= 0)] = bound

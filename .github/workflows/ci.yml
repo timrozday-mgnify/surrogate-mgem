@@ -24,7 +24,9 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          # `[jax]` too: without it every M3 test module importorskips itself away,
+          # and the value head is the part under active development.
+          pip install -e ".[dev,jax]"
 
       - name: Lint (ruff via pre-commit)
         run: pre-commit run --all-files --show-diff-on-failure
