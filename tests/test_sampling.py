@@ -62,8 +62,15 @@ def test_titrate_media_limits_a_few_nutrients_against_a_replete_background():
     essential[0] = True
     demand = np.array([2.0, 0.01, 100.0, 5.0, 0.5, 0.0])  # orders of magnitude apart
     design = sampling.titrate_media(
-        300, 6, seed=1, scale=demand, keep_range=(0.8, 1.0), essential=essential,
-        span=(0.05, 1.0), replete=(2.0, 5.0), n_limiting=2,
+        300,
+        6,
+        seed=1,
+        scale=demand,
+        keep_range=(0.8, 1.0),
+        essential=essential,
+        span=(0.05, 1.0),
+        replete=(2.0, 5.0),
+        n_limiting=2,
     )
     assert design.shape == (300, 6)
     assert (design[:, 0] > 0).all()  # essentials are never dropped

@@ -125,7 +125,9 @@ def _write_training_history(out_dir: Path, histories: list[dict] | None) -> None
     rows = [
         {"member": m, "epoch": e, "train": tr, "val": va}
         for m, h in enumerate(histories)
-        for e, (tr, va) in enumerate(zip(h["train"], h["val"]))
+        # strict: the two curves are appended in lockstep, one entry per epoch
+        # (model.py), so a length mismatch is a bug rather than a short val run.
+        for e, (tr, va) in enumerate(zip(h["train"], h["val"], strict=True))
     ]
     pd.DataFrame(rows).to_csv(out_dir / "training_history.csv", index=False)
 

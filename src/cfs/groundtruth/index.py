@@ -45,9 +45,9 @@ def derive_index(genome_ids: list[str], exchanges_per_model: list[set[str]]) -> 
     counts = {ex: sum(ex in s for s in exchanges_per_model) for ex in index}
     shared = [ex for ex in index if counts[ex] >= 2]
     private = [ex for ex in index if counts[ex] == 1]
-    mask = np.array(
-        [[ex in s for ex in index] for s in exchanges_per_model], dtype=bool
-    ).reshape(len(genome_ids), len(index))
+    mask = np.array([[ex in s for ex in index] for s in exchanges_per_model], dtype=bool).reshape(
+        len(genome_ids), len(index)
+    )
     return IndexResult(list(genome_ids), index, shared, private, mask)
 
 

@@ -84,9 +84,7 @@ def degeneracy_survey(
                 LOGGER.debug("skip medium %d alpha %.2f: %s", m_i, alpha, exc)
                 continue
             for exch, rng in ranges.items():
-                rows.append(
-                    {"medium": m_i, "alpha": alpha, "exchange": exch, "range": float(rng)}
-                )
+                rows.append({"medium": m_i, "alpha": alpha, "exchange": exch, "range": float(rng)})
     return pd.DataFrame(rows, columns=["medium", "alpha", "exchange", "range"])
 
 
@@ -139,10 +137,7 @@ def recommend_d4(survey: pd.DataFrame) -> dict:
     frac_degenerate = float(degenerate.mean())
     # Per-exchange worst-case fraction of media in which it is degenerate.
     per_exch = (
-        survey.assign(deg=degenerate)
-        .groupby("exchange")["deg"]
-        .mean()
-        .sort_values(ascending=False)
+        survey.assign(deg=degenerate).groupby("exchange")["deg"].mean().sort_values(ascending=False)
     )
     many = per_exch[per_exch > _MANY_FRAC]
 

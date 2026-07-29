@@ -29,15 +29,22 @@ N_BASE, N_ROUND1 = 20, 8
 
 def _rows(gid: str, mids: np.ndarray, rng) -> pd.DataFrame:
     n = len(mids)
-    return pd.DataFrame({
-        "genome_id": gid, "index_hash": "", "medium_id": mids, "alpha": 1.0, "eps": 1e-3,
-        "mu_max": rng.uniform(0.5, 2.0, n), "status": "optimal",
-        # The medium doubles as the medium's identity, so an assertion on x_val is
-        # an assertion on *which media* were held out.
-        "medium": [[float(m), 0.02, 0.01] for m in mids],
-        "z": [[] for _ in mids],
-        "shadow": [[-0.5, -0.1, 0.0] for _ in mids],
-    })
+    return pd.DataFrame(
+        {
+            "genome_id": gid,
+            "index_hash": "",
+            "medium_id": mids,
+            "alpha": 1.0,
+            "eps": 1e-3,
+            "mu_max": rng.uniform(0.5, 2.0, n),
+            "status": "optimal",
+            # The medium doubles as the medium's identity, so an assertion on x_val is
+            # an assertion on *which media* were held out.
+            "medium": [[float(m), 0.02, 0.01] for m in mids],
+            "z": [[] for _ in mids],
+            "shadow": [[-0.5, -0.1, 0.0] for _ in mids],
+        }
+    )
 
 
 def _u_space(ds):

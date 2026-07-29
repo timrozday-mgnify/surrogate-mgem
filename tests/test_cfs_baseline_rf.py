@@ -82,6 +82,7 @@ def test_a_step_across_the_kink_reads_the_wrong_regime():
 
 def test_step_is_clipped_at_zero_concentration():
     """u = 0 is the depletion corner; the step must not go negative."""
+
     class Identity:
         """d(mu)/du = 1 exactly, so the returned slope reads the step taken."""
 

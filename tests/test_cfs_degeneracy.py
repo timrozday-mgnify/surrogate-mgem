@@ -30,14 +30,12 @@ def test_recommend_localised():
 
 
 def test_recommend_genuine():
-    rec = recommend_d4(
-        _frame({f"EX_{i}": [5.0, 5.0, 5.0] for i in range(6)})
-    )
+    rec = recommend_d4(_frame({f"EX_{i}": [5.0, 5.0, 5.0] for i in range(6)}))
     assert rec["verdict"] == "genuine"
 
 
 def test_empty_survey_is_unknown():
-    assert recommend_d4(pd.DataFrame()) ["verdict"] == "unknown"
+    assert recommend_d4(pd.DataFrame())["verdict"] == "unknown"
 
 
 def test_exchange_degeneracy_on_toy():

@@ -47,13 +47,21 @@ def _synthetic() -> ValueDataset:
     gvalid = np.ones((G, N), dtype=bool)
     n_val = N // 5
     return ValueDataset(
-        genome_ids=[f"g{i}" for i in range(G)], exchanges=[f"EX_{m}" for m in range(M)],
+        genome_ids=[f"g{i}" for i in range(G)],
+        exchanges=[f"EX_{m}" for m in range(M)],
         mask=mask,
-        x_train=x[:, n_val:], mu_train=mu[:, n_val:], g_train=g[:, n_val:],
+        x_train=x[:, n_val:],
+        mu_train=mu[:, n_val:],
+        g_train=g[:, n_val:],
         gvalid_train=gvalid[:, n_val:],
-        x_val=x[:, :n_val], mu_val=mu[:, :n_val], g_val=g[:, :n_val], gvalid_val=gvalid[:, :n_val],
-        mu_scale=mu.std(axis=1).astype(np.float32), x_scale=np.ones((G, M), np.float32),
-        index_hash="test", rounds_present=[0],
+        x_val=x[:, :n_val],
+        mu_val=mu[:, :n_val],
+        g_val=g[:, :n_val],
+        gvalid_val=gvalid[:, :n_val],
+        mu_scale=mu.std(axis=1).astype(np.float32),
+        x_scale=np.ones((G, M), np.float32),
+        index_hash="test",
+        rounds_present=[0],
     )
 
 
@@ -119,8 +127,7 @@ def test_deepset_phi_knobs_override_the_width_derivation():
     assert default.trunk.b[0].shape == (64 // 8,)
     assert default.trunk.ob.shape == (16,)
 
-    wide = ds_stack(jax.random.PRNGKey(0), 2, M, mask, width=64, depth=2,
-                    phi_hidden=32, k_code=48)
+    wide = ds_stack(jax.random.PRNGKey(0), 2, M, mask, width=64, depth=2, phi_hidden=32, k_code=48)
     assert wide.trunk.b[0].shape == (32,)
     assert wide.trunk.ob.shape == (48,)
     # `rho` reads the pooled code, so k_code must have moved its input width too.
@@ -135,16 +142,47 @@ def test_organism_arrays_signs_and_scatter(tmp_path):
     (tmp_path / "g0.exchanges.json").write_text(json.dumps({"exchanges": ex}))
     shard = tmp_path / "genome_id=g0" / "eps=0.001"
     shard.mkdir(parents=True)
-    pd.DataFrame([
-        # a growing medium and a dead one; alpha != 1 rows must be dropped
-        {"genome_id": "g0", "index_hash": "h", "medium_id": 0, "alpha": 1.0, "eps": 1e-3,
-         "mu_max": 2.0, "status": "optimal", "medium": [0.02, 0.0], "z": [], "shadow": [-0.5, 0.0]},
-        {"genome_id": "g0", "index_hash": "h", "medium_id": 0, "alpha": 0.5, "eps": 1e-3,
-         "mu_max": 2.0, "status": "optimal", "medium": [0.02, 0.0], "z": [], "shadow": [-0.5, 0.0]},
-        {"genome_id": "g0", "index_hash": "h", "medium_id": 1, "alpha": 1.0, "eps": 1e-3,
-         "mu_max": 0.0, "status": "optimal", "medium": [0.0, 0.0], "z": [],
-         "shadow": [-10000.0, 0.0]},
-    ]).to_parquet(shard / "part.parquet", index=False)
+    pd.DataFrame(
+        [
+            # a growing medium and a dead one; alpha != 1 rows must be dropped
+            {
+                "genome_id": "g0",
+                "index_hash": "h",
+                "medium_id": 0,
+                "alpha": 1.0,
+                "eps": 1e-3,
+                "mu_max": 2.0,
+                "status": "optimal",
+                "medium": [0.02, 0.0],
+                "z": [],
+                "shadow": [-0.5, 0.0],
+            },
+            {
+                "genome_id": "g0",
+                "index_hash": "h",
+                "medium_id": 0,
+                "alpha": 0.5,
+                "eps": 1e-3,
+                "mu_max": 2.0,
+                "status": "optimal",
+                "medium": [0.02, 0.0],
+                "z": [],
+                "shadow": [-0.5, 0.0],
+            },
+            {
+                "genome_id": "g0",
+                "index_hash": "h",
+                "medium_id": 1,
+                "alpha": 1.0,
+                "eps": 1e-3,
+                "mu_max": 0.0,
+                "status": "optimal",
+                "medium": [0.0, 0.0],
+                "z": [],
+                "shadow": [-10000.0, 0.0],
+            },
+        ]
+    ).to_parquet(shard / "part.parquet", index=False)
 
     km_cfg = {"classes": {"sugars": 0.01}, "default": 0.01, "keywords": {"sugars": ["glc"]}}
     col = {"EX_o2_e": 0, "EX_glc__D_e": 1, "EX_other_e": 2}

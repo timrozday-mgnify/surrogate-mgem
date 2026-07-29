@@ -58,12 +58,19 @@ def _row(genome_id, index_hash, medium_id, medium, sol, ex_order):
     }
 
 
-def generate_organism(model, genome_id: str, index_hash: str, outdir: Path,
-                      cfg: SamplingConfig | None = None, km_cfg: dict | None = None,
-                      subspace=None, scales: dict[str, float] | None = None,
-                      focus_weights: dict[str, float] | None = None,
-                      roster_median: dict[str, float] | None = None,
-                      round_idx: int = 0) -> OrganismShards:
+def generate_organism(
+    model,
+    genome_id: str,
+    index_hash: str,
+    outdir: Path,
+    cfg: SamplingConfig | None = None,
+    km_cfg: dict | None = None,
+    subspace=None,
+    scales: dict[str, float] | None = None,
+    focus_weights: dict[str, float] | None = None,
+    roster_median: dict[str, float] | None = None,
+    round_idx: int = 0,
+) -> OrganismShards:
     """Generate all label shards for one organism (plan §4.5).
 
     Each metabolite's sampling band is centred on its own limiting regime; where
@@ -87,8 +94,13 @@ def generate_organism(model, genome_id: str, index_hash: str, outdir: Path,
     subspace = subspace if subspace is not None else active_subspace(model, genome_id, km_cfg)
 
     sampled = subspace.active or subspace.background
-    probe = (demand_probe(model, sampled, km_cfg, lo=cfg.log10_lo, hi=cfg.log10_hi,
-                          steps=cfg.probe_steps) if cfg.probe else {})
+    probe = (
+        demand_probe(
+            model, sampled, km_cfg, lo=cfg.log10_lo, hi=cfg.log10_hi, steps=cfg.probe_steps
+        )
+        if cfg.probe
+        else {}
+    )
     scales, sources = band_scales(probe, scales, roster_median, sampled)
     media = sample_media(subspace, km_cfg, cfg, scales, focus_weights)
     ex_order = [ex.id for ex in model.exchanges]
@@ -113,8 +125,14 @@ def generate_organism(model, genome_id: str, index_hash: str, outdir: Path,
     for eps in cfg.eps_levels:
         media_e = media if eps == primary else subset
         rows = [
-            _row(genome_id, index_hash, mid0 + mid, medium,
-                 solve(model, medium, alpha, eps, km_cfg), ex_order)
+            _row(
+                genome_id,
+                index_hash,
+                mid0 + mid,
+                medium,
+                solve(model, medium, alpha, eps, km_cfg),
+                ex_order,
+            )
             for mid, medium in enumerate(media_e)
             for alpha in cfg.alphas
         ]
@@ -126,11 +144,15 @@ def generate_organism(model, genome_id: str, index_hash: str, outdir: Path,
     return OrganismShards(genome_id, len(media), paths)
 
 
-def generate_roster(roster, index_path: Path, outdir: Path,
-                    cfg: SamplingConfig | None = None,
-                    scales: dict[str, dict[str, float]] | None = None,
-                    focus_weights: dict[str, dict[str, float]] | None = None,
-                    round_idx: int = 0) -> list[OrganismShards]:
+def generate_roster(
+    roster,
+    index_path: Path,
+    outdir: Path,
+    cfg: SamplingConfig | None = None,
+    scales: dict[str, dict[str, float]] | None = None,
+    focus_weights: dict[str, dict[str, float]] | None = None,
+    round_idx: int = 0,
+) -> list[OrganismShards]:
     """Run :func:`generate_organism` for every roster model (serial; see module doc).
 
     ``scales`` is keyed by ``genome_id`` — the limiting regime is per organism, not
@@ -158,8 +180,18 @@ def generate_roster(roster, index_path: Path, outdir: Path,
     shards = []
     for gm in roster:
         model = read_sbml_model(str(gm.model_path))
-        shards.append(generate_organism(model, gm.genome_id, ihash, outdir, cfg, km_cfg,
-                                        scales=scales.get(gm.genome_id),
-                                        focus_weights=focus_weights.get(gm.genome_id),
-                                        roster_median=roster_median, round_idx=round_idx))
+        shards.append(
+            generate_organism(
+                model,
+                gm.genome_id,
+                ihash,
+                outdir,
+                cfg,
+                km_cfg,
+                scales=scales.get(gm.genome_id),
+                focus_weights=focus_weights.get(gm.genome_id),
+                roster_median=roster_median,
+                round_idx=round_idx,
+            )
+        )
     return shards

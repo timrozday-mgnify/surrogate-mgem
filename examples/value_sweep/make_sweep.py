@@ -38,8 +38,24 @@ def _labels(v: str) -> tuple[str, str]:
     return name, path
 
 
-def cells(labels, archs, *, width, depth, epochs, batch, lr, w_grad, eps, emb_dim,
-          phi_hidden, k_code, n_estimators, delta, seed):
+def cells(
+    labels,
+    archs,
+    *,
+    width,
+    depth,
+    epochs,
+    batch,
+    lr,
+    w_grad,
+    eps,
+    emb_dim,
+    phi_hidden,
+    k_code,
+    n_estimators,
+    delta,
+    seed,
+):
     """Yield ``(cell_id, arch, labels_path, args)`` for the cross product.
 
     Deduplicated by cell id: an axis an arch ignores (``--width`` for ``rf``) would
@@ -47,22 +63,42 @@ def cells(labels, archs, *, width, depth, epochs, batch, lr, w_grad, eps, emb_di
     """
     seen = set()
     axes = {
-        "--width": width, "--depth": depth, "--epochs": epochs, "--batch": batch,
-        "--lr": lr, "--w-grad": w_grad, "--eps": eps, "--emb-dim": emb_dim,
-        "--phi-hidden": phi_hidden, "--k-code": k_code,
-        "--n-estimators": n_estimators, "--delta": delta, "--seed": seed,
+        "--width": width,
+        "--depth": depth,
+        "--epochs": epochs,
+        "--batch": batch,
+        "--lr": lr,
+        "--w-grad": w_grad,
+        "--eps": eps,
+        "--emb-dim": emb_dim,
+        "--phi-hidden": phi_hidden,
+        "--k-code": k_code,
+        "--n-estimators": n_estimators,
+        "--delta": delta,
+        "--seed": seed,
     }
     # Short cell-id tag per axis, in the `__k<v>` style of the legacy sweep's cells.
-    tags = {"--width": "w", "--depth": "d", "--epochs": "e", "--batch": "b", "--lr": "lr",
-            "--w-grad": "g", "--eps": "eps", "--emb-dim": "emb", "--phi-hidden": "ph",
-            "--k-code": "kc", "--n-estimators": "t", "--delta": "dl", "--seed": "s"}
+    tags = {
+        "--width": "w",
+        "--depth": "d",
+        "--epochs": "e",
+        "--batch": "b",
+        "--lr": "lr",
+        "--w-grad": "g",
+        "--eps": "eps",
+        "--emb-dim": "emb",
+        "--phi-hidden": "ph",
+        "--k-code": "kc",
+        "--n-estimators": "t",
+        "--delta": "dl",
+        "--seed": "s",
+    }
     names, values = list(axes), [axes[k] for k in axes]
     # Only *swept* axes go in the cell id -- otherwise every id carries the same
     # dozen fixed knobs and the leaderboard's key column is unreadable. The full
     # flag string stays in the samplesheet's `args` column either way.
     varying = {k for k, v in axes.items() if len(v) > 1} | {"--arch"}
-    for (lname, lpath), arch, combo in itertools.product(labels, archs,
-                                                         itertools.product(*values)):
+    for (lname, lpath), arch, combo in itertools.product(labels, archs, itertools.product(*values)):
         keep = {}
         for flag, val in zip(names, combo, strict=True):
             if val == "":  # an axis left at the CLI's own default
@@ -74,8 +110,7 @@ def cells(labels, archs, *, width, depth, epochs, batch, lr, w_grad, eps, emb_di
             if arch == "rf" and flag not in _RF_ONLY | {"--eps", "--seed"}:
                 continue
             keep[flag] = val
-        cell = "__".join([lname, arch]
-                         + [f"{tags[f]}{v}" for f, v in keep.items() if f in varying])
+        cell = "__".join([lname, arch] + [f"{tags[f]}{v}" for f, v in keep.items() if f in varying])
         if cell in seen:
             continue
         seen.add(cell)
@@ -83,13 +118,24 @@ def cells(labels, archs, *, width, depth, epochs, batch, lr, w_grad, eps, emb_di
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--labels", type=_labels, action="append", required=True, metavar="NAME=PATH",
-                   help="Label root, repeatable. NAME lands in the cell id; the rows "
-                        "arm of the sweep is two of these (4000 vs 20000 media).")
-    p.add_argument("--arch", type=_csv, default=["icnn"],
-                   help="icnn,deepset,deepset-private,mlp,rf (rf -> `cfs baseline-rf`).")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--labels",
+        type=_labels,
+        action="append",
+        required=True,
+        metavar="NAME=PATH",
+        help="Label root, repeatable. NAME lands in the cell id; the rows "
+        "arm of the sweep is two of these (4000 vs 20000 media).",
+    )
+    p.add_argument(
+        "--arch",
+        type=_csv,
+        default=["icnn"],
+        help="icnn,deepset,deepset-private,mlp,rf (rf -> `cfs baseline-rf`).",
+    )
     p.add_argument("--width", type=_csv, default=["128"])
     p.add_argument("--depth", type=_csv, default=["3"])
     p.add_argument("--epochs", type=_csv, default=["1500"])
@@ -106,10 +152,25 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-o", "--out", default="-", help="Output CSV ('-' = stdout).")
     a = p.parse_args(argv)
 
-    rows = list(cells(a.labels, a.arch, width=a.width, depth=a.depth, epochs=a.epochs,
-                      batch=a.batch, lr=a.lr, w_grad=a.w_grad, eps=a.eps, emb_dim=a.emb_dim,
-                      phi_hidden=a.phi_hidden, k_code=a.k_code, n_estimators=a.n_estimators,
-                      delta=a.delta, seed=a.seed))
+    rows = list(
+        cells(
+            a.labels,
+            a.arch,
+            width=a.width,
+            depth=a.depth,
+            epochs=a.epochs,
+            batch=a.batch,
+            lr=a.lr,
+            w_grad=a.w_grad,
+            eps=a.eps,
+            emb_dim=a.emb_dim,
+            phi_hidden=a.phi_hidden,
+            k_code=a.k_code,
+            n_estimators=a.n_estimators,
+            delta=a.delta,
+            seed=a.seed,
+        )
+    )
     out = sys.stdout if a.out == "-" else open(a.out, "w")
     with out:
         print("cell_id,arch,labels,args", file=out)
@@ -121,10 +182,25 @@ def main(argv: list[str] | None = None) -> int:
 
 def demo() -> None:
     """Self-check: the cross product, and that arch-only flags stay on their arch."""
-    rows = list(cells([("bands", "/labels")], ["icnn", "rf"], width=["128", "512"],
-                      depth=["3"], epochs=["1500"], batch=["512"], lr=["3e-3"],
-                      w_grad=["1"], eps=["1e-3"], emb_dim=["8"], phi_hidden=[""],
-                      k_code=[""], n_estimators=["100"], delta=["0.05"], seed=["0"]))
+    rows = list(
+        cells(
+            [("bands", "/labels")],
+            ["icnn", "rf"],
+            width=["128", "512"],
+            depth=["3"],
+            epochs=["1500"],
+            batch=["512"],
+            lr=["3e-3"],
+            w_grad=["1"],
+            eps=["1e-3"],
+            emb_dim=["8"],
+            phi_hidden=[""],
+            k_code=[""],
+            n_estimators=["100"],
+            delta=["0.05"],
+            seed=["0"],
+        )
+    )
     # icnn takes --width (2 values); rf ignores it, so its two combos dedupe to one.
     icnn = [r for r in rows if r[1] == "icnn"]
     rf = [r for r in rows if r[1] == "rf"]
@@ -137,10 +213,25 @@ def demo() -> None:
     assert "--phi-hidden" not in icnn[0][3], icnn[0]
     # deepset-only flags reach a deepset row; an empty axis value is dropped, which
     # is how a knob is left at the CLI's own default.
-    ds = list(cells([("bands", "/l")], ["deepset"], width=["128"], depth=["3"],
-                    epochs=["10"], batch=["512"], lr=["3e-3"], w_grad=["1"], eps=["1e-3"],
-                    emb_dim=["8"], phi_hidden=["64"], k_code=["64"], n_estimators=["100"],
-                    delta=["0.05"], seed=["0"]))
+    ds = list(
+        cells(
+            [("bands", "/l")],
+            ["deepset"],
+            width=["128"],
+            depth=["3"],
+            epochs=["10"],
+            batch=["512"],
+            lr=["3e-3"],
+            w_grad=["1"],
+            eps=["1e-3"],
+            emb_dim=["8"],
+            phi_hidden=["64"],
+            k_code=["64"],
+            n_estimators=["100"],
+            delta=["0.05"],
+            seed=["0"],
+        )
+    )
     assert "--phi-hidden 64 --k-code 64" in ds[0][3], ds[0]
     print("demo ok")
 

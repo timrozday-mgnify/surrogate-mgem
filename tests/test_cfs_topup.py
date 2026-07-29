@@ -52,10 +52,16 @@ def test_focus_weights_move_media_to_the_weak_metabolite():
 
     even = counts(None)
     # EX_m0_e is the one the surrogate got wrong.
-    skewed = counts(topup_weights({
-        "EX_m0_e": {"grad_cosine": 0.1}, "EX_m1_e": {"grad_cosine": 0.95},
-        "EX_m2_e": {"grad_cosine": 0.95}, "EX_m3_e": {"grad_cosine": 0.95},
-    }))
+    skewed = counts(
+        topup_weights(
+            {
+                "EX_m0_e": {"grad_cosine": 0.1},
+                "EX_m1_e": {"grad_cosine": 0.95},
+                "EX_m2_e": {"grad_cosine": 0.95},
+                "EX_m3_e": {"grad_cosine": 0.95},
+            }
+        )
+    )
     assert skewed["EX_m0_e"] > even["EX_m0_e"]
     assert all(skewed[e] > 0 for e in ex)  # the floor keeps everyone represented
 
@@ -105,15 +111,36 @@ def test_topup_cli_weights_every_metabolite_including_the_never_measured(tmp_pat
     from cfs.sampling.active_subspace import write_subspaces
 
     ex = ["EX_seen_e", "EX_bad_e", "EX_blind_e"]
-    write_subspaces([ActiveSubspace("g0", ex, [], dict.fromkeys(ex, 1.0), 5.0)],
-                    tmp_path / "g0.subspace.json")
-    diag = {"per_organism": {"g0": {"per_limiting_metabolite": {
-        "EX_seen_e": {"grad_cosine": 0.95}, "EX_bad_e": {"grad_cosine": 0.1}}}}}
+    write_subspaces(
+        [ActiveSubspace("g0", ex, [], dict.fromkeys(ex, 1.0), 5.0)], tmp_path / "g0.subspace.json"
+    )
+    diag = {
+        "per_organism": {
+            "g0": {
+                "per_limiting_metabolite": {
+                    "EX_seen_e": {"grad_cosine": 0.95},
+                    "EX_bad_e": {"grad_cosine": 0.1},
+                }
+            }
+        }
+    }
     (tmp_path / "diagnostics.json").write_text(json.dumps(diag))
 
     out = tmp_path / "weights.json"
-    assert main(["topup", "--diagnostics", str(tmp_path / "diagnostics.json"),
-                 "--labels", str(tmp_path), "--out", str(out)]) == 0
+    assert (
+        main(
+            [
+                "topup",
+                "--diagnostics",
+                str(tmp_path / "diagnostics.json"),
+                "--labels",
+                str(tmp_path),
+                "--out",
+                str(out),
+            ]
+        )
+        == 0
+    )
 
     w = json.loads(out.read_text())["g0"]
     assert set(w) == set(ex) and sum(w.values()) == pytest.approx(1.0)
