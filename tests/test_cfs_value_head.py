@@ -28,12 +28,19 @@ G, M, N = 3, 6, 400
 
 def _synthetic() -> ValueDataset:
     """mu = sum_m w_m x_m / (x_m + a_m) — concave, *non-decreasing* (which the head
-    now is by construction), gradient known exactly."""
+    now is by construction), gradient known exactly.
+
+    The half-saturation ``a_m`` is a property of the **metabolite**, shared across
+    organisms, while the weight ``w_m`` is per organism. That is the assumption the
+    shared DeepSet trunk encodes (one ``phi`` per metabolite for the whole roster,
+    a per-organism ``rho``), so this target is expressible by every architecture in
+    the registry and a failure here is a wiring fault rather than a capacity one.
+    """
     rng = np.random.default_rng(0)
     mask = np.ones((G, M), dtype=bool)
     mask[1, -2:] = False  # one organism missing two metabolites
     x = rng.uniform(0, 1, (G, N, M)).astype(np.float32) * mask[:, None, :]
-    a = rng.uniform(0.2, 0.8, (G, 1, M)).astype(np.float32)
+    a = rng.uniform(0.2, 0.8, (1, 1, M)).astype(np.float32)
     w = rng.uniform(0.5, 2.0, (G, 1, M)).astype(np.float32) * mask[:, None, :]
     mu = np.sum(w * x / (x + a), axis=-1)
     g = (w * a / (x + a) ** 2) * mask[:, None, :]
@@ -46,20 +53,32 @@ def _synthetic() -> ValueDataset:
         gvalid_train=gvalid[:, n_val:],
         x_val=x[:, :n_val], mu_val=mu[:, :n_val], g_val=g[:, :n_val], gvalid_val=gvalid[:, :n_val],
         mu_scale=mu.std(axis=1).astype(np.float32), x_scale=np.ones((G, M), np.float32),
-        index_hash="test",
+        index_hash="test", rounds_present=[0],
     )
 
 
-def test_gate_on_a_known_concave_target():
+@pytest.mark.parametrize("arch", ["icnn", "deepset", "deepset-private"])
+def test_gate_on_a_known_concave_target(arch):
     ds = _synthetic()
     # The sign-constrained head converges slower than the unconstrained one did:
     # 600 epochs at lr 1e-2 stops at cosine 0.84 on this target, which is a
     # training budget, not a wiring fault.
-    heads = train_value_heads(ds, width=64, depth=2, epochs=2000, batch=64, lr=3e-2)
-    diag = evaluate(heads, ds)
+    heads = train_value_heads(ds, arch=arch, width=64, depth=2, epochs=2000, batch=64, lr=3e-2)
+    diag = evaluate(heads, ds, arch=arch)
     assert diag["passed"], diag["per_organism"]
     for gid, d in diag["per_organism"].items():
+        # Structural for every concave arch: non-zero means a sign
+        # reparameterisation is broken, not that the fit is poor.
         assert d["concavity_violation_rate"] == 0.0, gid
+
+
+def test_unconstrained_mlp_trains_but_is_not_concave():
+    """The ceiling measurement is wired up — and is *not* a usable head."""
+    ds = _synthetic()
+    heads = train_value_heads(ds, arch="mlp", width=64, depth=2, epochs=200, batch=64, lr=3e-3)
+    diag = evaluate(heads, ds, arch="mlp")
+    assert diag["arch"] == "mlp"
+    assert all(np.isfinite(d["grad_cosine"]) for d in diag["per_organism"].values())
 
 
 def test_untrained_head_is_concave_monotone_and_masked():
@@ -107,7 +126,8 @@ def test_organism_arrays_signs_and_scatter(tmp_path):
 
     km_cfg = {"classes": {"sugars": 0.01}, "default": 0.01, "keywords": {"sugars": ["glc"]}}
     col = {"EX_o2_e": 0, "EX_glc__D_e": 1, "EX_other_e": 2}
-    x, mu, g, gvalid, mask, ihash = _organism_arrays(tmp_path, "g0", 1e-3, col, km_cfg, 3)
+    x, mu, g, gvalid, mask, ihash, mid = _organism_arrays(tmp_path, "g0", 1e-3, col, km_cfg, 3)
+    assert mid.tolist() == [0, 1]
 
     assert x.shape == (2, 3) and ihash == "h"
     assert mask.tolist() == [True, True, False]

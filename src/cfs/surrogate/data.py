@@ -62,6 +62,7 @@ class ValueDataset:
     mu_scale: np.ndarray  # (G,) per-organism label std; loss is dimensionless
     x_scale: np.ndarray  # (G, M) per-metabolite saturation constant s; x is already x/(x+s)
     index_hash: str
+    rounds_present: list[int]  # §4.6 top-up rounds in the training set; val is always round 0
 
 
 def _saturation(c: np.ndarray, km: np.ndarray) -> np.ndarray:
@@ -125,7 +126,8 @@ def _organism_arrays(labels_dir: Path, gid: str, eps: float, col: dict[str, int]
 
     mask = np.zeros(n_shared, dtype=bool)
     mask[pos] = True
-    return x, mu.astype(np.float32), g, gvalid, mask, df["index_hash"].iloc[0]
+    return (x, mu.astype(np.float32), g, gvalid, mask, df["index_hash"].iloc[0],
+            df["medium_id"].to_numpy(dtype=np.int64))
 
 
 def _kink_scale(x: np.ndarray, g: np.ndarray) -> np.ndarray:
@@ -164,9 +166,20 @@ def load_value_dataset(labels_dir: Path | str, index_path: Path | str,
 
     The split is by ``medium_id``, never by row: media are the independent unit.
     Every shard must carry the same ``index_hash`` (P13) or this raises.
+
+    **The held-out set is drawn from the base design only** — round-0 media, never
+    a §4.6 top-up round. Top-up rounds deliberately sample where the model is
+    worst, so letting them into the validation set makes the *test* harder every
+    round and the gate stops being comparable to its own previous value: the
+    probe-band runs went 491 -> 595 -> 781 usable held-out rows over two rounds,
+    and the cosine they reported fell accordingly. Permuting the round-0 media
+    alone keeps the held-out set byte-identical whether the run has 0 rounds or 3,
+    which is what makes a round-over-round number mean anything. Top-up media all
+    go to training, which is what they were generated for.
     """
     from cfs.groundtruth.index import index_hash, load_index
     from cfs.groundtruth.solve import load_km_defaults
+    from cfs.sampling.generate import _ROUND_STRIDE
 
     labels_dir, index_path = Path(labels_dir), Path(index_path)
     frozen = load_index(index_path)
@@ -199,10 +212,22 @@ def load_value_dataset(labels_dir: Path | str, index_path: Path | str,
     if not (mask == frozen_mask).all():
         raise ValueError("sidecar exchange lists disagree with the frozen index mask (P13)")
 
-    n = x.shape[1]
-    perm = np.random.default_rng(seed).permutation(n)
-    n_val = max(1, int(round(val_frac * n)))
-    vi, ti = perm[:n_val], perm[n_val:]
+    # Round-0 media are the base design; `_organism_arrays` sorts by `medium_id`
+    # and round N is offset by N * _ROUND_STRIDE, so they are the leading block and
+    # their indices do not move when a top-up shard is added.
+    mid = np.stack([p[6] for p in parts])
+    if not (mid == mid[0]).all():
+        raise ValueError("organisms have different medium_ids; cannot stack (§6.1)")
+    rounds = mid[0] // _ROUND_STRIDE
+    base = np.flatnonzero(rounds == 0)
+    if not len(base):
+        raise ValueError("no round-0 media: the held-out set is the base design only")
+    perm = np.random.default_rng(seed).permutation(base)
+    n_val = max(1, int(round(val_frac * len(base))))
+    # Top-up media are appended to train rather than mixed into the permutation, so
+    # a round-free label set reproduces the pre-fix split exactly.
+    vi = perm[:n_val]
+    ti = np.concatenate([perm[n_val:], np.flatnonzero(rounds > 0)])
 
     # Put each metabolite's ramp at O(1) with a second MM map, x' = x / (x + s_m).
     # A *linear* rescale cannot do this: the ion metabolites limit at x ~ 1.4e-4,
@@ -227,11 +252,15 @@ def load_value_dataset(labels_dir: Path | str, index_path: Path | str,
 
     mu_scale = mu.std(axis=1)
     mu_scale[mu_scale <= 0] = 1.0
-    LOGGER.info("%d organisms x %d media, %d shared exchanges, |M_i| %d-%d",
-                len(gids), n, len(exchanges), mask.sum(1).min(), mask.sum(1).max())
+    present = sorted(int(r) for r in np.unique(rounds))
+    LOGGER.info("%d organisms x %d media (%d train / %d held out, base design only), "
+                "rounds %s, %d shared exchanges, |M_i| %d-%d",
+                len(gids), len(rounds), len(ti), len(vi), present, len(exchanges),
+                mask.sum(1).min(), mask.sum(1).max())
     return ValueDataset(
         genome_ids=gids, exchanges=exchanges, mask=mask,
         x_train=x[:, ti], mu_train=mu[:, ti], g_train=g[:, ti], gvalid_train=gvalid[:, ti],
         x_val=x[:, vi], mu_val=mu[:, vi], g_val=g[:, vi], gvalid_val=gvalid[:, vi],
         mu_scale=mu_scale.astype(np.float32), x_scale=x_scale, index_hash=hashes.pop(),
+        rounds_present=present,
     )

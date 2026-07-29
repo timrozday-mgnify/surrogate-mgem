@@ -24,7 +24,7 @@
 > | M1 degeneracy → D4 | **done, V1 complete** — **68.9%** of 371k exchange-FVA observations degenerate roster-wide (59.7–82.8% per genome; 88% at α=0.7 vs 50% at α=1.0) ⇒ **D4 = elastic net** | `src/cfs/validate/degeneracy.py` |
 > | M2 solve interface | **done, §3.4 gate verified on a real GEM** — MM uptake bounds (§3.3), FBA for `mu_max` + duals, then the **Clarabel** elastic-net QP for `z` | `src/cfs/groundtruth/solve.py` |
 > | §4 sampling + bulk labels | **done, generated** — active subspace, stratified-Sobol design, parquet driver | `src/cfs/sampling/`, `--stage labels` |
-> | M3 Head A (value) | **built and training on the real roster; gate NOT met** — held-out gradient cosine **worst 0.733 / mean 0.800** against the required 0.99, measured in `u` space (see below). Value R² 0.54, concavity violations exactly 0 (structural), Hessian cond 3.4e7 | `src/cfs/surrogate/`, `cfs train-value` |
+> | M3 Head A (value) | **built; gate NOT met; four architectures measured** — best is still the ICNN at **worst 0.733 / mean 0.800** against the required 0.99, in `u` space. Value R² 0.54 (a forest gets **0.979** on the same split — the deficit is architecture, not labels), concavity violations exactly 0 (structural), Hessian cond 3.4e7. **4.29M parameters**, 0.35 s/epoch | `src/cfs/surrogate/`, `cfs train-value`, `cfs baseline-rf` |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
@@ -154,26 +154,123 @@
 > | `value_p2` + round 1 (20% budget, `1-cos` over ~35 mets) | 0.696 | 0.780 | 0.517 |
 > | `value_p3` + round 2 (40% budget, **80% on the 5 worst cells**) | **0.648** | 0.771 | 0.524 |
 >
-> **More media where the model is worst makes it worse.** On the worst organism
-> `EX_mg2_e` went 30 → 89 held-out rows and its cosine *fell* 0.140 → 0.082; every
-> targeted cell fell (`asp__L` 0.195 → 0.105, `malthp` 0.386 → 0.297, `so4` 0.436 →
-> 0.352) and so did the roster mean. So the Spearman-0.72 coverage↔cosine relation
-> is **correlational, not causal**: cells with many rows are the easy dominant
-> metabolites, and buying rows for the ions spends head capacity on rows this
-> architecture cannot fit. Do not re-run this experiment expecting a different
-> answer, and do not read `check_coverage.py` numbers as a gate predictor.
+> ~~**More media where the model is worst makes it worse.**~~ **RETRACTED,
+> 2026-07-29 — the p1→p3 table above was scored against a moving ruler.**
+> `load_value_dataset` permuted *all* media into the train/val split, and
+> `_organism_arrays` globs every parquet in an `(organism, eps)` dir — including
+> each `part.round<N>.parquet`. So §4.6 top-up media, drawn *deliberately* from the
+> regions the model is worst at, landed in the **validation** set too and the
+> held-out set got harder every round. Measured on one organism's usable held-out
+> rows: **p1 491 → p2 595 → p3 781**. Three different tests, three numbers, read as
+> a trend. The conclusion that top-up hurts is **not established**; neither is the
+> claim that the coverage↔cosine relation is merely correlational.
 >
-> **Next.** Architecture and D10 scale, item (2) below — the ions are the
-> remaining error on 21/21 organisms and neither band placement nor label volume
-> touches them. The §4.7/§4.6 machinery stays: it removed the two-pass dependency
-> and it is how a *new* genome gets labelled at all. (1) was tried and is closed.
+> Fixed in `cfs.surrogate.data.load_value_dataset`: **val is a seeded sample of
+> round-0 media only**, top-up media are appended to train, and `diagnostics.json`
+> now records `n_val_media` / `n_train_media` / `rounds_present` so two runs can be
+> checked for comparability. Top-up media are appended rather than mixed into the
+> permutation, so a round-free label set reproduces the old split exactly —
+> verified: a re-run of `value_b1` reproduces 0.7328/0.8005/0.5383 and every
+> per-organism `EX_mg2_e` cell bit-identically. The round shards were deleted in
+> the 2026-07-27 cleanup, so p2/p3 cannot be retro-scored; the fix goes forward.
+> Regression test: `tests/test_cfs_data_split.py`. **Re-running the top-up
+> experiment on the fixed ruler is open work, not a closed question.**
 >
-> Gate and R² both have to come from **architecture and D10 scale**, not loss
-> weights: `w_grad` only trades the heads (1 → 0.63 cosine / 0.72 R², 10 → 0.66 /
-> 0.62) and neither end reaches the "R² ≥ 0.9" balance rule. Checkpoints:
-> `20hm_bands/value_b1/` (best worst-cosine to date, 0.733),
-> `20hm_probe/value_p{1,2,3}/` (probe bands + the two top-up rounds),
-> `20hm/value_v2/{u_w1,u_w10}/` (pre-band baseline).
+> ### Architecture trial — measured, 2026-07-29
+>
+> All on `20hm_bands/`, identical knobs (128/3/1500/512/3e-3/`w_grad` 1/`eps` 1e-3/
+> seed 0) and the *same* 800 held-out round-0 media, so only the architecture
+> varies. `cfs train-value --arch {icnn,deepset,deepset-private,mlp}`, plus
+> `cfs baseline-rf`.
+>
+> | run | worst | mean cos | R² | Hessian cond | train loss (value) |
+> | --- | --- | --- | --- | --- | --- |
+> | `value_b1` icnn (baseline) | **0.733** | **0.800** | 0.538 | 3.4e7 | 0.62 (0.375) |
+> | `value_icnn_b64` icnn, batch 64 | 0.666 | 0.793 | 0.547 | 5.6e9 | — |
+> | `value_ds1` deepset, shared trunk | 0.259 | 0.432 | 0.111 | **4.0e3** | 1.35 (0.895) |
+> | `value_dsp1` deepset, private trunks | 0.374 | 0.601 | 0.388 | 1.2e5 | 0.99 (0.626) |
+> | `value_mlp1` unconstrained MLP | 0.243 | 0.768 | 0.797 | 7.1e10 | 0.37 (0.216) |
+> | `value_rf1` random forest | (probe-limited, see below) | | **0.979** | n/a | n/a |
+>
+> **The ICNN is still the best head. Four things were learned, in order of how much
+> they should change what happens next.**
+>
+> 1. **The value function is almost perfectly learnable, and the ICNN is nowhere
+>    near it.** The forest scores R² **0.959–0.996 on every one of the 21
+>    organisms** against the ICNN's 0.30–0.80. R² 0.538 is an *architecture*
+>    deficit — not a label ceiling, not solver noise, not sampling. Nothing before
+>    this trial could distinguish those.
+> 2. **The concave family is not the ceiling either.** Dropping both constraints
+>    (`mlp`) moves the median cosine +0.009 — nothing — while the worst organism
+>    collapses 0.733 → 0.243 and 43.8% of Hessians go non-concave. The constraints
+>    are close to free on gradient accuracy and are what holds the worst case
+>    together. **P11's difference-of-convex escape hatch does not look worth its
+>    complexity**, and relaxing structure is not the route to 0.99.
+> 3. **The ions are an architecture failure, not an intractable cell.** The forest
+>    reads `EX_mg2_e` at ~1.000 on 20/21 organisms where the ICNN manages 0.21–0.98
+>    (and the MLP goes *negative* on six). Mg limitation is an axis-aligned kink in
+>    one coordinate: native to a tree split, and evidently not localisable by a
+>    dense smooth net of width 128 spread over 444 inputs. The remaining error is
+>    **localisation**, which is the thing to attack.
+> 4. **Sharing across organisms hurts — D1's supersession is not worth taking.**
+>    `deepset-private` beats `deepset` on every metric (R² 0.111 → 0.388, worst
+>    0.259 → 0.374). The 21 organisms' ramps are not one function; a shared `phi`
+>    spends its capacity reconciling them rather than pooling evidence.
+>
+> **The deepset caveat, stated because it is a confound and not a footnote.** `phi`
+> is priced *per metabolite*, so at the design width (`width // 2` = 64) it cost
+> 123x the ICNN's FLOPs — 47 s/epoch against 0.35, i.e. 19 h a run. It was cut to
+> `width // 8` = 16 **for speed**, and both deepsets then *underfit the training
+> set* (value loss 0.895 and 0.626 against the ICNN's 0.375). More trunk capacity
+> demonstrably helps (that is result 4's mechanism), so **the deepset numbers above
+> are a lower bound and do not cleanly refute the architecture.** Restoring
+> hidden=64 is ~11 h/run even sharded. It was not judged worth a day given the
+> ICNN reaches 0.538 with 4.29M parameters at 0.35 s/epoch — but the honest status
+> is *not measured at full width*, not *refuted*. The one clear deepset win is
+> **conditioning: 4.0e3 against the ICNN's 3.4e7**, four orders better and directly
+> what §8's Newton composition needs; worth revisiting if M4 turns out to be
+> conditioning-limited rather than accuracy-limited.
+>
+> **The forest's gradients are probe-limited — do not quote an aggregate.** It has
+> no analytic gradient, so `baseline.py` uses central finite differences at
+> `delta * s_m` in `u`. The worst-organism cosine is **U-shaped in delta** (0.398 /
+> 0.451 / 0.374 / 0.209 / −0.102 / −0.023 at 0.01/0.02/0.05/0.25/0.5/1.0) and the
+> two ends hit different metabolites: carbon sources invert with a large step
+> (`EX_cytd_e` 0.883 → −0.729), ions fall off with a small one (`EX_mg2_e` 0.824 at
+> 0.01). An earlier reading here — "the forest loses the carbon sources to
+> non-monotonicity" — was **wrong**: those negatives are the probe, not the model.
+> Result 3 survives only because `EX_mg2_e` sits on a *plateau* (0.998/0.996/0.993/
+> 0.982 across 0.05→1.0). Quote a per-cell number only where it is flat in delta.
+> Default is now 0.05; R² 0.979 is delta-independent throughout.
+>
+> **Next — M3b, the HPC sweep (plan §7.4).** Everything above is one laptop, 4000
+> media/organism (1/5 of D10), width 128, depth 3. The models **underfit**: the
+> deepsets on training loss outright, the ICNN by inference (a forest reaches R²
+> 0.98 on the same rows). Neither more rows nor more width has been tried, so that
+> is the sweep — (1) D10's 20000 media/organism, (2) ICNN width {128…1024} × depth
+> {3,4,6}, (3) **deepset at full width and beyond** (`phi` hidden {32,64,128},
+> `k_code` {16,64,128}, `--emb-dim` {8,16,32}) — that arm was cut to hidden=16 for
+> laptop runtime, it has the localisation bias result 3 says is worth having, and
+> its per-metabolite cost is exactly what needs a cluster — (4) keep `mlp` and
+> `baseline-rf` in as ceiling and floor; both changed how the ICNN's numbers read.
+> Gate: any cell with R² ≥ 0.9 *and* worst cosine ≥ 0.9. If R² does not move with
+> 5× rows and 8× width, localisation is confirmed and the answer is a
+> per-metabolite architecture, not scale.
+>
+> Sharding note for the cluster: the organism axis splits cleanly via
+> `train._shard_organisms` (1.8× on CPU with
+> `XLA_FLAGS=--xla_force_host_platform_device_count=N`, N must divide the organism
+> count); on GPU the `filter_vmap` stacking is the §6.1 win. The §4.7/§4.6
+> machinery stays: it removed the two-pass dependency and it is how a *new* genome
+> gets labelled at all.
+>
+> Loss weights are still not the answer: `w_grad` only trades the heads (1 → 0.63
+> cosine / 0.72 R², 10 → 0.66 / 0.62) and neither end reaches the "R² ≥ 0.9"
+> balance rule. Checkpoints: `20hm_bands/value_b1/` (best worst-cosine to date,
+> 0.733), `20hm_bands/value_{icnn_b64,ds1,dsp1,mlp1,rf1,rf_d*}/` (this trial),
+> `20hm_probe/value_p{1,2,3}/` (probe bands + top-up rounds — **scored on the
+> moving ruler; not comparable to anything above**), `20hm/value_v2/{u_w1,u_w10}/`
+> (pre-band baseline).
 
 ## Legacy package (surrogate_mgem)
 

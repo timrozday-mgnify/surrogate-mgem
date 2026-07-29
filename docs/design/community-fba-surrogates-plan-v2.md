@@ -648,6 +648,91 @@ composition time.
 > and half the "non-zero" duals are solver dust at O(1e-14), which would dominate
 > any norm-relative loss by ~1e14.
 
+> **Architecture trial (2026-07-29) — the ICNN survives; the deficit is located.**
+> `cfs train-value --arch {icnn,deepset,deepset-private,mlp}` and `cfs baseline-rf`,
+> all on `20hm_bands/` at identical knobs and the *same* 800 held-out media.
+>
+> | | worst | mean | R² | Hess. cond | train loss (value) |
+> |---|---|---|---|---|---|
+> | icnn | **0.733** | **0.800** | 0.538 | 3.4e7 | 0.62 (0.375) |
+> | deepset, shared trunk | 0.259 | 0.432 | 0.111 | **4.0e3** | 1.35 (0.895) |
+> | deepset, private trunks | 0.374 | 0.601 | 0.388 | 1.2e5 | 0.99 (0.626) |
+> | unconstrained MLP | 0.243 | 0.768 | 0.797 | 7.1e10 | 0.37 (0.216) |
+> | random forest | probe-limited | | **0.979** | n/a | n/a |
+>
+> - **The value function is nearly perfectly learnable and the ICNN is far from
+>   it.** The forest scores R² 0.959–0.996 on *every* organism. R² 0.538 is an
+>   architecture deficit — not a label ceiling, not solver noise, not sampling.
+> - **The concave family is not the ceiling.** Removing both constraints moves the
+>   median cosine +0.009 while the worst organism collapses 0.733 → 0.243 and 43.8%
+>   of Hessians go non-concave. The constraints are ~free on accuracy and hold the
+>   worst case together, so **P11's difference-of-convex escape hatch is not worth
+>   its complexity**.
+> - **The ions are an architecture failure, not an intractable cell.** The forest
+>   reads `EX_mg2_e` at ~1.000 on 20/21 organisms where the ICNN manages 0.21–0.98.
+>   Mg limitation is an axis-aligned kink in one coordinate: native to a tree split,
+>   evidently not localisable by a dense smooth net of width 128 over 444 inputs.
+>   The remaining error is **localisation**.
+> - **Sharing `phi` across organisms hurts** (private beats shared on every metric),
+>   so D1's supersession is not worth taking.
+>
+> **Caveat, load-bearing.** `phi` is priced *per metabolite*, so at the design width
+> (`width // 2` = 64) the deepset cost 123× the ICNN's FLOPs — 47 s/epoch vs 0.35.
+> It was cut to `width // 8` = 16 **for speed**, and both variants then *underfit
+> the training set* (value loss 0.895 / 0.626 vs the ICNN's 0.375). The deepset
+> numbers are a **lower bound, not a refutation** — it has never been measured at
+> full width. Its conditioning (4.0e3, four orders better than the ICNN) is exactly
+> what §8's Newton needs.
+>
+> **The forest's gradients are probe-limited.** No analytic gradient, so
+> `baseline.py` uses central differences at `delta * s_m` in `u`. Worst-organism
+> cosine is U-shaped in delta (0.398/0.451/0.374/0.209/−0.102/−0.023 at
+> 0.01/0.02/0.05/0.25/0.5/1.0) and the ends hit different metabolites — carbon
+> sources invert with a large step, ions fall off with a small one. Do not quote an
+> aggregate; quote a cell only where it is flat in delta (`EX_mg2_e` is:
+> 0.998/0.996/0.993/0.982 across 0.05→1.0, which is why the ion result stands).
+> R² 0.979 is delta-independent.
+>
+> **Also fixed: the held-out set used to move.** `load_value_dataset` permuted all
+> media including §4.6 top-up rounds, so top-up media — drawn where the model is
+> *worst* — entered validation and made the test harder each round (one organism:
+> 491 → 595 → 781 usable rows over p1→p3). Val is now round-0 media only, and
+> `diagnostics.json` records `n_val_media` / `n_train_media` / `rounds_present`.
+> **The earlier finding that top-up rounds hurt is retracted** — it was never a
+> controlled experiment. Re-running it on the fixed ruler is open work.
+
+> ### 7.4 M3b — HPC sweep (next)
+>
+> Everything above is one laptop, 4000 media/organism (1/5 of the D10 budget), one
+> width, one depth. Two of the four findings point the same way — **the models are
+> underfitting, not overfitting** (the deepsets on training loss outright; the ICNN
+> because a forest reaches R² 0.98 on the same rows) — and neither more labels nor
+> more width has actually been tried. That is the sweep.
+>
+> Scale, in the order it matters:
+>
+> 1. **Rows.** D10's full 20000 media/organism, 5× the current set. Generate with
+>    `--stage labels` (§4.5); the §4.7 probe means no previous run is needed.
+> 2. **Width/depth.** The laptop never went above 128×3. Sweep width
+>    {128, 256, 512, 1024} × depth {3, 4, 6} for the ICNN.
+> 3. **DeepSet at full width and beyond** — `phi` hidden {32, 64, 128}, `k_code`
+>    {16, 64, 128}. This is the arm that was cut for laptop runtime and it is the
+>    one with the localisation inductive bias the forest showed is worth having,
+>    plus 4 orders better conditioning. `--emb-dim` {8, 16, 32}. Its cost is
+>    per-metabolite, so it is the arm that most needs the cluster.
+> 4. Keep `mlp` and `baseline-rf` in the sweep as the ceiling and the floor: both
+>    are cheap and both changed the reading of the ICNN's numbers here.
+>
+> Mechanics: the organism axis shards cleanly (`train._shard_organisms`, 1.8× on
+> CPU with `XLA_FLAGS=--xla_force_host_platform_device_count=N`); on GPU the
+> existing `filter_vmap` stacking is the win §6.1 describes. A `train` stage in
+> `main.nf` fanning out over (arch × width × depth × n_rows) cells with
+> `COLLECT_METRICS` on `diagnostics.json` mirrors the legacy sweep's shape.
+>
+> Gate for M3b: does **any** cell reach R² ≥ 0.9 with worst cosine ≥ 0.9? If the
+> ICNN's R² does not move with 5× rows and 8× width, the localisation story is
+> confirmed and the answer is a per-metabolite architecture, not scale.
+
 ### 7.1 Loss
 
 ```
@@ -816,13 +901,20 @@ mixes beautifully while sampling the wrong thing.
 M1 is new and comes before any training. It is a two-day job and it determines
 the shape of your entire label set.
 
-**M3 status (2026-07-27):** built and training on the real roster, gate not met —
-worst held-out gradient cosine 0.733 against 0.99 (§7 status block). The path to
-it, in order: (1) **§4.7 — make band placement automatic and per-metabolite**, so
-the design anchors itself on any GEM without a previous run or a human; then
-(2) architecture and D10 scale for the value R², which the label work traded down
-to 0.54 and which loss weights do not recover. Anything that reads as
-hand-tuning a metabolite is not the deliverable.
+**M3 status (2026-07-29):** built, gate not met — worst held-out gradient cosine
+0.733 against 0.99, best of four architectures (§7 status block). (1) §4.7
+automatic per-metabolite band placement is **done**; (2) architecture has now been
+*measured* rather than assumed, and the deficit is located: a random forest reaches
+R² 0.979 on the same split, so the ceiling is neither the labels nor the concavity
+constraint, and the residual error is per-metabolite **localisation**. What has not
+been tried is **scale** — every run so far is one laptop, 4000 media, width 128,
+and the models underfit. Hence M3b.
+
+| M3b | HPC sweep: D10 rows × width/depth × arch, deepset at full width | Any cell with R² ≥ 0.9 and worst cosine ≥ 0.9 |
+
+M3b is §7.4. It is the last cheap thing to try before concluding that Head A needs
+a per-metabolite architecture rather than a bigger dense one. Anything that reads
+as hand-tuning a metabolite is still not the deliverable.
 
 ---
 

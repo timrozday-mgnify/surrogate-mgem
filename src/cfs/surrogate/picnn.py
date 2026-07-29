@@ -125,6 +125,11 @@ def stack_heads(key, n_organisms: int, n_in: int, mask, width: int = 128,
     return make(keys, jnp.asarray(mask, dtype=bool))
 
 
+def organism(heads: ValueHead, i: int) -> ValueHead:
+    """Slice organism ``i`` out of a stacked head (every leaf carries the axis)."""
+    return jax.tree.map(lambda p: p[i] if eqx.is_array(p) else p, heads)
+
+
 @eqx.filter_vmap(in_axes=(0, 0))
 def batched_value(heads: ValueHead, x: Array) -> Array:
     """``(G, B, M) -> (G, B)``: every organism on its own medium batch."""
