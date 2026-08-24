@@ -87,7 +87,7 @@ def _organism_arrays(
 
     # Every parquet in the (organism, eps) directory: the base run writes
     # `part.parquet`, each §4.6 top-up round adds `part.round<n>.parquet`.
-    shard_dir = labels_dir / f"genome_id={gid}" / f"eps={eps:g}"
+    shard_dir = labels_dir / gid / f"eps_{eps:g}"
     parts = sorted(shard_dir.glob("*.parquet"))
     if not parts:
         raise FileNotFoundError(f"{gid}: no label shards under {shard_dir}")
@@ -199,9 +199,9 @@ def load_value_dataset(
     col = {ex: i for i, ex in enumerate(exchanges)}
     km_cfg = load_km_defaults()
 
-    shard_ids = {p.name.split("=", 1)[1] for p in labels_dir.glob("genome_id=*")}
+    shard_ids = {p.name for p in labels_dir.iterdir() if p.is_dir()}
     if not shard_ids:
-        raise ValueError(f"no genome_id=* shards under {labels_dir}")
+        raise ValueError(f"no per-genome shard dirs under {labels_dir}")
     # Stack in the frozen index's organism order, so row i of `mask` is organism i.
     gids = [g for g in frozen.genome_ids if g in shard_ids]
     if set(gids) != shard_ids:

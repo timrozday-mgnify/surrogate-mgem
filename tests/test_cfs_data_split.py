@@ -65,7 +65,7 @@ def labels(tmp_path):
     for gid in GIDS:
         (root / f"{gid}.exchanges.json").parent.mkdir(parents=True, exist_ok=True)
         (root / f"{gid}.exchanges.json").write_text(json.dumps({"exchanges": EX}))
-        shard = root / f"genome_id={gid}" / "eps=0.001"
+        shard = root / gid / "eps_0.001"
         shard.mkdir(parents=True)
         base = _rows(gid, np.arange(N_BASE), rng)
         base["index_hash"] = digest

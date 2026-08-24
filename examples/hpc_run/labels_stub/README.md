@@ -4,4 +4,4 @@ works straight out of the repo. The stub processes never look inside it (and
 
 For a real run, point the samplesheet's `labels` column at a real label root: the
 tree `--stage labels` publishes, i.e. `<id>.exchanges.json` / `<id>.subspace.json`
-sidecars beside `genome_id=<id>/eps=<e>/part.parquet`.
+sidecars beside `<id>/eps_<e>/part.parquet`.

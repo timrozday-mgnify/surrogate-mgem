@@ -16,7 +16,7 @@ nextflow_pipeline {
         then {
             assertAll(
                 { assert workflow.success },
-                { assert path("$outputDir/labels/genome_id=gA/eps=0.001/part.parquet").exists() },
+                { assert path("$outputDir/labels/gA/eps_0.001/part.parquet").exists() },
                 { assert path("$outputDir/labels/gA.subspace.json").exists() },
                 { assert path("$outputDir/labels/gA.exchanges.json").exists() },
             )

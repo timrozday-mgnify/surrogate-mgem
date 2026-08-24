@@ -136,7 +136,7 @@ def generate_organism(
             for mid, medium in enumerate(media_e)
             for alpha in cfg.alphas
         ]
-        path = outdir / f"genome_id={genome_id}" / f"eps={eps:g}" / part
+        path = outdir / genome_id / f"eps_{eps:g}" / part
         path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows).to_parquet(path, index=False)
         LOGGER.info("%s eps=%g: %d rows -> %s", genome_id, eps, len(rows), path)
