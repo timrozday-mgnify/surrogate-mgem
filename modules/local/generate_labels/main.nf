@@ -1,7 +1,7 @@
 // M2/§4.5: bulk ground-truth label generation for one organism -> parquet.
 // `cfs generate` builds the active subspace (§4.2), the stratified-Sobol design
 // (§4.3-4.4) and solves the elastic-net QP over media x alpha x eps (§5.4),
-// sharding to `genome_id=<id>/eps=<e>/part.parquet`. Fanned out one task per
+// sharding to `<id>/eps_<e>/part.parquet`. Fanned out one task per
 // genome exactly like DEGENERACY_SURVEY -- each task writes a one-row roster for
 // its own model. Single-threaded (HiGHS is pinned to threads=1 for repeatable
 // labels), so parallelism is across organisms, not inside one.
@@ -20,7 +20,7 @@ process GENERATE_LABELS {
     output:
     // Written straight into the task dir, not a subdir: publishDir keeps each
     // output's relative path, so `--outdir labels` would publish to labels/labels/.
-    tuple val(meta), path("genome_id=${meta.id}"), emit: shards
+    tuple val(meta), path("${meta.id}/"),          emit: shards
     tuple val(meta), path("${meta.id}.*.json"),    emit: metadata
     path 'versions.yml',                           emit: versions
 
@@ -44,8 +44,8 @@ process GENERATE_LABELS {
 
     stub:
     """
-    mkdir -p genome_id=${meta.id}/eps=0.001
-    touch genome_id=${meta.id}/eps=0.001/part.parquet
+    mkdir -p ${meta.id}/eps_0.001
+    touch ${meta.id}/eps_0.001/part.parquet
     printf '{"index_hash": "stub", "exchanges": ["EX_a_e"]}' > ${meta.id}.exchanges.json
     printf '{"${meta.id}": {"active": ["EX_a_e"], "background": [], "sensitivity": {"EX_a_e": 1.0}, "mu_rich": 1.0}}' > ${meta.id}.subspace.json
 

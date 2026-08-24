@@ -140,7 +140,7 @@ def test_organism_arrays_signs_and_scatter(tmp_path):
 
     ex = ["EX_glc__D_e", "EX_o2_e"]
     (tmp_path / "g0.exchanges.json").write_text(json.dumps({"exchanges": ex}))
-    shard = tmp_path / "genome_id=g0" / "eps=0.001"
+    shard = tmp_path / "g0" / "eps_0.001"
     shard.mkdir(parents=True)
     pd.DataFrame(
         [

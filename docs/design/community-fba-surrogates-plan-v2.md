@@ -178,7 +178,7 @@ D2 at 100+ dimensions makes this the part of the plan that changed most.
 > **Run at scale (2026-07-26), 21-genome roster** (`~/Documents/20hm_carveme_models`,
 > run dir `~/Documents/surrogate-mgems_runs/20hm`). Nextflow `GENERATE_LABELS` +
 > `--stage labels` now exist (`workflows/label_generation.nf`), one task per
-> organism, publishing `labels/genome_id=<id>/eps=<e>/part.parquet` plus
+> organism, publishing `labels/<id>/eps_<e>/part.parquet` plus
 > `<id>.subspace.json` / `<id>.exchanges.json` sidecars. First bulk set generated
 > at **4000 media/organism** (1/5 of the D10 budget — the design is unchanged, the
 > count is laptop-sized; 20000 is still the `SamplingConfig` default for HPC).

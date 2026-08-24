@@ -54,7 +54,7 @@ NF_PROFILE=singularity ./run_labels.sh -c site.config
 
 One task per organism: active subspace (§4.2) → demand probe (§4.7) → stratified
 Sobol design (§4.3–4.4) → elastic-net QP solves (§5.4), sharded to
-`labels_out/labels/genome_id=<id>/eps=<e>/part.parquet` with `<id>.subspace.json`
+`labels_out/labels/<id>/eps_<e>/part.parquet` with `<id>.subspace.json`
 and `<id>.exchanges.json` sidecars beside them.
 
 **Cost**, measured through this pipeline on a laptop and scaled: ~5 h and ~150 MB
@@ -139,7 +139,7 @@ nextflow run ../.. -profile singularity --stage qc --roster roster.csv --outdir 
 ## Outputs
 
 ```
-labels_out/labels/genome_id=<id>/eps=<e>/part.parquet   the label shards
+labels_out/labels/<id>/eps_<e>/part.parquet   the label shards
 labels_out/labels/<id>.{subspace,exchanges}.json        bands + exchange order
 sweep_out/sweep_leaderboard.csv                         one row per cell
 sweep_out/sweep/<cell_id>/                              diagnostics.json + weights

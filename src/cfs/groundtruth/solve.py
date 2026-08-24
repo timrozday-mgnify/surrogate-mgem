@@ -192,6 +192,29 @@ def _biomass_reaction(model):
     raise ValueError(f"{model.id}: cannot identify biomass reaction")
 
 
+def mu_optimize(model, what: str = "") -> float:
+    """``model.optimize()`` objective under the same wall-clock guard as :func:`solve`.
+
+    Every LP in the label pipeline must go through here. GLPK's simplex (cobra's
+    default solver) can cycle indefinitely on a near-degenerate medium -- one
+    organism sat at 100% CPU for 4.5 h inside `glp_simplex` on a single solve. The
+    §4.2 subspace sweep and the §4.7 demand probe run ~800 such LPs per organism
+    *before* the first labelled solve, on deliberately depleted media, so an
+    unguarded call there hangs the whole task with no output to show for it.
+
+    A timeout returns 0.0 -- read as "no growth", which biases the caller toward
+    calling the metabolite limiting. Wrong-but-loud beats hanging; it is logged.
+    """
+    from cobra.exceptions import OptimizationError
+
+    model.solver.configuration.timeout = int(_QP_TIME_LIMIT)
+    try:
+        return model.optimize().objective_value or 0.0
+    except OptimizationError as err:
+        LOGGER.warning("LP gave up after %gs (%s): %s -> mu=0", _QP_TIME_LIMIT, what, err)
+        return 0.0
+
+
 def solve(
     model, concentrations: dict[str, float], alpha: float, eps: float, km_cfg: dict | None = None
 ) -> Solution:
