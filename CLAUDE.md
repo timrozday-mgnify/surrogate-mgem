@@ -261,11 +261,14 @@
 > per-metabolite architecture, not scale.
 >
 > **The pipeline for it is built and end-to-end verified** (`--stage sweep`,
-> `workflows/value_sweep.nf`, `examples/value_sweep/`). One task per row of a
+> `workflows/value_sweep.nf`, `examples/hpc_run/`). One task per row of a
 > samplesheet (`cell_id,arch,labels,args`, where `args` is the cell's literal flag
 > string and `arch=rf` routes to `baseline-rf`), collected into
-> `sweep_leaderboard.csv`. `examples/value_sweep/sweep_full.csv` is the four arms
-> above as 54 cells; `make_sweep.py --demo` self-checks the generator. Two traps
+> `sweep_leaderboard.csv`. `examples/hpc_run/sweep_full.csv` is the four arms
+> above as 30 cells; `make_sweep.py --demo` self-checks the generator. That dir is
+> also the **labels** half of the HPC run (`run_labels.sh`, `labels.config`, the
+> frozen index under `reference/`), so the two stages chain: 27 of the 30 cells read
+> the label root `run_labels.sh` writes. Two traps
 > baked into the modules: `cfs train-value` **exits 1 whenever the gate is unmet**,
 > so `TRAIN_VALUE` tolerates that and gates on `diagnostics.json` existing instead
 > (read `passed`, not the exit status); and `params.xla_devices` must **divide** the
@@ -344,7 +347,7 @@ tests, per-process container ternary.
   is why the roster check in `main.nf` is stage-aware. The per-cell knobs live in the
   samplesheet, not in params, so there is no param per sweep axis; `params.sweep` and
   `params.xla_devices` are the only two. Worked example plus generator:
-  `examples/value_sweep/`. Stub: `tests/sweep.nf.test`.
+  `examples/hpc_run/`. Stub: `tests/sweep.nf.test`.
 - **`train`** — the legacy sweep below.
 
 DAG (`workflows/surrogate_training.nf`):

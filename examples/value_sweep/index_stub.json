@@ -1,8 +1,0 @@
-{
-  "_note": "Not a frozen index -- an empty stand-in so `./run.sh -stub` resolves. Use the real qc/metabolite_index.json for a real run.",
-  "genome_ids": ["g0"],
-  "index": ["EX_a_e"],
-  "shared": ["EX_a_e"],
-  "private": [],
-  "mask": [1]
-}

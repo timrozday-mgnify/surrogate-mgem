@@ -9,8 +9,8 @@ nextflow_pipeline {
             params {
                 stage  = "sweep"
                 // The example's smoke sheet: icnn + mlp -> TRAIN_VALUE, rf -> BASELINE_RF.
-                sweep  = "$projectDir/examples/value_sweep/sweep.csv"
-                index  = "$projectDir/examples/value_sweep/index_stub.json"
+                sweep  = "$projectDir/examples/hpc_run/sweep_smoke.csv"
+                index  = "$projectDir/examples/hpc_run/reference/metabolite_index.json"
                 outdir = "$outputDir"
             }
         }
@@ -31,7 +31,7 @@ nextflow_pipeline {
         when {
             params {
                 stage  = "sweep"
-                index  = "$projectDir/examples/value_sweep/index_stub.json"
+                index  = "$projectDir/examples/hpc_run/reference/metabolite_index.json"
                 outdir = "$outputDir"
             }
         }
