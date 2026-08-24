@@ -159,6 +159,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
+    # cobra logs one INFO line per solve ('Compartment `C_e` sounds like an
+    # external compartment'); at 20k media x 21 organisms that is ~60 MB of
+    # stderr per task and nothing else.
+    logging.getLogger("cobra").setLevel(logging.WARNING)
     args = build_parser().parse_args(argv)
 
     if args.command == "train-value":

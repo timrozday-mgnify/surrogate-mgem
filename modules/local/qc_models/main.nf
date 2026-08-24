@@ -7,7 +7,7 @@ process QC_MODELS {
     tag "$meta.id"
     label 'process_medium'
 
-    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.3"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.5"
 
     input:
     tuple val(meta), path(roster), path(models)
