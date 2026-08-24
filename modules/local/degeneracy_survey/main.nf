@@ -12,7 +12,7 @@ process DEGENERACY_SURVEY {
     tag "$meta.id"
     label 'process_single'
 
-    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.4"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.5"
 
     input:
     tuple val(meta), path(model)

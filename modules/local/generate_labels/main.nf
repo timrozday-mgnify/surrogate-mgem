@@ -10,7 +10,7 @@ process GENERATE_LABELS {
     tag "$meta.id"
     label 'process_low'
 
-    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.4"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.5"
 
     input:
     // `scales` and `focus` are optional -- pass [] to omit. Both are staged files,
@@ -38,7 +38,7 @@ process GENERATE_LABELS {
     "${task.process}":
         python: \$(python --version | sed 's/Python //')
         cobra: \$(python -c "import cobra; print(cobra.__version__)")
-        highspy: \$(python -c "import highspy; print(highspy.__version__)")
+        highspy: \$(python -c "from importlib.metadata import version; print(version('highspy'))")
     END_VERSIONS
     """
 
