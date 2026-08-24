@@ -7,7 +7,7 @@ process TRAIN_VALUE {
     tag "$meta.id"
     label 'process_high'
 
-    container "ghcr.io/timrozday-mgnify/surrogate-mgem-train:0.1.3"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-train:0.1.4"
 
     input:
     tuple val(meta), path(labels), path(index)
