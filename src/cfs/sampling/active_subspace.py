@@ -47,7 +47,7 @@ def active_subspace(
     model, genome_id: str = "", km_cfg: dict | None = None, *, tol: float = 1e-3
 ) -> ActiveSubspace:
     """Coarse one-at-a-time sensitivity sweep for one model (plan §4.2)."""
-    from cfs.groundtruth.solve import apply_mm_bounds, load_km_defaults
+    from cfs.groundtruth.solve import apply_mm_bounds, load_km_defaults, mu_optimize
 
     km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
     uptakes = _uptake_exchanges(model)
@@ -55,7 +55,7 @@ def active_subspace(
 
     with model:
         apply_mm_bounds(model, rich, km_cfg)
-        mu_rich = model.optimize().objective_value or 0.0
+        mu_rich = mu_optimize(model, f"{genome_id} rich")
     if mu_rich <= 0.0:
         LOGGER.warning("%s: no growth on rich medium; active subspace empty", genome_id)
         return ActiveSubspace(genome_id, [], sorted(uptakes), dict.fromkeys(uptakes, 0.0), 0.0)
@@ -65,7 +65,7 @@ def active_subspace(
         medium = {**rich, ex: 0.0}  # deplete this one, keep the rest rich
         with model:
             apply_mm_bounds(model, medium, km_cfg)
-            mu = model.optimize().objective_value or 0.0
+            mu = mu_optimize(model, f"{genome_id} -{ex}")
         sensitivity[ex] = (mu_rich - mu) / mu_rich
 
     active = sorted(ex for ex, s in sensitivity.items() if s > tol)
@@ -113,7 +113,12 @@ def demand_probe(
     result rather than defaulted — that is the caller's fallback chain to decide
     (:func:`cfs.sampling.design.band_scales`).
     """
-    from cfs.groundtruth.solve import apply_mm_bounds, km_for_exchange, load_km_defaults
+    from cfs.groundtruth.solve import (
+        apply_mm_bounds,
+        km_for_exchange,
+        load_km_defaults,
+        mu_optimize,
+    )
 
     km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
     uptakes = _uptake_exchanges(model)
@@ -123,7 +128,7 @@ def demand_probe(
     def mu_at(ex: str, a: float) -> float:
         with model:
             apply_mm_bounds(model, {**rich, ex: km[ex] * 10.0**a}, km_cfg)
-            return model.optimize().objective_value or 0.0
+            return mu_optimize(model, f"probe {ex}@{a:.2f}")
 
     out = {}
     for ex in exchanges:
