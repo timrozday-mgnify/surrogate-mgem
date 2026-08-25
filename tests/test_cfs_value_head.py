@@ -197,3 +197,27 @@ def test_organism_arrays_signs_and_scatter(tmp_path):
     assert g[0, 1] == pytest.approx(0.5 * 1000.0)
     # the zero-growth row keeps its value label but its garbage duals are dropped
     assert gvalid.tolist() == [True, False] and np.all(g[1] == 0.0) and mu[1] == 0.0
+
+
+def test_chunked_evaluation_matches_the_whole_set():
+    """`_over_media` is an OOM guard, so it must change nothing but the peak.
+
+    Evaluation used to call the head on the entire held-out set at once, which at
+    D10 scale is 8x the training batch on the axis the deepset prices per
+    metabolite. Slicing it is only safe if the diagnostics come out the same.
+    """
+    from cfs.surrogate.picnn import batched_value_and_grad, stack_heads
+    from cfs.surrogate.train import _over_media
+
+    ds = _synthetic()
+    g, m = ds.mask.shape
+    heads = stack_heads(jax.random.PRNGKey(0), g, m, ds.mask, width=16, depth=2)
+    x = jax.numpy.asarray(ds.x_val)
+
+    whole = batched_value_and_grad(heads, x)
+    # A size that does not divide the media count, so the last slice is short.
+    chunked = _over_media(lambda xx: batched_value_and_grad(heads, xx), x, size=7)
+
+    for a, b in zip(whole, chunked, strict=True):
+        assert a.shape == b.shape
+        np.testing.assert_allclose(np.asarray(a), np.asarray(b), rtol=1e-5, atol=1e-6)

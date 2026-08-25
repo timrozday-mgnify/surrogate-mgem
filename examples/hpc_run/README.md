@@ -21,7 +21,7 @@ reference/
 labels.config       stage 1 params: 20000 media/organism, probe-anchored bands
 run_labels.sh       stage 1 launcher   -> labels_out/labels/
 make_sweep.py       writes a sweep samplesheet from axis flags
-sweep_smoke.csv     3 cells against labels_stub — runs under -stub as-is
+sweep_smoke.csv     3 cells against labels_stub — -stub only (no real data)
 sweep_full.csv      30 cells: the real sweep
 sweep.config        stage 2 params: xla_devices, per-process resources
 run_sweep.sh        stage 2 launcher   -> sweep_out/sweep_leaderboard.csv
@@ -121,6 +121,30 @@ generator.
 with width; the deepsets are the expensive arm — `phi` is priced *per metabolite*, so
 at trunk width 256 it measured 47 s/epoch, i.e. ~19 h for one cell. That arm is the
 reason this needs a cluster.
+
+**Memory**: measured on 4000 media (1/5 of this run's rows), `--arch deepset`, by
+peak RSS.
+
+| cell | load | peak |
+| --- | --- | --- |
+| `--phi-hidden 64 --k-code 64 --batch 512` | 2.1 GB | 16.8 GB |
+| `--phi-hidden 128 --k-code 64 --batch 128` | 2.2 GB | 14.0 GB |
+| `--phi-hidden 128 --k-code 64 --batch 512` | 2.2 GB | >24 GB (OOM-killed) |
+
+Essentially all of it is live autodiff activations inside one training step —
+(organisms × batch × 444 metabolites × `phi_hidden`) through a second-order (Sobolev)
+tape. Evaluation adds **0.00 GB** on top and nothing accumulates across epochs, so
+there is nothing to spill to disk; the levers are `--batch` (linear) and
+`--phi-hidden`. Going from 4000 to 20000 media only adds the resident label arrays,
+about 5 GB. `TRAIN_VALUE` therefore requests **48 GB for deepset cells and 16 GB for
+the rest**, off `task.tag`, rather than one blanket number.
+
+That is also what the original failure was: a 16 GB request against a ~22 GB cell.
+Two things hid it, both fixed here. `params.max_*` is `process.resourceLimits`, which
+clamps the `* task.attempt` retry ladder too, so a ceiling below what a cell needs is
+a cap and not a safety net. And `TRAIN_VALUE`'s `|| true` — there because
+`cfs train-value` exits 1 on an unmet gate — also swallowed the kernel's 137, the one
+status `conf/base.config` retries on; it now tolerates exit 1 only.
 
 ## Reference data
 

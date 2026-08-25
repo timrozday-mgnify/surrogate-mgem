@@ -34,12 +34,19 @@ process TRAIN_VALUE {
     # cell measured to date is 0.733 -- an honest exit code would fail every task in
     # the sweep. A cell that produced no diagnostics is the real failure, so gate on
     # that instead and let the leaderboard report the score.
+    #
+    # Tolerate ONLY exit 1. A blanket `|| true` also swallowed 137 (OOM kill), which
+    # is the one exit status `conf/base.config` retries on with more memory: the
+    # deepset cells were dying on the kernel and being reported as "no diagnostics"
+    # with the real cause three lines up in .command.err.
+    rc=0
     cfs train-value \\
         --labels ${labels} \\
         --index ${index} \\
         --out ${prefix} \\
         --arch ${meta.arch} \\
-        $args || true
+        $args || rc=\$?
+    [ "\$rc" -le 1 ] || exit "\$rc"
     test -s ${prefix}/diagnostics.json
 
     cat <<-END_VERSIONS > versions.yml
