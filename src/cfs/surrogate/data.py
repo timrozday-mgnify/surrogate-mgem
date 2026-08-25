@@ -173,8 +173,15 @@ def load_value_dataset(
     eps: float = 1e-3,
     val_frac: float = 0.2,
     seed: int = 0,
+    organisms: list[str] | None = None,
 ) -> ValueDataset:
-    """Load every organism's primary-eps labels into stacked train/val arrays.
+    """Load the labels of ``organisms`` (default: all) into stacked train/val arrays.
+
+    Any number of organisms stacks, one included: the stack is a vmap axis, not a
+    modelling choice, and only the shared-trunk ``deepset`` pools anything across
+    it. Stacking one organism per job is what the sweep does — the split is by
+    ``medium_id`` and the media are identical across organisms, so the held-out
+    set of a one-organism stack is the same media as the full stack's.
 
     The split is by ``medium_id``, never by row: media are the independent unit.
     Every shard must carry the same ``index_hash`` (P13) or this raises.
@@ -206,6 +213,11 @@ def load_value_dataset(
     gids = [g for g in frozen.genome_ids if g in shard_ids]
     if set(gids) != shard_ids:
         raise ValueError(f"shards not in the frozen index: {sorted(shard_ids - set(gids))}")
+    if organisms is not None:
+        missing = sorted(set(organisms) - set(gids))
+        if missing:
+            raise ValueError(f"requested organisms have no shards: {missing}")
+        gids = [g for g in gids if g in set(organisms)]
 
     parts = [_organism_arrays(labels_dir, g, eps, col, km_cfg, len(exchanges)) for g in gids]
     hashes = {p[5] for p in parts} | {index_hash(index_path)}

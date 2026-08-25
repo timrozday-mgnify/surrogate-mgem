@@ -91,11 +91,12 @@ def run(
     n_estimators: int = 100,
     delta: float = 0.05,
     seed: int = 0,
+    organisms: list[str] | None = None,
 ) -> dict:
     """Fit one forest per organism on the same split, score it on the same gate."""
     from sklearn.ensemble import RandomForestRegressor
 
-    ds = load_value_dataset(labels_dir, index_path, eps=eps, seed=seed)
+    ds = load_value_dataset(labels_dir, index_path, eps=eps, seed=seed, organisms=organisms)
     n_org, n_val, n_met = ds.x_val.shape
     mu_hat = np.zeros((n_org, n_val), dtype=np.float64)
     g_hat = np.zeros((n_org, n_val, n_met), dtype=np.float64)

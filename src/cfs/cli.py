@@ -140,6 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
     tv.add_argument("--lr", type=float, default=3e-3)
     tv.add_argument("--w-grad", type=float, default=1.0, help="Sobolev term weight (§7.1).")
     tv.add_argument("--seed", type=int, default=0)
+    tv.add_argument(
+        "--organisms",
+        help="Comma-separated genome_ids to stack (default: every shard under "
+        "--labels). One organism per job is what the sweep fans out; only the "
+        "shared-trunk `deepset` pools anything across the stack.",
+    )
 
     rf = sub.add_parser("baseline-rf", help="Random-forest baseline on the same split and gate.")
     rf.add_argument("--labels", type=Path, required=True, help="Label shard root (§4.5).")
@@ -154,6 +160,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Finite-difference step, in units of each metabolite's kink scale.",
     )
     rf.add_argument("--seed", type=int, default=0)
+    rf.add_argument(
+        "--organisms",
+        help="Comma-separated genome_ids to stack (default: every shard under "
+        "--labels). One organism per job is what the sweep fans out; only the "
+        "shared-trunk `deepset` pools anything across the stack.",
+    )
     return parser
 
 
@@ -164,6 +176,11 @@ def main(argv: list[str] | None = None) -> int:
     # stderr per task and nothing else.
     logging.getLogger("cobra").setLevel(logging.WARNING)
     args = build_parser().parse_args(argv)
+    organisms = (
+        [g for g in getattr(args, "organisms", None).split(",") if g]
+        if getattr(args, "organisms", None)
+        else None
+    )
 
     if args.command == "train-value":
         # The only subcommand that reads labels rather than models: no roster, no
@@ -186,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
             phi_hidden=args.phi_hidden,
             k_code=args.k_code,
             seed=args.seed,
+            organisms=organisms,
         )
         print(json.dumps(diagnostics, indent=2))
         return 0 if diagnostics["passed"] else 1
@@ -204,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
                     n_estimators=args.n_estimators,
                     delta=args.delta,
                     seed=args.seed,
+                    organisms=organisms,
                 ),
                 indent=2,
             )

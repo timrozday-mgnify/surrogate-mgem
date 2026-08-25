@@ -277,6 +277,24 @@ def train_value_heads(
 # --------------------------------------------------------------------------- #
 
 
+def _over_media(fn, x, size: int = 256):
+    """Map ``fn`` over the media axis in slices and rejoin — an OOM guard, not an
+    optimisation.
+
+    Training batches; evaluation did not. The held-out set is ``val_frac`` of the
+    label budget, so at D10's 20000 media it is (21, 4000, 444) — 8x the default
+    training batch on the axis the deepset prices *per metabolite*.
+
+    Honest status: this is a precaution, not a measured fix. At the 4000-media
+    laptop scale (800 held-out media) evaluation adds **0.00 GB** over the training
+    peak, so what OOM-killed the sweep's deepset cells was the training step, not
+    this. The slice keeps evaluation below the training batch as the held-out set
+    grows 5x, which is the one extrapolation the laptop cannot check.
+    """
+    outs = [fn(x[:, i : i + size]) for i in range(0, x.shape[1], size)]
+    return jax.tree.map(lambda *parts: jnp.concatenate(parts, axis=1), *outs)
+
+
 def _cosine(a, b, mask):
     """Per-row cosine over the masked dims; NaN where the target vector is 0."""
     a, b = a * mask, b * mask
@@ -293,8 +311,12 @@ def _concavity_violations(heads, x, key, bv, n_pairs: int = 2000, tol: float = 1
     lam = jax.random.uniform(kl, (g, n_pairs, 1))
     xa = jnp.take_along_axis(x, ia[..., None], axis=1)
     xb = jnp.take_along_axis(x, ib[..., None], axis=1)
-    mid = bv(heads, lam * xa + (1 - lam) * xb)
-    chord = lam[..., 0] * bv(heads, xa) + (1 - lam[..., 0]) * bv(heads, xb)
+
+    def bvc(xx):
+        return _over_media(lambda c: bv(heads, c), xx)
+
+    mid = bvc(lam * xa + (1 - lam) * xb)
+    chord = lam[..., 0] * bvc(xa) + (1 - lam[..., 0]) * bvc(xb)
     return jnp.mean(mid < chord - tol, axis=1)
 
 
@@ -409,7 +431,7 @@ def evaluate(heads: eqx.Module, ds: ValueDataset, seed: int = 0, arch: str = "ic
     """Held-out diagnostics per organism (§7.3). The gate is ``grad_cosine``."""
     mod = _ARCH[arch]
     x = jnp.asarray(ds.x_val)
-    mu_hat, g_hat = mod.batched_value_and_grad(heads, x)
+    mu_hat, g_hat = _over_media(lambda xx: mod.batched_value_and_grad(heads, xx), x)
     # In u space (see `_du`), so the gate means the same thing across runs.
     g_hat = g_hat * _du(x, jnp.asarray(ds.x_scale))
     viol = _concavity_violations(heads, x, jax.random.PRNGKey(seed), mod.batched_value)
@@ -497,9 +519,14 @@ def run(
     phi_hidden: int | None = None,
     k_code: int | None = None,
     seed: int = 0,
+    organisms: list[str] | None = None,
 ) -> dict:
-    """Load labels, train, evaluate, checkpoint. Returns the diagnostics."""
-    ds = load_value_dataset(labels_dir, index_path, eps=eps, seed=seed)
+    """Load labels, train, evaluate, checkpoint. Returns the diagnostics.
+
+    ``organisms`` restricts the stack (default: every shard under ``labels_dir``).
+    One organism per stack is the sweep's default -- see `load_value_dataset`.
+    """
+    ds = load_value_dataset(labels_dir, index_path, eps=eps, seed=seed, organisms=organisms)
     heads = train_value_heads(
         ds,
         arch=arch,

@@ -21,7 +21,7 @@ reference/
 labels.config       stage 1 params: 20000 media/organism, probe-anchored bands
 run_labels.sh       stage 1 launcher   -> labels_out/labels/
 make_sweep.py       writes a sweep samplesheet from axis flags
-sweep_smoke.csv     3 cells against labels_stub — runs under -stub as-is
+sweep_smoke.csv     3 cells against labels_stub — -stub only (no real data)
 sweep_full.csv      30 cells: the real sweep
 sweep.config        stage 2 params: xla_devices, per-process resources
 run_sweep.sh        stage 2 launcher   -> sweep_out/sweep_leaderboard.csv
@@ -122,6 +122,30 @@ with width; the deepsets are the expensive arm — `phi` is priced *per metaboli
 at trunk width 256 it measured 47 s/epoch, i.e. ~19 h for one cell. That arm is the
 reason this needs a cluster.
 
+**Memory**: measured on 4000 media (1/5 of this run's rows), `--arch deepset`, by
+peak RSS.
+
+| cell | load | peak |
+| --- | --- | --- |
+| `--phi-hidden 64 --k-code 64 --batch 512` | 2.1 GB | 16.8 GB |
+| `--phi-hidden 128 --k-code 64 --batch 128` | 2.2 GB | 14.0 GB |
+| `--phi-hidden 128 --k-code 64 --batch 512` | 2.2 GB | >24 GB (OOM-killed) |
+
+Essentially all of it is live autodiff activations inside one training step —
+(organisms × batch × 444 metabolites × `phi_hidden`) through a second-order (Sobolev)
+tape. Evaluation adds **0.00 GB** on top and nothing accumulates across epochs, so
+there is nothing to spill to disk; the levers are `--batch` (linear) and
+`--phi-hidden`. Going from 4000 to 20000 media only adds the resident label arrays,
+about 5 GB. `TRAIN_VALUE` therefore requests **48 GB for deepset cells and 16 GB for
+the rest**, off `task.tag`, rather than one blanket number.
+
+That is also what the original failure was: a 16 GB request against a ~22 GB cell.
+Two things hid it, both fixed here. `params.max_*` is `process.resourceLimits`, which
+clamps the `* task.attempt` retry ladder too, so a ceiling below what a cell needs is
+a cap and not a safety net. And `TRAIN_VALUE`'s `|| true` — there because
+`cfs train-value` exits 1 on an unmet gate — also swallowed the kernel's 137, the one
+status `conf/base.config` retries on; it now tolerates exit 1 only.
+
 ## Reference data
 
 `reference/metabolite_index.json` is **the frozen metabolite index** — 444 exchanges,
@@ -142,9 +166,14 @@ nextflow run ../.. -profile singularity --stage qc --roster roster.csv --outdir 
 labels_out/labels/<id>/eps_<e>/part.parquet   the label shards
 labels_out/labels/<id>.{subspace,exchanges}.json        bands + exchange order
 sweep_out/sweep_leaderboard.csv                         one row per cell
-sweep_out/sweep/<cell_id>/                              diagnostics.json + weights
+sweep_out/sweep/<cell_id>__<genome_id>/                 diagnostics.json + weights
 */pipeline_info/                                        trace, report, timeline, DAG
 ```
+
+Every arch but the shared-trunk `deepset` is fanned out **one organism per task** —
+the organism axis is a vmap axis those heads do not share anything across, so 21
+short jobs replace one long one. `COLLECT_VALUE_METRICS` merges a cell's tasks back
+into a single leaderboard row, so the CSV is unchanged: one row per cell.
 
 `sweep_leaderboard.csv` carries worst/mean grad cosine, min/median value R², the
 worst organism, Hessian conditioning, and `n_val_media`/`n_train_media`/
@@ -157,6 +186,8 @@ comparable if it matches.
   is 0.733 — an honest exit code would fail every task in the sweep. The module
   tolerates it and gates on `diagnostics.json` existing instead. Read `passed` in the
   leaderboard, not the pipeline's exit status.
-- **`xla_devices` must divide the organism count.** `train._shard_organisms` logs
-  "do not divide" and silently runs unsharded otherwise — a slow run that looks like
-  a fast one. 21 organisms → 3 or 7. It is 0 (off) by default in `sweep.config`.
+- **`xla_devices` must divide the organism count**, and the sweep now stacks **one
+  organism per task**, so leave it at 0. `train._shard_organisms` logs "do not
+  divide" and silently runs unsharded otherwise — a slow run that looks like a fast
+  one. It only ever applied to a multi-organism stack, i.e. the `deepset` cells,
+  where 21 organisms → 3 or 7.
