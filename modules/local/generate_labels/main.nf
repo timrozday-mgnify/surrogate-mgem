@@ -10,7 +10,7 @@ process GENERATE_LABELS {
     tag "$meta.id"
     label 'process_low'
 
-    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.5"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.6"
 
     input:
     // `scales` and `focus` are optional -- pass [] to omit. Both are staged files,

@@ -4,7 +4,7 @@ process COLLECT_METRICS {
     tag "$meta.id"
     label 'process_single'
 
-    container "ghcr.io/timrozday-mgnify/surrogate-mgem-train:0.1.5"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-train:0.1.6"
 
     input:
     tuple val(meta), path(results)
