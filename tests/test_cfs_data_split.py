@@ -117,3 +117,25 @@ def test_val_split_is_stable_under_seed_and_organism_stacking(labels):
     c = load_value_dataset(root, index_path, eps=1e-3, seed=1)
     assert np.array_equal(a.x_val, b.x_val)
     assert not np.array_equal(a.x_val, c.x_val)  # the seed still chooses the split
+
+
+def test_one_organism_per_stack_sees_the_same_media(labels):
+    """A 1-wide stack is the full stack's row, not a different experiment.
+
+    The sweep fans out one organism per job, so this is what makes those jobs'
+    diagnostics mergeable into one leaderboard row: same seed, same split, same
+    held-out media, same arrays.
+    """
+    root, index_path, _ = labels
+    full = load_value_dataset(root, index_path, eps=1e-3, seed=0)
+    one = load_value_dataset(root, index_path, eps=1e-3, seed=0, organisms=["g1"])
+
+    assert one.genome_ids == ["g1"]
+    assert one.x_val.shape[0] == 1
+    i = full.genome_ids.index("g1")
+    assert np.array_equal(one.mu_val[0], full.mu_val[i])
+    assert np.array_equal(one.x_val[0], full.x_val[i])
+    assert np.array_equal(one.mask[0], full.mask[i])
+
+    with pytest.raises(ValueError, match="no shards"):
+        load_value_dataset(root, index_path, eps=1e-3, organisms=["nope"])

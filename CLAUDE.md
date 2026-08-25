@@ -339,10 +339,18 @@ tests, per-process container ternary.
   probe, on by default), `--label_scales`, `--label_round` and
   `--label_focus_weights` (§4.6) are all wired; the last two are staged files, so
   `GENERATE_LABELS` builds those two flags itself rather than from `ext.args`.
-- **`sweep`** — M3b/§7.4 Head A sweep (`workflows/value_sweep.nf`). One task per row
-  of `--sweep <sweep.csv>` (`cell_id,arch,labels,args`): `TRAIN_VALUE`
-  (`cfs train-value`) or, for `arch=rf`, `BASELINE_RF` (`cfs baseline-rf`) →
-  `COLLECT_VALUE_METRICS` → `${outdir}/sweep_leaderboard.csv`. Needs `--index`;
+- **`sweep`** — M3b/§7.4 Head A sweep (`workflows/value_sweep.nf`). One task per
+  (row of `--sweep <sweep.csv>` (`cell_id,arch,labels,args`), organism):
+  `TRAIN_VALUE` (`cfs train-value`) or, for `arch=rf`, `BASELINE_RF`
+  (`cfs baseline-rf`) → `COLLECT_VALUE_METRICS` → `${outdir}/sweep_leaderboard.csv`.
+  **The stack is any number of organisms** (`--organisms`, a subset of the label
+  root's shards; `load_value_dataset` splits by `medium_id`, which is identical
+  across organisms, so a 1-wide stack's held-out set is the 21-wide stack's). The
+  workflow fans out one organism per task for every arch except the shared-trunk
+  `deepset` — the only one that pools across the organism axis — and
+  `COLLECT_VALUE_METRICS` merges a cell's tasks back into one leaderboard row by
+  stripping the `__<genome_id>` suffix. `xla_devices` therefore only ever applies to
+  the `deepset` cells. Needs `--index`;
   needs **no `--roster`** — the only stage that reads labels rather than GEMs, which
   is why the roster check in `main.nf` is stage-aware. The per-cell knobs live in the
   samplesheet, not in params, so there is no param per sweep axis; `params.sweep` and

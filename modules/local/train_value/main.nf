@@ -61,7 +61,7 @@ process TRAIN_VALUE {
     prefix = task.ext.prefix ?: "${meta.id}"
     """
     mkdir -p ${prefix}
-    printf '{"worst_grad_cosine": 0.5, "passed": false, "arch": "${meta.arch}", "per_organism": {"g0": {"grad_cosine": 0.5, "value_r2": 0.5}}}' > ${prefix}/diagnostics.json
+    printf '{"worst_grad_cosine": 0.5, "passed": false, "arch": "${meta.arch}", "per_organism": {"${meta.organism ?: 'g0'}": {"grad_cosine": 0.5, "value_r2": 0.5}}}' > ${prefix}/diagnostics.json
     touch ${prefix}/value_heads.eqx ${prefix}/value_heads.json
 
     cat <<-END_VERSIONS > versions.yml

@@ -43,7 +43,7 @@ process BASELINE_RF {
     prefix = task.ext.prefix ?: "${meta.id}"
     """
     mkdir -p ${prefix}
-    printf '{"worst_grad_cosine": 0.4, "passed": false, "arch": "random-forest", "per_organism": {"g0": {"grad_cosine": 0.4, "value_r2": 0.97}}}' > ${prefix}/diagnostics.json
+    printf '{"worst_grad_cosine": 0.4, "passed": false, "arch": "random-forest", "per_organism": {"${meta.organism ?: 'g0'}": {"grad_cosine": 0.4, "value_r2": 0.97}}}' > ${prefix}/diagnostics.json
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

@@ -1,7 +1,7 @@
 // M3b/§7.4: the Head A architecture + scale sweep.
 //
-//   TRAIN_VALUE / BASELINE_RF (one task per samplesheet row)
-//     -> COLLECT_VALUE_METRICS (one sweep_leaderboard.csv)
+//   TRAIN_VALUE / BASELINE_RF (one task per samplesheet row x organism)
+//     -> COLLECT_VALUE_METRICS (one sweep_leaderboard.csv, one row per cell)
 //
 // Cells come from a samplesheet (`--sweep`), not from `Channel.fromList` over a
 // param per axis as in SURROGATE_TRAINING: the axes here are not a clean cross
@@ -22,11 +22,25 @@ workflow VALUE_SWEEP {
     main:
     // `labels` is absolute or relative to the samplesheet, matching the roster's
     // model_path convention elsewhere.
+    // One task per (cell, organism), not per cell. The organism axis is a vmap
+    // axis, not a modelling choice: only the shared-trunk `deepset` pools anything
+    // across it, so every other arch trains the same heads whether they are stacked
+    // 21-wide or 1-wide -- and 21 short jobs beat one long one on a queue. The
+    // organisms come from the label root's own per-genome shard dirs (the sheet's
+    // `labels` column differs per row); a root with none -- the stub -- falls back
+    // to a single whole-stack task, which is also the escape hatch if a cell ever
+    // wants the old behaviour.
     ch_cells = Channel.fromPath(ch_sweep)
         .splitCsv(header: true)
-        .map { row ->
+        .flatMap { row ->
             def labels = file(row.labels.startsWith('/') ? row.labels : "${ch_sweep.parent}/${row.labels}", checkIfExists: true)
-            [ [id: row.cell_id, arch: row.arch, cell_args: row.args ?: ''], labels, ch_index ]
+            def gids = row.arch == 'deepset'
+                ? []
+                : labels.listFiles().findAll { it.isDirectory() }.collect { it.name }.sort()
+            def meta = [arch: row.arch, cell_args: row.args ?: '']
+            (gids ?: [null]).collect { gid ->
+                [ meta + [id: gid ? "${row.cell_id}__${gid}" : row.cell_id, cell: row.cell_id, organism: gid], labels, ch_index ]
+            }
         }
         .branch { meta, labels, index ->
             rf: meta.arch == 'rf'

@@ -516,9 +516,14 @@ def run(
     phi_hidden: int | None = None,
     k_code: int | None = None,
     seed: int = 0,
+    organisms: list[str] | None = None,
 ) -> dict:
-    """Load labels, train, evaluate, checkpoint. Returns the diagnostics."""
-    ds = load_value_dataset(labels_dir, index_path, eps=eps, seed=seed)
+    """Load labels, train, evaluate, checkpoint. Returns the diagnostics.
+
+    ``organisms`` restricts the stack (default: every shard under ``labels_dir``).
+    One organism per stack is the sweep's default -- see `load_value_dataset`.
+    """
+    ds = load_value_dataset(labels_dir, index_path, eps=eps, seed=seed, organisms=organisms)
     heads = train_value_heads(
         ds,
         arch=arch,

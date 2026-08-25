@@ -166,9 +166,14 @@ nextflow run ../.. -profile singularity --stage qc --roster roster.csv --outdir 
 labels_out/labels/<id>/eps_<e>/part.parquet   the label shards
 labels_out/labels/<id>.{subspace,exchanges}.json        bands + exchange order
 sweep_out/sweep_leaderboard.csv                         one row per cell
-sweep_out/sweep/<cell_id>/                              diagnostics.json + weights
+sweep_out/sweep/<cell_id>__<genome_id>/                 diagnostics.json + weights
 */pipeline_info/                                        trace, report, timeline, DAG
 ```
+
+Every arch but the shared-trunk `deepset` is fanned out **one organism per task** —
+the organism axis is a vmap axis those heads do not share anything across, so 21
+short jobs replace one long one. `COLLECT_VALUE_METRICS` merges a cell's tasks back
+into a single leaderboard row, so the CSV is unchanged: one row per cell.
 
 `sweep_leaderboard.csv` carries worst/mean grad cosine, min/median value R², the
 worst organism, Hessian conditioning, and `n_val_media`/`n_train_media`/
@@ -181,6 +186,8 @@ comparable if it matches.
   is 0.733 — an honest exit code would fail every task in the sweep. The module
   tolerates it and gates on `diagnostics.json` existing instead. Read `passed` in the
   leaderboard, not the pipeline's exit status.
-- **`xla_devices` must divide the organism count.** `train._shard_organisms` logs
-  "do not divide" and silently runs unsharded otherwise — a slow run that looks like
-  a fast one. 21 organisms → 3 or 7. It is 0 (off) by default in `sweep.config`.
+- **`xla_devices` must divide the organism count**, and the sweep now stacks **one
+  organism per task**, so leave it at 0. `train._shard_organisms` logs "do not
+  divide" and silently runs unsharded otherwise — a slow run that looks like a fast
+  one. It only ever applied to a multi-organism stack, i.e. the `deepset` cells,
+  where 21 organisms → 3 or 7.
