@@ -311,7 +311,10 @@ def _concavity_violations(heads, x, key, bv, n_pairs: int = 2000, tol: float = 1
     lam = jax.random.uniform(kl, (g, n_pairs, 1))
     xa = jnp.take_along_axis(x, ia[..., None], axis=1)
     xb = jnp.take_along_axis(x, ib[..., None], axis=1)
-    bvc = lambda xx: _over_media(lambda c: bv(heads, c), xx)
+
+    def bvc(xx):
+        return _over_media(lambda c: bv(heads, c), xx)
+
     mid = bvc(lam * xa + (1 - lam) * xb)
     chord = lam[..., 0] * bvc(xa) + (1 - lam[..., 0]) * bvc(xb)
     return jnp.mean(mid < chord - tol, axis=1)
