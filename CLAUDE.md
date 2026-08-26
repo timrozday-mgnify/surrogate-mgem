@@ -183,7 +183,7 @@
 >
 > All on `20hm_bands/`, identical knobs (128/3/1500/512/3e-3/`w_grad` 1/`eps` 1e-3/
 > seed 0) and the *same* 800 held-out round-0 media, so only the architecture
-> varies. `cfs train-value --arch {icnn,deepset,deepset-private,mlp}`, plus
+> varies. `cfs train-value --arch {icnn,icnn-u,deepset,deepset-private,mlp}`, plus
 > `cfs baseline-rf`.
 >
 > | run | worst | mean cos | R² | Hessian cond | train loss (value) |
@@ -246,6 +246,157 @@
 > 0.982 across 0.05→1.0). Quote a per-cell number only where it is flat in delta.
 > Default is now 0.05; R² 0.979 is delta-independent throughout.
 >
+> ### The M3b sweep ran, and located the deficit — measured, 2026-08-26
+>
+> `~/Documents/surrogate-mgem_runs/hpc_run/export/`: 350 completed tasks over 21 of
+> the 30 planned cells, one task per (cell, organism), 324 cpu-h. No
+> `sweep_leaderboard.csv` — aggregate `sweep/*/diagnostics.json` directly. All 6
+> shared-`deepset` cells OOM-killed at ~30 s (exit 137) and `deepset-private
+> ph64/kc64` hit the 12 h walltime (exit 140); 72 tasks aborted downstream.
+>
+> **The rows axis was not tested.** The three `m4k` samplesheet rows still carry
+> the literal `/path/to/20hm_bands/labels` placeholder, every task reports
+> `n_train_media=16000`, and `m4k__rf` is bitwise identical to `m20k__rf` on all 21
+> organisms. Use the local `20hm_bands` runs as the 4000-media reference.
+>
+> **ICNN capacity is a null axis.** Width 128→1024 × depth 3→6 is 37x the
+> parameters; paired per-organism deltas against `w128 d3` are ±0.001 on *every*
+> one of the 12 cells (same organism, w128→w1024: cos 0.71503→0.71514, R²
+> 0.47738→0.47747). Width buys only conditioning: median log10 Hessian cond
+> 9.8 → 3.9. Paired 4k → 20k, the ICNN gains +0.01 R² while `mlp w512` gains
+> **+0.16** (0.752 → 0.915) and `deepset-private` +0.16 — so the ICNN is neither
+> data- nor capacity-limited.
+>
+> **Why: concavity was imposed in the wrong coordinate.** `mu_max` is an LP value
+> function in its RHS and `lb = -Vmax * u`, so it is exactly concave and piecewise
+> *linear* in `u` — but `u = s*x/(1-x)` is **convex** in `x`, so a head locked to
+> concavity in `x` can only fit each ramp with a chord. Tangent test on the labels
+> themselves (1500 row pairs/organism): violated in `x` on **32.3 / 39.7 / 56.9%**
+> of pairs (CR626927.1 / CP001820.1 / ABCC02), in `u` on **0.0%** of all three.
+> `{concave in x}` is a proper subset of `{concave in u}` and the target sits in
+> the gap — every ICNN variant converges to the same projection, which is what
+> capacity cannot move. The 0.0% column also validates the dual handling.
+>
+> **The class is right once stated in `u`.** The parameter-free cutting-plane model
+> `mu_hat(u) = min_j [mu_j + pi_j.(u - u_j)]` over the training rows, scored by
+> `train.score` on the same held-out media: cosine **0.969-0.996**, R²
+> **0.997-0.999**, top1-share 0.82-0.97 on 6/6 organisms, `GCA_000007325.1`
+> clearing the 0.99 gate outright. Against the sweep's best on the same media —
+> ICNN 0.715/0.477, `mlp w512` 0.824/0.909, rf 0.817/0.987. It wins on both axes at
+> once, and unlike the forest it is concave, monotone and analytically
+> differentiable. **This is the new ceiling measurement; retire the forest for it.**
+> **It is not usable in §8 as it stands** — a min of affine functions is exactly
+> concave, but its Hessian is identically 0 inside every piece and undefined at the
+> kinks, which is P3 verbatim ("zero Hessian → Newton stalls or NaNs, gradients look
+> fine"). §8.4 wants a Jacobian that is a *sum of PSD Hessians* under
+> `lx.positive_semidefinite_tag`; from this model that sum is the zero matrix, and
+> the kinks break the smoothness HMC needs downstream. The fix is the log-sum-exp
+> smoothing `-T * logsumexp(-z_j / T)`: still exactly concave and monotone, but
+> C-infinity, with Hessian `A^T (diag(p) - p p^T) A / T` — PSD, and with curvature
+> ~1/T, so `T` is an *explicit* conditioning knob rather than an emergent number,
+> the same homotopy pattern §5.4 already uses for `eps`. The accuracy/conditioning
+> trade-off over `T` is unmeasured.
+>
+> **`cfs train-value --arch icnn-u`** (`src/cfs/surrogate/picnn_u.py`) is that
+> correction: the identical ICNN fed `w = min(u/s, 300) = min(x/(1-x), 300)`, which
+> is *affine* in `u` per metabolite, so the class is the full concave-in-`u` one.
+> Measured on CR626927.1 at the sweep's exact knobs (w128/d3/1500/512/3e-3/w_grad 1):
+> **R² 0.477 → 0.802**, training loss 0.62 → 0.358, cosine flat at 0.710, concavity
+> violations 0. Three things are load-bearing and were each measured:
+>
+> - **`W_CAP = 300`, and capping lower is actively harmful.** A limiting cell above
+>   the cap gets zero predicted gradient on the one metabolite that matters:
+>   cutting-plane cosine on ABCC02 is 0.432 at cap 30, 0.793 at 100, 0.9816 at 300,
+>   0.9817 uncapped. 300 costs ≤0.001 against uncapped and shrinks the range 25x.
+>   Only an *affine* rescale is admissible — any concave squash of `w` (the `x` map
+>   included) reintroduces the original defect.
+> - **A scale-aware init is required.** The parent's `sqrt(2/n_in)` assumes `x` in
+>   [0,1]; on `w` it starts the head at initial loss **1.7e6** with median Hessian
+>   condition exactly 0 — softplus is affine out there, so the net begins *linear*
+>   and Adam spends the run walking the bias down. Dividing the input weights by
+>   `W_CAP/2` gives initial loss 41.6 and is what turns R² 0.66 into 0.80.
+> - **The diagnostics must move with the constraint.** `concavity_violation_rate`
+>   and `hessian_cond_median` are taken in the head's own coordinate via the
+>   optional `to_diag`/`batched_value_diag`/`head_in_diag` hooks; read in `x`,
+>   a correctly concave `icnn-u` reports 98% violating and cond ~1e32. And the
+>   diagnostic must not reach `w` by round-tripping through `x` — `1-x` cancels in
+>   float32 exactly across the replete far field (~45% of cells). Heads without the
+>   hooks see the identity, so every existing arch is byte-identical.
+>
+> **`icnn-u`: capacity is still inert, but the `w_grad` frontier moved wholesale.**
+> Width 128 → 512 at `w_grad` 1 changes nothing (cosine 0.7095 → 0.7114, R² 0.8024
+> → 0.8025), so the hypothesis that the `x` constraint was what suppressed the
+> capacity axis is **wrong** — something second and independent pins width. But the
+> `w_grad` sweep (CR626927.1, w128/d3/1500/512/3e-3, dataset loaded once,
+> `w_grad` 1 reproduces the standalone run exactly):
+>
+> | `w_grad` | cosine | R² | p05 | top1 | Hessian cond |
+> | --- | --- | --- | --- | --- | --- |
+> | 0 | 0.390 | **0.821** | 0.000 | 0.375 | 9.6e11 |
+> | 0.3 | 0.537 | 0.811 | 0.000 | 0.516 | 3.6e14 |
+> | 1 | 0.710 | 0.802 | 0.002 | 0.692 | 1.7e15 |
+> | 3 | 0.816 | 0.787 | 0.128 | 0.796 | 6.2e15 |
+> | **10** | **0.903** | 0.756 | **0.353** | 0.864 | 1.7e18 |
+> | 30 | 0.753 | 0.511 | 0.003 | 0.710 | 2.0e19 |
+>
+> **An earlier note in this file — "`icnn-u` fixes the value head and nothing else"
+> — is retracted.** It was measured at `w_grad` 1 only. Against the x-space ICNN at
+> the *same* weight, 10 → 0.66 cosine / 0.62 R², `icnn-u` gives **0.903 / 0.756**:
+> the coordinate fix moved the whole frontier, not just its value end. At the
+> optimum it beats every model measured on this organism — `rf` 0.817, `mlp w512`
+> 0.812, `icnn` 0.715 — from *inside* the concave class, violations still 0, and is
+> closing on the cutting-plane's 0.969.
+>
+> Three things this does **not** establish. It is **one organism**; the gate is the
+> worst over 21. `w_grad` 30 collapses on both axes, and whether that is a real
+> trade or an optimisation failure at fixed `lr` is untested (10-30 is unprobed).
+> And the price is conditioning — 9.6e11 → 1.7e18 — so the accuracy the gradient
+> term buys is being paid for in exactly the currency §8's Newton spends. The
+> "loss weights are not the answer" verdict below was measured in `x` and does not
+> carry over.
+>
+> **Capacity re-tested at the `w_grad` optimum, and it is still not the lever.** The
+> width test above was at `w_grad` 1; redone at 10, where the gradient term binds
+> (CR626927.1): width 128 → 0.9031 cos / 0.7563 R² / p05 0.353, 512 → 0.9088 /
+> 0.7599 / 0.429, 1024 → 0.9067 / 0.7615 / 0.366. It peaks at 512 and turns over —
+> +0.006 cosine for 16x the parameters. Train-vs-held-out gap is **0.005 cosine /
+> 0.013 R²** throughout, so the head underfits with no variance to trade: this is an
+> optimisation/inductive-bias limit, not a capacity or a label one.
+>
+> **Rows scale the *nonparametric* family and nothing else.** The cutting-plane
+> model is coverage-limited — each labelled row contributes one dual vertex — and it
+> does improve with K: CR626927.1 0.9305 (K=100) → 0.950 (1k) → 0.9621 (4k) → 0.9690
+> (all 16k); ABCC02 0.8983 → 0.959 → 0.9711 → 0.9817. But `1-cos` only falls ~0.89x
+> per doubling on CR626927.1 (~800x rows to reach 0.99) against ~0.75x on ABCC02
+> (~4x). The gate is the worst organism, so **rows alone do not get there** — though
+> p05 climbs 0.32 → 0.79 over 160x and is nowhere near saturated, so they do buy
+> tail. K=250 tangents already reach 0.94, i.e. the tangent set is hugely redundant
+> and a *parametric* max-affine should not need one piece per vertex. Better fitting
+> dominates more rows.
+>
+> **`--arch groupmax-u`** (`src/cfs/surrogate/groupmax.py`) is the architecture bet
+> that follows: the same `u`-coordinate ICNN with the activation changed from
+> `softplus` to a **smoothed group max**, `T * logsumexp(a/T)` over groups of the
+> pre-activation. A max of affine functions *is* the target's form, so one corner
+> costs one unit instead of a sum of many soft bends — and depth compounds
+> smoothness, which is why width/depth were inert. It nests plain max-affine exactly
+> at `--width 1 --depth 1 --gm-group K` (asserted in `tests/test_cfs_value_head.py`).
+> `--gm-temp` is the conditioning knob, not just an accuracy one: a hard max has zero
+> Hessian inside a piece (P3), and curvature scales as `1/T`, so the accuracy-vs-
+> conditioning frontier §8 must buy from becomes a swept axis. It is fixed, never
+> learned — a learned temperature collapses toward the hard max (measured, cond
+> 1e32). Related work: GroupMax (arXiv 2206.06622, motivated by Bellman *cuts*),
+> Maxout (1302.4389), and LSPA/CAP/AMAP for max-affine fitting, which is the known
+> fix for the dead-piece collapse a plain Adam max-affine hits (K=256 and K=1024
+> scored identically).
+>
+> **Not the answer, on this evidence:** per-metabolite heads. `deepset` already is
+> one (shared `phi` per metabolite, pooled, per-organism `rho`) and is under the
+> same coordinate defect — `phi` is concave in `x_m`. Its mean-pooling also makes
+> `d(mu)/dx_m = <rho'(S), dphi_m/dx_m>`, so the medium reaches the gradient
+> *pattern* only through a `k_code`-wide vector, a narrow channel for what is an
+> argmin across metabolites. It costs 5-11 h/organism against the ICNN's 5 min.
+>
 > **Next — M3b, the HPC sweep (plan §7.4).** Everything above is one laptop, 4000
 > media/organism (1/5 of D10), width 128, depth 3. The models **underfit**: the
 > deepsets on training loss outright, the ICNN by inference (a forest reaches R²
@@ -282,9 +433,10 @@
 > machinery stays: it removed the two-pass dependency and it is how a *new* genome
 > gets labelled at all.
 >
-> Loss weights are still not the answer: `w_grad` only trades the heads (1 → 0.63
-> cosine / 0.72 R², 10 → 0.66 / 0.62) and neither end reaches the "R² ≥ 0.9"
-> balance rule. Checkpoints: `20hm_bands/value_b1/` (best worst-cosine to date,
+> Loss weights are not the answer **for the x-space ICNN**: `w_grad` only trades
+> the heads (1 → 0.63 cosine / 0.72 R², 10 → 0.66 / 0.62) and neither end reaches
+> the "R² ≥ 0.9" balance rule. This is coordinate-specific — see the `icnn-u`
+> `w_grad` sweep above, where 10 gives 0.903 / 0.756. Checkpoints: `20hm_bands/value_b1/` (best worst-cosine to date,
 > 0.733), `20hm_bands/value_{icnn_b64,ds1,dsp1,mlp1,rf1,rf_d*}/` (this trial),
 > `20hm_probe/value_p{1,2,3}/` (probe bands + top-up rounds — **scored on the
 > moving ruler; not comparable to anything above**), `20hm/value_v2/{u_w1,u_w10}/`

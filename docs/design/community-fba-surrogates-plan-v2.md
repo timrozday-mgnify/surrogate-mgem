@@ -649,7 +649,7 @@ composition time.
 > any norm-relative loss by ~1e14.
 
 > **Architecture trial (2026-07-29) — the ICNN survives; the deficit is located.**
-> `cfs train-value --arch {icnn,deepset,deepset-private,mlp}` and `cfs baseline-rf`,
+> `cfs train-value --arch {icnn,icnn-u,deepset,deepset-private,mlp}` and `cfs baseline-rf`,
 > all on `20hm_bands/` at identical knobs and the *same* 800 held-out media.
 >
 > | | worst | mean | R² | Hess. cond | train loss (value) |
@@ -700,6 +700,39 @@ composition time.
 > `diagnostics.json` records `n_val_media` / `n_train_media` / `rounds_present`.
 > **The earlier finding that top-up rounds hurt is retracted** — it was never a
 > controlled experiment. Re-running it on the fixed ruler is open work.
+
+> **M3b ran (2026-08-26) and both of the bullets above about *where* the deficit
+> lives are superseded — see `CLAUDE.md` for the full read.** The short form: the
+> ICNN's capacity axis is inert (width 128→1024 × depth 3→6 moves paired
+> per-organism cosine and R² by ±0.001 on all 12 cells) because **concavity was
+> imposed in the wrong coordinate**. `mu_max` is an LP value function in its RHS
+> and `lb = -Vmax * u`, so it is concave and piecewise *linear* in `u`; but
+> `u = s*x/(1-x)` is **convex** in `x`, so a concave-in-`x` head fits each ramp
+> with a chord. Tangent test on the labels: violated in `x` on 32.3/39.7/56.9% of
+> row pairs (3 organisms), in `u` on **0.0%**. `{concave in x} ⊊ {concave in u}`
+> and the target is in the gap — every variant converges to the same projection,
+> which no amount of capacity moves.
+>
+> Consequences for the decisions recorded above:
+>
+> - **"The remaining error is localisation" is withdrawn.** The ions are the
+>   metabolites whose ramps are steepest in `u`, i.e. the ones the `x`-space chord
+>   approximates worst. A per-metabolite architecture does not address this; the
+>   `deepset`'s `phi` is concave in `x_m` and carries the identical defect.
+> - **The forest is no longer the ceiling.** The parameter-free cutting-plane model
+>   `mu_hat(u) = min_j [mu_j + pi_j.(u − u_j)]` scores cosine **0.969–0.996** and R²
+>   **0.997–0.999** on 6/6 organisms — beating the forest on gradients and the MLP
+>   on both, while being concave, monotone and analytically differentiable. One
+>   organism clears the 0.99 gate. Use it as the ceiling measurement; it needs no
+>   finite-difference probe, so the delta caveat below no longer applies to it.
+> - **P11 stays parked, but for a new reason.** The MLP's advantage was read as
+>   +0.009 cosine when the constraint was in `x`; it is now clear the constraint was
+>   never the problem, the coordinate was.
+>
+> `cfs train-value --arch icnn-u` (`src/cfs/surrogate/picnn_u.py`) is the
+> correction — the same ICNN over `w = min(u/s, 300)`, affine in `u`, so the class
+> is the full concave-in-`u` one. R² 0.477 → **0.802** on one organism at identical
+> knobs, concavity violations still 0. Its cosine has not moved yet.
 
 > ### 7.4 M3b — HPC sweep (next)
 >
