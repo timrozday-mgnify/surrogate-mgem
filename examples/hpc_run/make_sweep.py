@@ -23,7 +23,7 @@ import sys
 # `baseline-rf` has neither --arch nor --width, so a shared cross product has to be
 # filtered per row rather than per axis.
 _DEEPSET_ONLY = {"--phi-hidden", "--k-code", "--emb-dim"}
-_GROUPMAX_ONLY = {"--gm-group", "--gm-temp"}
+_GROUPMAX_ONLY = {"--gm-group", "--gm-temp", "--gm-init"}
 _RF_ONLY = {"--n-estimators", "--delta"}
 
 
@@ -53,6 +53,7 @@ def cells(
     emb_dim,
     gm_group,
     gm_temp,
+    gm_init,
     phi_hidden,
     k_code,
     n_estimators,
@@ -76,6 +77,7 @@ def cells(
         "--emb-dim": emb_dim,
         "--gm-group": gm_group,
         "--gm-temp": gm_temp,
+        "--gm-init": gm_init,
         "--phi-hidden": phi_hidden,
         "--k-code": k_code,
         "--n-estimators": n_estimators,
@@ -94,6 +96,7 @@ def cells(
         "--emb-dim": "emb",
         "--gm-group": "grp",
         "--gm-temp": "T",
+        "--gm-init": "init",
         "--phi-hidden": "ph",
         "--k-code": "kc",
         "--n-estimators": "t",
@@ -155,6 +158,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--emb-dim", type=_csv, default=["8"], help="deepset only.")
     p.add_argument("--gm-group", type=_csv, default=[""], help="groupmax-u only; '' = default.")
     p.add_argument("--gm-temp", type=_csv, default=[""], help="groupmax-u only; '' = default.")
+    p.add_argument(
+        "--gm-init", type=_csv, default=[""], help="groupmax-u only: random,labels."
+    )
     p.add_argument("--phi-hidden", type=_csv, default=[""], help="deepset only; '' = default.")
     p.add_argument("--k-code", type=_csv, default=[""], help="deepset only; '' = default.")
     p.add_argument("--n-estimators", type=_csv, default=["100"], help="rf only.")
@@ -177,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
             emb_dim=a.emb_dim,
             gm_group=a.gm_group,
             gm_temp=a.gm_temp,
+            gm_init=a.gm_init,
             phi_hidden=a.phi_hidden,
             k_code=a.k_code,
             n_estimators=a.n_estimators,
@@ -209,6 +216,7 @@ def demo() -> None:
             emb_dim=["8"],
             gm_group=[""],
             gm_temp=[""],
+            gm_init=[""],
             phi_hidden=[""],
             k_code=[""],
             n_estimators=["100"],
@@ -241,6 +249,7 @@ def demo() -> None:
             emb_dim=["8"],
             gm_group=["8"],
             gm_temp=["0.1"],
+            gm_init=["labels"],
             phi_hidden=[""],
             k_code=[""],
             n_estimators=["100"],
@@ -251,7 +260,9 @@ def demo() -> None:
     gmax = [r for r in gm if r[1] == "groupmax-u"][0]
     icnnu = [r for r in gm if r[1] == "icnn-u"][0]
     assert "--gm-group 8" in gmax[3] and "--gm-temp 0.1" in gmax[3], gmax
+    assert "--gm-init labels" in gmax[3], gmax
     assert "--gm-group" not in icnnu[3] and "--gm-temp" not in icnnu[3], icnnu
+    assert "--gm-init" not in icnnu[3], icnnu
     # deepset-only flags reach a deepset row; an empty axis value is dropped, which
     # is how a knob is left at the CLI's own default.
     ds = list(
@@ -268,6 +279,7 @@ def demo() -> None:
             emb_dim=["8"],
             gm_group=[""],
             gm_temp=[""],
+            gm_init=[""],
             phi_hidden=["64"],
             k_code=["64"],
             n_estimators=["100"],

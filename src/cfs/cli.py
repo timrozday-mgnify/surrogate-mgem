@@ -147,6 +147,13 @@ def build_parser() -> argparse.ArgumentParser:
         "this is the Newton conditioning knob (§8). Default 0.1.",
     )
     tv.add_argument(
+        "--gm-init",
+        choices=["random", "labels"],
+        default=None,
+        help="groupmax-u only: `labels` seeds the first layer from the label "
+        "tangents ranked by active-set frequency, instead of from noise.",
+    )
+    tv.add_argument(
         "--phi-hidden",
         type=int,
         default=None,
@@ -226,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
             phi_hidden=args.phi_hidden,
         gm_group=args.gm_group,
         gm_temp=args.gm_temp,
+        gm_init=args.gm_init,
             k_code=args.k_code,
             seed=args.seed,
             organisms=organisms,

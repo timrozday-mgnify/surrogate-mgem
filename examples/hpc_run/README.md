@@ -32,7 +32,7 @@ run_labels.sh       stage 1 launcher   -> labels_out/labels/
 make_sweep.py       writes a sweep samplesheet from axis flags
 make_sweep_full.sh  regenerates sweep_full.csv as five named arms
 sweep_smoke.csv     4 cells against labels_stub — -stub only (no real data)
-sweep_full.csv      28 cells: the real sweep
+sweep_full.csv      36 cells: the real sweep
 sweep.config        stage 2 params: xla_devices, per-process resources
 run_sweep.sh        stage 2 launcher   -> sweep_out/sweep_leaderboard.csv
 site.config         EXAMPLE slurm + singularity config, shared by both stages
@@ -102,7 +102,7 @@ delete the partial shard first.
 SWEEP=sweep_full.csv NF_PROFILE=singularity ./run_sweep.sh -c site.config
 ```
 
-One task per samplesheet row. `sweep_full.csv` is 28 cells in six arms, written by
+One task per samplesheet row. `sweep_full.csv` is 36 cells in seven arms, written by
 `make_sweep_full.sh` (which carries the measurement behind each arm in its comments):
 
 | arm | cells | what it tests |
@@ -112,6 +112,7 @@ One task per samplesheet row. `sweep_full.csv` is 28 cells in six arms, written 
 | C `icnn`, `mlp`, `rf` at the same `w_grad` | 3 | the x-space head being replaced, plus an unconstrained ceiling and a non-parametric floor |
 | D `deepset-u-private`, `phi` {32,64} × `k_code` {16,64} | 4 | the per-metabolite head with its coordinate fixed. **This arm is most of the cost** |
 | F `groupmax-u`, group {4,8,16} × temperature {0.01,0.03,0.1} | 9 | **kinks as the primitive.** Also the accuracy-vs-conditioning frontier: curvature scales as 1/T |
+| G `groupmax-u` seeded from label tangents, K {100,1000} × T {0.01,0.03} × init {labels,random} | 8 | **initialisation, not architecture.** Both inits at matched K and T |
 | E the 4000-media set: `icnn-u`, `icnn`, `rf` | 3 | the rows axis |
 
 **Both label roots must exist.** Arm E reads `labels_out_4k/labels`; generate it by
@@ -140,6 +141,20 @@ unit, and it nests plain max-affine exactly at `--width 1 --depth 1 --gm-group K
 `--gm-temp` is not only an accuracy knob: a hard max has zero Hessian inside a piece
 (P3, the one thing §8's Newton cannot follow) and curvature scales as `1/T`, so this
 arm measures the frontier Newton has to buy from. It costs about what Arm A does.
+
+**Arm G is the one to read first.** Every labelled row is an exact supporting
+hyperplane of `mu_max`, so the head's first layer can simply be *told* its affine
+pieces rather than discovering them. At `--width 1 --depth 1` the head IS
+`min_k(a_k.w + c_k)` and the seed reproduces the pruned tangent model outright,
+which scores held-out cosine 0.95-0.96 and R² 0.996 **before any training**.
+Ranking the tangents by active-set frequency is what makes a small K enough: 100
+ranked planes match ~2000 random ones.
+
+It matters because random init measurably does not get there. At identical class
+and identical `T = 0.1`, the tangent model scores 0.923 and the same head trained
+from noise scores 0.712 — a 0.21 optimisation gap, which is the failure that
+LSPA/CAP-style max-affine fitting exists to fix. The arm sweeps both inits at
+matched K and T so that comparison is inside one arm.
 
 Drop Arm D first if the queue budget is tight — Arms A-C answer the gate question on
 their own. The shared-trunk `deepset-u` is deliberately absent: it OOM-killed in

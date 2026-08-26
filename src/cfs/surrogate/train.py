@@ -221,6 +221,7 @@ def train_value_heads(
     k_code: int | None = None,
     gm_group: int | None = None,
     gm_temp: float | None = None,
+    gm_init: str | None = None,
     seed: int = 0,
 ) -> eqx.Module:
     """Fit the stacked Head A. Labels are scaled by ``ds.mu_scale`` (§7.1)."""
@@ -254,6 +255,10 @@ def train_value_heads(
         gm_group=gm_group,
         gm_temp=gm_temp,
     )
+    if gm_init == "labels":
+        # Seeded from the labels' own supporting hyperplanes, not from noise. Done
+        # here rather than in `_build` so the architecture registry stays data-free.
+        heads = groupmax.init_from_tangents(heads, ds, seed=seed)
     n = x.shape[1]
     steps_per_epoch = max(1, n // batch)
     optimiser = optax.adam(optax.cosine_decay_schedule(lr, epochs * steps_per_epoch))
@@ -567,6 +572,7 @@ def run(
     k_code: int | None = None,
     gm_group: int | None = None,
     gm_temp: float | None = None,
+    gm_init: str | None = None,
     seed: int = 0,
     organisms: list[str] | None = None,
 ) -> dict:
@@ -590,6 +596,7 @@ def run(
         k_code=k_code,
         gm_group=gm_group,
         gm_temp=gm_temp,
+        gm_init=gm_init,
         seed=seed,
     )
     diagnostics = evaluate(heads, ds, seed=seed, arch=arch)
@@ -606,6 +613,7 @@ def run(
     if arch == "groupmax-u":
         meta["gm_group"] = gm_group or groupmax.DEFAULT_GROUP
         meta["gm_temp"] = groupmax.DEFAULT_TEMP if gm_temp is None else gm_temp
+        meta["gm_init"] = gm_init or "random"
     if arch.startswith("deepset"):
         # Only when set: an absent key is what makes `load` fall back to the
         # width-derived default, so a checkpoint written before these flags existed

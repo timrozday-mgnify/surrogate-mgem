@@ -82,6 +82,22 @@ $GEN --labels "m20k=$L20" --arch deepset-u-private --width 512 --depth 3 \
 $GEN --labels "m20k=$L20" --arch groupmax-u --width 128 --depth 3 \
      --w-grad 10 --epochs 1500 --gm-group 4,8,16 --gm-temp 0.01,0.03,0.1 | emit
 
+# --- Arm G: the same head SEEDED from the labels' own supporting hyperplanes,
+# ranked by active-set frequency, instead of from noise. At width 1 / depth 1 the
+# head IS min_k(a_k.w + c_k) and the seed reproduces the pruned tangent model
+# outright (unit-tested), so training starts at held-out cosine ~0.95 rather than
+# at random. `--gm-group` is the number of affine pieces K: 100 ranked planes
+# already match ~2000 random ones.
+#
+# The arm exists because random init measurably does not get there: at identical
+# class and identical T=0.1, the tangent model scores 0.923 and the same head
+# trained from noise scores 0.712 -- a 0.21 optimisation gap. Both inits are swept
+# so the comparison is inside one arm at matched width, depth, K and T, rather than
+# borrowed from Arm F, which differs in width and depth as well.
+$GEN --labels "m20k=$L20" --arch groupmax-u --width 1 --depth 1 \
+     --w-grad 10 --epochs 1500 --gm-group 100,1000 --gm-temp 0.01,0.03 \
+     --gm-init labels,random | emit
+
 # --- Arm E: the rows axis, for real this time. 4000 vs 20000 media on the two heads
 # that bracket the question plus the forest. Prediction on file, so this is a real
 # test: rows will NOT help. Train-vs-held-out gap at the w_grad optimum is 0.005

@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 jax = pytest.importorskip("jax")
+jnp = pytest.importorskip("jax.numpy")
 pytest.importorskip("equinox")
 
 from cfs.surrogate.data import ValueDataset, _organism_arrays  # noqa: E402
@@ -212,6 +213,81 @@ def test_groupmax_nests_max_affine_and_keeps_curvature():
 
     lo, hi = curv(0.05), curv(1.0)
     assert lo > 0.0 and hi > lo, (lo, hi)
+
+
+def _min_affine_dataset(K=5, n=300, M=4, seed=0):
+    """A target that IS an LP value function: mu = min_k(a_k . w + c_k) in w space.
+
+    Built directly so the label-tangent init has a known right answer — every row's
+    dual is the active piece's coefficient vector, exactly as in a real solve.
+    """
+    from cfs.surrogate.picnn_u import to_diag
+
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0.05, 0.9, (1, n, M)).astype(np.float32)
+    w = np.asarray(to_diag(jnp.asarray(x)))
+    a = rng.uniform(0.1, 2.0, (K, M)).astype(np.float32)  # slopes >= 0: monotone
+    c = rng.uniform(0.5, 3.0, (K,)).astype(np.float32)
+    planes = w[0] @ a.T + c
+    k = planes.argmin(1)
+    mu = planes[np.arange(n), k][None]
+    g_w = a[k][None]
+    g_x = g_w / (1.0 - x) ** 2  # labels are d(mu)/dx
+    mask = np.ones((1, M), dtype=bool)
+    ok = np.ones((1, n), dtype=bool)
+    nv = n // 3
+    return ValueDataset(
+        genome_ids=["g0"], exchanges=[f"EX_{j}" for j in range(M)], mask=mask,
+        x_train=x[:, nv:], mu_train=mu[:, nv:], g_train=g_x[:, nv:], gvalid_train=ok[:, nv:],
+        x_val=x[:, :nv], mu_val=mu[:, :nv], g_val=g_x[:, :nv], gvalid_val=ok[:, :nv],
+        mu_scale=np.ones(1, np.float32), x_scale=np.ones((1, M), np.float32),
+        index_hash="test", rounds_present=[0],
+    )
+
+
+def test_label_tangent_init_recovers_the_target_before_training():
+    """`--gm-init labels` on the case it is exact for: width 1, depth 1, group K.
+
+    The head then *is* min_k(a_k.w + c_k), and the labels *are* that function's
+    supporting hyperplanes — so an untrained head must already be right. If this
+    drifts, the init is silently a warm start rather than a reproduction.
+    """
+    from cfs.surrogate import groupmax
+    from cfs.surrogate.picnn_u import to_diag
+
+    ds = _min_affine_dataset()
+    M = ds.x_train.shape[-1]
+    heads = groupmax.stack_heads(
+        jax.random.PRNGKey(0), 1, M, ds.mask, width=1, depth=1, group=64, temp=1e-4
+    )
+    seeded = groupmax.init_from_tangents(heads, ds)
+    wv = to_diag(jnp.asarray(ds.x_val))
+    before = np.asarray(groupmax.batched_value_diag(heads, wv))[0]
+    after = np.asarray(groupmax.batched_value_diag(seeded, wv))[0]
+    want = ds.mu_val[0]
+    assert np.abs(after - want).max() < 1e-2, np.abs(after - want).max()
+    # And it is the init doing it, not the target being easy to hit by accident.
+    assert np.abs(before - want).max() > 10 * np.abs(after - want).max()
+
+    # The gradient is the active plane's dual, which is what the gate scores.
+    _, g = groupmax.batched_value_and_grad(seeded, jnp.asarray(ds.x_val))
+    du = (1.0 - ds.x_val) ** 2  # d(mu)/dx -> d(mu)/dw
+    cos = np.sum(np.asarray(g) * ds.g_val, -1) / (
+        np.linalg.norm(np.asarray(g), axis=-1) * np.linalg.norm(ds.g_val, axis=-1) + 1e-30
+    )
+    assert np.nanmean(cos) > 0.99, np.nanmean(cos)
+    assert du.shape == ds.x_val.shape
+
+
+def test_active_set_ranking_puts_the_commonest_basis_first():
+    from cfs.surrogate.groupmax import rank_by_active_set
+
+    g = np.array([[1.0, 0, 0], [0, 1.0, 0], [1.0, 0, 0], [1.0, 0, 0], [0, 0, 1.0]])
+    order = rank_by_active_set(g, np.ones(5, bool))
+    # Pattern (0,) has 3 rows, (1,) and (2,) one each: a representative of the
+    # commonest basis must come first, and every row must appear exactly once.
+    assert order[0] in (0, 2, 3)
+    assert sorted(order.tolist()) == [0, 1, 2, 3, 4]
 
 
 def test_deepset_u_moves_phi_to_u_and_keeps_everything_else():

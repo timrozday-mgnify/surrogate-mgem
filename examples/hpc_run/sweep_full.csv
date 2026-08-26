@@ -24,6 +24,14 @@ m20k__groupmax-u__grp8__T0.1,groupmax-u,labels_out/labels,--width 128 --depth 3 
 m20k__groupmax-u__grp16__T0.01,groupmax-u,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 16 --gm-temp 0.01 --seed 0
 m20k__groupmax-u__grp16__T0.03,groupmax-u,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 16 --gm-temp 0.03 --seed 0
 m20k__groupmax-u__grp16__T0.1,groupmax-u,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 16 --gm-temp 0.1 --seed 0
+m20k__groupmax-u__grp100__T0.01__initlabels,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 100 --gm-temp 0.01 --gm-init labels --seed 0
+m20k__groupmax-u__grp100__T0.01__initrandom,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 100 --gm-temp 0.01 --gm-init random --seed 0
+m20k__groupmax-u__grp100__T0.03__initlabels,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 100 --gm-temp 0.03 --gm-init labels --seed 0
+m20k__groupmax-u__grp100__T0.03__initrandom,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 100 --gm-temp 0.03 --gm-init random --seed 0
+m20k__groupmax-u__grp1000__T0.01__initlabels,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 1000 --gm-temp 0.01 --gm-init labels --seed 0
+m20k__groupmax-u__grp1000__T0.01__initrandom,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 1000 --gm-temp 0.01 --gm-init random --seed 0
+m20k__groupmax-u__grp1000__T0.03__initlabels,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 1000 --gm-temp 0.03 --gm-init labels --seed 0
+m20k__groupmax-u__grp1000__T0.03__initrandom,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 1000 --gm-temp 0.03 --gm-init random --seed 0
 m4k__icnn-u,icnn-u,labels_out_4k/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --seed 0
 m4k__icnn,icnn,labels_out_4k/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --seed 0
 m4k__rf,rf,labels_out_4k/labels,--eps 1e-3 --n-estimators 100 --delta 0.05 --seed 0
