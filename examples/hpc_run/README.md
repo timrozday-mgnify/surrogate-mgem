@@ -32,7 +32,7 @@ run_labels.sh       stage 1 launcher   -> labels_out/labels/
 make_sweep.py       writes a sweep samplesheet from axis flags
 make_sweep_full.sh  regenerates sweep_full.csv as five named arms
 sweep_smoke.csv     4 cells against labels_stub — -stub only (no real data)
-sweep_full.csv      34 cells: the real sweep
+sweep_full.csv      28 cells: the real sweep
 sweep.config        stage 2 params: xla_devices, per-process resources
 run_sweep.sh        stage 2 launcher   -> sweep_out/sweep_leaderboard.csv
 site.config         EXAMPLE slurm + singularity config, shared by both stages
@@ -102,7 +102,7 @@ delete the partial shard first.
 SWEEP=sweep_full.csv NF_PROFILE=singularity ./run_sweep.sh -c site.config
 ```
 
-One task per samplesheet row. `sweep_full.csv` is 34 cells in seven arms, written by
+One task per samplesheet row. `sweep_full.csv` is 28 cells in seven arms, written by
 `make_sweep_full.sh` (which carries the measurement behind each arm in its comments):
 
 | arm | cells | what it tests |
@@ -111,7 +111,7 @@ One task per samplesheet row. `sweep_full.csv` is 34 cells in seven arms, writte
 | B `icnn-u` width {512,1024} × depth {3,6}, at `w_grad` 10 | 4 | capacity, re-tested where the gradient term actually binds — the last run measured it at `w_grad` 1 and called it inert |
 | C `icnn`, `mlp`, `rf` at the same `w_grad` | 3 | the x-space head being replaced, plus an unconstrained ceiling and a non-parametric floor |
 | D `deepset-u-private`, `phi` {32,64} × `k_code` {16,64} | 4 | the per-metabolite head with its coordinate fixed. **This arm is most of the cost** |
-| F `groupmax-u`, group {4,8,16} × temperature {0.01,0.03,0.1} | 9 | **kinks as the primitive.** Also the accuracy-vs-conditioning frontier: curvature scales as 1/T |
+| F `groupmax-u` seeded, width 128 × depth 3, T {0.03,0.1,0.3} | 3 | does depth buy anything **once the pieces are seeded**? Arm G is width 1 / depth 1, so nothing else asks |
 | G `groupmax-u` seeded from label tangents, K {100,1000} × T {0.03,0.1,0.3} | 6 | **initialisation, not architecture.** Both inits at matched K and T |
 | E the 4000-media set: `icnn-u`, `icnn`, `rf` | 3 | the rows axis |
 
@@ -133,7 +133,20 @@ Arm E has a prediction on file, which is what makes it a test rather than a fish
 trip: **rows will not help.** The train-vs-held-out gap at the `w_grad` optimum is
 0.005 cosine / 0.013 R², so the head underfits, and rows only buy variance.
 
-**Arm F is the architecture bet.** Every concave head so far builds a corner out of
+Reading the leaderboard: only *swept* axes reach a cell id, so Arm F's cells are
+`m20k__groupmax-u__T*` (width 128, depth 3) and Arm G's carry a piece count,
+`m20k__groupmax-u__grp{100,1000}__T*` (width 1, depth 1). The full flag string for
+any cell is its `args` column in `sweep_full.csv`.
+
+**Arm F was 9 random-init cells and is now 3 seeded ones.** From random init at
+width 128 / depth 3, `groupmax-u` scores cosine 0.7117 at T=0.1 and 0.7602 at
+T=0.03 — both with a median Hessian condition of *exactly 0*, i.e. collapsed to a
+single affine piece. That is not a quirk of Arm G's narrow width-1 setup; it is
+what random init does to a group-max head generally. What survives is the seeded
+version at Arm G's temperatures, which asks the one question Arm G cannot: does
+depth buy anything once the pieces are already right?
+
+**Why group-max at all.** Every concave head so far builds a corner out of
 a non-negative sum of smooth softplus ridges, and `mu_max` is piecewise *linear*
 with ~1700 distinct active sets per organism — depth compounds smoothness rather
 than making corners. `groupmax-u` makes the max the activation, so one corner is one

@@ -63,24 +63,28 @@ $GEN --labels "m20k=$L20" --arch rf   --n-estimators 100 --delta 0.05 | emit
 $GEN --labels "m20k=$L20" --arch deepset-u-private --width 512 --depth 3 \
      --w-grad 10 --epochs 1500 --emb-dim 8 --phi-hidden 32,64 --k-code 16,64 | emit
 
-# --- Arm F: groupmax-u -- kinks as the primitive rather than as a sum of smooth
-# ridges. `min_k(a_k.u + c_k)` is what an LP value function IS, and a softplus ICNN
-# spends many units approximating one corner; a max unit is one corner. The head
-# nests max-affine exactly at width 1 / depth 1 (asserted in the unit tests).
+# --- Arm F: does depth/width buy anything ONCE THE PIECES ARE SEEDED? This is the
+# only place that asks -- Arm G is width 1 / depth 1 throughout, where the head is
+# exactly `min_k(a_k.w + c_k)` and nothing composes.
 #
-# `--gm-temp` is the axis that matters and it is NOT just accuracy: curvature scales
-# as 1/T, so this arm measures the accuracy-vs-conditioning frontier §8's Newton
-# actually has to buy from. T -> 0 recovers the exact-but-Newton-hostile hard max
-# (zero Hessian inside a piece: P3). Group size trades corners per unit against
-# parameters.
+# It was 9 cells of random-init group/temperature grid. That grid is cut because it
+# is now known to measure the wrong thing: at width 128 / depth 3 from random init,
+# `groupmax-u` scores cosine 0.7117 at T=0.1 and 0.7602 at T=0.03 -- both with a
+# median Hessian condition of **exactly 0**, i.e. the head collapsed to a single
+# affine piece. The collapse is not a quirk of the narrow width-1 configuration; it
+# is what random init does to a group-max head generally, and Arm G's A/B
+# establishes it more cheaply.
 #
-# The temperature range is measured, not guessed: on the pruned label-tangent model
-# (same hypothesis class, no optimiser in the way) T=0.01-0.03 keeps the hard min's
-# accuracy -- cosine 0.95-0.96, R2 0.996 -- while T=0.1 is already past the knee
-# (0.923/0.929) and T=0.3 collapses (0.83/0.79, R2 0.74). The old 0.03-0.3 range
-# spent two of its three points below the knee.
+# What is left is the seeded version at the same temperatures as Arm G, so the two
+# are comparable at matched init and T and the only difference is the architecture
+# above the first layer. The seed is a *warm start* here rather than a reproduction
+# -- wider than width 1, the head is a non-negative sum of group-wise minima, not
+# one global minimum (see `groupmax.init_from_tangents`). Dropped along with the
+# random cells: the `--gm-group` axis at width 128, which is largely redundant with
+# Arm G's `K` since both move the total number of affine pieces.
 $GEN --labels "m20k=$L20" --arch groupmax-u --width 128 --depth 3 \
-     --w-grad 10 --epochs 1500 --gm-group 4,8,16 --gm-temp 0.01,0.03,0.1 | emit
+     --w-grad 10 --epochs 1500 --gm-group 8 --gm-temp 0.03,0.1,0.3 \
+     --gm-init labels | emit
 
 # --- Arm G: the same head SEEDED from the labels' own supporting hyperplanes,
 # ranked by active-set frequency, instead of from noise. At width 1 / depth 1 the
