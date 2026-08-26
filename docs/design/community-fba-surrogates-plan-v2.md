@@ -734,6 +734,46 @@ composition time.
 > is the full concave-in-`u` one. R² 0.477 → **0.802** on one organism at identical
 > knobs, concavity violations still 0. Its cosine has not moved yet.
 
+> **Second finding, 2026-08-26: initialisation, not architecture.** With the
+> coordinate corrected, the remaining gap is where the optimiser *starts*. Matched
+> A/B on CR626927.1 — `groupmax-u`, width 1 / depth 1 / K=250 / T=0.03 / `w_grad`
+> 10, same seed, only `--gm-init` differing:
+>
+> | init | cosine | R² | p05 | Hessian cond |
+> |---|---|---|---|---|
+> | `labels` | **0.9733** | **0.996** | **0.834** | 1.9e24 |
+> | `random` | 0.5982 | 0.4795 | 0.000 | **0.0** |
+>
+> Condition exactly 0 means no curvature anywhere: the head collapsed to a *single*
+> affine piece, so 249 of 250 planes never became active and never received useful
+> gradient. This is the dead-piece failure LSPA/CAP-style max-affine fitting exists
+> to fix, and it reproduces at width 128 / depth 3 too (cosine 0.76, cond 0.0 at
+> both T=0.01 and T=0.03), so it is what random init does to a group-max head
+> generally rather than a quirk of the narrow configuration.
+>
+> The remedy is **not** those fitting algorithms: they infer the planes from values,
+> and §5's labels give the duals directly, so every row is an exact supporting
+> hyperplane and the first layer can simply be told what its pieces are. Ranked by
+> active-set frequency (the dual's support is the LP basis), 100 planes match ~2000
+> drawn at random. `cfs train-value --arch groupmax-u --gm-init labels`.
+>
+> At K=250 the seeded head beats the full 16 000-tangent cutting-plane model
+> (0.9733 vs 0.969) on 111k parameters, concave and monotone with violations 0 —
+> the closest anything has come to the 0.99 gate, on one organism.
+>
+> **This makes conditioning the binding constraint, and it is now V-gate material.**
+> 1.9e24 is the worst number measured and it is precisely what §8.4's Newton spends
+> (`tags=lx.positive_semidefinite_tag`, `rtol=1e-10`). Sharp affine pieces buy
+> gradient accuracy and cost curvature; the log-sum-exp temperature is the knob, and
+> the second sweep's Arm G traces that frontier. If no temperature is both accurate
+> and conditionable, the answer is P9's remedy — damped Newton / trust region — not a
+> better head. **§7.3's diagnostic set should treat `hessian_cond_median` as an
+> objective, not a warning light.**
+>
+> Related work, for the record: GroupMax (arXiv 2206.06622, motivated by Bellman
+> *cuts*, i.e. exactly this), Maxout (1302.4389), Magnani & Boyd's LSPA and
+> Hannah & Dunson's CAP/AMAP for max-affine fitting.
+
 > ### 7.4 M3b — HPC sweep (next)
 >
 > Everything above is one laptop, 4000 media/organism (1/5 of the D10 budget), one
