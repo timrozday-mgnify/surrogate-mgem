@@ -53,15 +53,26 @@ $GEN --labels "m20k=$L20" --arch icnn --width 128 --depth 3 --w-grad 10 --epochs
 $GEN --labels "m20k=$L20" --arch mlp  --width 512 --depth 3 --w-grad 10 --epochs 1500 | emit
 $GEN --labels "m20k=$L20" --arch rf   --n-estimators 100 --delta 0.05 | emit
 
-# --- Arm D: deepset-u, the per-metabolite head with its coordinate fixed. THIS ARM
-# IS THE COST -- `phi` is priced per metabolite, measured 5-11 h per organism
-# against the ICNN's 5 minutes, so these four cells are most of the run. Drop them
-# first if the queue budget is tight; Arms A-C answer the gate question on their
-# own. The shared-trunk variant is deliberately absent: it OOM-killed in every cell
-# last run, and sharing across organisms was measured to hurt (private beat shared
-# on every metric), so it is not worth its cost twice.
-$GEN --labels "m20k=$L20" --arch deepset-u-private --width 512 --depth 3 \
-     --w-grad 10 --epochs 1500 --emb-dim 8 --phi-hidden 32,64 --k-code 16,64 | emit
+# --- Arm D: CUT. It was `deepset-u-private`, phi {32,64} x k_code {16,64}, and at
+# 5-11 h per organism per cell it was 420-920 cpu-h -- more than 80% of the run.
+#
+# It is the per-metabolite bet, and the evidence moved away from it. The deficit
+# was never localisation: it was the concavity coordinate (fixed for every head by
+# `picnn_u`/`deepset_u`), and then initialisation, which a matched A/B puts at
+# 0.5982 -> 0.9733 cosine on its own. `deepset-u` inherits the coordinate fix but
+# nothing addresses its *other* structural limit -- mean pooling makes
+# d(mu)/dx_m = <rho'(S), d(phi_m)/dx_m>, so the rest of the medium reaches the
+# gradient pattern only through a `k_code`-wide vector, which is a narrow channel
+# for what is an argmin across metabolites.
+#
+# The arch is built, tested and registered (`--arch deepset-u{,-private}`), so this
+# is a budget decision and not a dead end. Its one measured advantage is
+# conditioning -- a 20-epoch smoke run read 5.9e5 against `icnn-u`'s 1e15-1e18 --
+# which is worth revisiting if Arm G comes back accurate but unaffordable for §8's
+# Newton. To restore:
+#
+#   $GEN --labels "m20k=$L20" --arch deepset-u-private --width 512 --depth 3 \
+#        --w-grad 10 --epochs 1500 --emb-dim 8 --phi-hidden 32,64 --k-code 16,64
 
 # --- Arm F: does depth/width buy anything ONCE THE PIECES ARE SEEDED? This is the
 # only place that asks -- Arm G is width 1 / depth 1 throughout, where the head is

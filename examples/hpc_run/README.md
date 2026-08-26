@@ -32,7 +32,7 @@ run_labels.sh       stage 1 launcher   -> labels_out/labels/
 make_sweep.py       writes a sweep samplesheet from axis flags
 make_sweep_full.sh  regenerates sweep_full.csv as five named arms
 sweep_smoke.csv     4 cells against labels_stub — -stub only (no real data)
-sweep_full.csv      28 cells: the real sweep
+sweep_full.csv      24 cells: the real sweep
 sweep.config        stage 2 params: xla_devices, per-process resources
 run_sweep.sh        stage 2 launcher   -> sweep_out/sweep_leaderboard.csv
 site.config         EXAMPLE slurm + singularity config, shared by both stages
@@ -102,7 +102,7 @@ delete the partial shard first.
 SWEEP=sweep_full.csv NF_PROFILE=singularity ./run_sweep.sh -c site.config
 ```
 
-One task per samplesheet row. `sweep_full.csv` is 28 cells in seven arms, written by
+One task per samplesheet row. `sweep_full.csv` is 24 cells in six arms, written by
 `make_sweep_full.sh` (which carries the measurement behind each arm in its comments):
 
 | arm | cells | what it tests |
@@ -110,7 +110,6 @@ One task per samplesheet row. `sweep_full.csv` is 28 cells in seven arms, writte
 | A `icnn-u`, `w_grad` {1,3,10,15,20} | 5 | **the axis that moves the gate.** 10 was the best of six points on one organism; 10-20 was never probed |
 | B `icnn-u` width {512,1024} × depth {3,6}, at `w_grad` 10 | 4 | capacity, re-tested where the gradient term actually binds — the last run measured it at `w_grad` 1 and called it inert |
 | C `icnn`, `mlp`, `rf` at the same `w_grad` | 3 | the x-space head being replaced, plus an unconstrained ceiling and a non-parametric floor |
-| D `deepset-u-private`, `phi` {32,64} × `k_code` {16,64} | 4 | the per-metabolite head with its coordinate fixed. **This arm is most of the cost** |
 | F `groupmax-u` seeded, width 128 × depth 3, T {0.03,0.1,0.3} | 3 | does depth buy anything **once the pieces are seeded**? Arm G is width 1 / depth 1, so nothing else asks |
 | G `groupmax-u` seeded from label tangents, K {100,1000} × T {0.03,0.1,0.3} | 6 | **initialisation, not architecture.** Both inits at matched K and T |
 | E the 4000-media set: `icnn-u`, `icnn`, `rf` | 3 | the rows axis |
@@ -183,10 +182,23 @@ queue budget, so the attribution rests on one organism measured on a laptop. Add
 `,random` to the `--gm-init` flag in `make_sweep_full.sh` to restore it: 6 extra
 cells, ~35 cpu-h.
 
-Drop Arm D first if the queue budget is tight — Arms A-C answer the gate question on
-their own. The shared-trunk `deepset-u` is deliberately absent: it OOM-killed in
-every cell last run, and sharing across organisms measured *worse* than private on
-every metric.
+**Arm D is cut**, and it was 80% of the run. It was `deepset-u-private` at 5–11 h
+per organism per cell, 420–920 cpu-h. The per-metabolite bet no longer has the
+evidence behind it: the deficit was never localisation, it was the concavity
+coordinate and then initialisation, and a matched A/B puts the latter at 0.5982 →
+0.9733 cosine on its own. `deepset-u` inherits the coordinate fix but nothing
+addresses its *other* structural limit — mean pooling makes
+`d(mu)/dx_m = <rho'(S), d(phi_m)/dx_m>`, so the rest of the medium reaches the
+gradient pattern only through a `k_code`-wide vector, a narrow channel for what is
+an argmin across metabolites.
+
+The arch stays built, tested and registered (`--arch deepset-u{,-private}`), so
+this is a budget decision, not a dead end. Its one measured advantage is
+**conditioning** — a 20-epoch smoke run read 5.9e5 against `icnn-u`'s 1e15–1e18 —
+which is worth revisiting if Arm G comes back accurate but unaffordable for §8's
+Newton. `make_sweep_full.sh` carries the commented-out invocation to restore it.
+The shared-trunk variant was already absent: it OOM-killed in every cell last run,
+and sharing across organisms measured *worse* than private on every metric.
 
 Regenerate the whole sheet, or a variant:
 
@@ -209,10 +221,13 @@ generator.
 **Cost**, measured on the 2026-08 run of this pipeline at 20000 media (324 cpu-h for
 its 21 completed cells): ICNN cells ~5 min per organism at width 128, ~17 min at 512,
 ~47-96 min at 1024; `mlp` ~12 min; `rf` ~1 min. Arms A-C and E are therefore ~20
-cpu-h all in. **Arm D is 420-920 cpu-h on its own** — 5-11 h per organism per cell —
-so budget the run around it or drop it. One more warning from last time: its
-`ph64/kc64` cells all died at exactly 11 h 59 m, i.e. a **12 h queue wallclock**, not
-the 48 h `max_time` in `site.config`. Check the queue's own limit before launching.
+cpu-h all in. With Arm D cut the whole sweep is roughly **150 cpu-h** — Arms A-C
+and E ~20, Arm F ~30, Arm G ~35, Arm B's wide ICNN cells the rest. That is under
+half the 324 cpu-h the previous run spent, for a sheet that answers more.
+
+If you restore Arm D, one warning from last time: its `ph64/kc64` cells all died at
+exactly 11 h 59 m, i.e. a **12 h queue wallclock**, not the 48 h `max_time` in
+`site.config`. Check the queue's own limit before launching.
 
 The deepsets are the expensive arm — `phi` is priced *per metabolite*, so
 at trunk width 256 it measured 47 s/epoch, i.e. ~19 h for one cell. That arm is the
