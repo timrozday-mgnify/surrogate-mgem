@@ -38,6 +38,22 @@ swept axis instead of an emergent number. It is a fixed hyperparameter, not a
 learned one: a learned temperature collapses toward the hard max (measured: median
 Hessian condition 1e32), which is the one place the composition cannot follow.
 
+``DEFAULT_TEMP`` is **measured, on the pruned label-tangent model with no optimiser
+in the way** (100 active-set-ranked planes, held-out media, 2 organisms):
+
+| ``T`` | CR626927.1 cos / R2 | ABCC02 cos / R2 | curvature |
+| --- | --- | --- | --- |
+| 0 (hard min) | 0.9567 / 0.9964 | 0.9611 / 0.9969 | **exactly 0** |
+| 0.01 | 0.9508 / 0.9964 | 0.9635 / 0.9970 | non-zero |
+| 0.03 | 0.9498 / 0.9963 | 0.9562 / 0.9973 | non-zero |
+| 0.1 | 0.9229 / 0.9875 | 0.9291 / 0.9934 | non-zero |
+| 0.3 | 0.8327 / 0.7398 | 0.7941 / 0.7917 | non-zero |
+
+So there is a window, ``T`` ~ 0.01-0.03, that keeps essentially all of the hard
+min's accuracy *and* buys the curvature §8 needs; 0.1 is already past the knee and
+0.3 collapses. A trained head's pre-activations need not sit on the label scale, so
+treat this as a prior on the axis rather than a transferred optimum.
+
 The design **nests max-affine exactly**: ``width=1, depth=1, group=K`` is
 ``min_k(a_k . w + c_k)`` and nothing else. Wider and deeper generalises it.
 
@@ -57,7 +73,7 @@ from cfs.surrogate.picnn import _softplus_inv
 from cfs.surrogate.picnn_u import INPUT_TRANSFORM, W_CAP, to_diag  # noqa: F401
 
 DEFAULT_GROUP = 8
-DEFAULT_TEMP = 0.1
+DEFAULT_TEMP = 0.03
 
 
 class GroupMaxHead(eqx.Module):

@@ -111,7 +111,7 @@ One task per samplesheet row. `sweep_full.csv` is 28 cells in six arms, written 
 | B `icnn-u` width {512,1024} × depth {3,6}, at `w_grad` 10 | 4 | capacity, re-tested where the gradient term actually binds — the last run measured it at `w_grad` 1 and called it inert |
 | C `icnn`, `mlp`, `rf` at the same `w_grad` | 3 | the x-space head being replaced, plus an unconstrained ceiling and a non-parametric floor |
 | D `deepset-u-private`, `phi` {32,64} × `k_code` {16,64} | 4 | the per-metabolite head with its coordinate fixed. **This arm is most of the cost** |
-| F `groupmax-u`, group {4,8,16} × temperature {0.03,0.1,0.3} | 9 | **kinks as the primitive.** Also the accuracy-vs-conditioning frontier: curvature scales as 1/T |
+| F `groupmax-u`, group {4,8,16} × temperature {0.01,0.03,0.1} | 9 | **kinks as the primitive.** Also the accuracy-vs-conditioning frontier: curvature scales as 1/T |
 | E the 4000-media set: `icnn-u`, `icnn`, `rf` | 3 | the rows axis |
 
 **Both label roots must exist.** Arm E reads `labels_out_4k/labels`; generate it by

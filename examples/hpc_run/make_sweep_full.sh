@@ -73,8 +73,14 @@ $GEN --labels "m20k=$L20" --arch deepset-u-private --width 512 --depth 3 \
 # actually has to buy from. T -> 0 recovers the exact-but-Newton-hostile hard max
 # (zero Hessian inside a piece: P3). Group size trades corners per unit against
 # parameters.
+#
+# The temperature range is measured, not guessed: on the pruned label-tangent model
+# (same hypothesis class, no optimiser in the way) T=0.01-0.03 keeps the hard min's
+# accuracy -- cosine 0.95-0.96, R2 0.996 -- while T=0.1 is already past the knee
+# (0.923/0.929) and T=0.3 collapses (0.83/0.79, R2 0.74). The old 0.03-0.3 range
+# spent two of its three points below the knee.
 $GEN --labels "m20k=$L20" --arch groupmax-u --width 128 --depth 3 \
-     --w-grad 10 --epochs 1500 --gm-group 4,8,16 --gm-temp 0.03,0.1,0.3 | emit
+     --w-grad 10 --epochs 1500 --gm-group 4,8,16 --gm-temp 0.01,0.03,0.1 | emit
 
 # --- Arm E: the rows axis, for real this time. 4000 vs 20000 media on the two heads
 # that bracket the question plus the forest. Prediction on file, so this is a real
