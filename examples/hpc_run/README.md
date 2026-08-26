@@ -5,14 +5,23 @@ leaderboard of value-head architectures, in two `nextflow run` invocations. Both
 stages use the same containers (GHCR, Docker locally / Singularity on HPC) and the
 same `site.config`.
 
-The question the run answers: Head A's gate is **`worst_grad_cosine > 0.99`** and the
-best measured to date is **0.733**, with value R² 0.538 against a random forest's
-**0.979** on the same rows. That gap is an *architecture* deficit, not a label
-ceiling — but every measurement so far is one laptop at 4000 media/organism, width
-128, depth 3, and the models underfit. Stage 1 produces D10-scale labels (5× the
-rows); stage 2 sweeps width, depth and architecture over them. If R² does not move
-with 5× rows and 8× width, localisation is confirmed and the answer is a
-per-metabolite architecture rather than scale.
+The question the run answers: Head A's gate is **`worst_grad_cosine > 0.99`**.
+
+The 2026-08 run of this pipeline found the previous ceiling (0.733) was not a label
+or capacity limit but a **coordinate** one: `mu_max` is an LP value function in its
+RHS and the uptake bound is `lb = -Vmax * u`, so it is concave and piecewise *linear*
+in `u` — while the heads imposed concavity in `x = u/(u+s)`, which is a strictly
+smaller class that excludes the target (`x` tangent test violated on 32-57% of label
+row pairs, `u` on 0.0%). That is why 37× the parameters moved paired per-organism
+cosine and R² by ±0.001.
+
+`--arch icnn-u` / `deepset-u` are the correction — the same heads over
+`w = min(u/s, 300)`, affine in `u`. On one organism that took R² 0.477 → 0.802, and
+a `w_grad` sweep on top of it reached **cosine 0.903 / R² 0.756** at `w_grad = 10`,
+beating the forest (0.817), the unconstrained MLP (0.812) and the old ICNN (0.715)
+from *inside* the concave class. This run asks whether that holds on all 21
+organisms, where the frontier's optimum actually sits, and whether capacity is a
+live axis once the gradient term is the one binding.
 
 ```
 make_roster.sh      roster.csv from a directory of GEMs (run this first)
@@ -21,8 +30,9 @@ reference/
 labels.config       stage 1 params: 20000 media/organism, probe-anchored bands
 run_labels.sh       stage 1 launcher   -> labels_out/labels/
 make_sweep.py       writes a sweep samplesheet from axis flags
-sweep_smoke.csv     3 cells against labels_stub — -stub only (no real data)
-sweep_full.csv      30 cells: the real sweep
+make_sweep_full.sh  regenerates sweep_full.csv as five named arms
+sweep_smoke.csv     4 cells against labels_stub — -stub only (no real data)
+sweep_full.csv      28 cells: the real sweep
 sweep.config        stage 2 params: xla_devices, per-process resources
 run_sweep.sh        stage 2 launcher   -> sweep_out/sweep_leaderboard.csv
 site.config         EXAMPLE slurm + singularity config, shared by both stages
@@ -92,23 +102,60 @@ delete the partial shard first.
 SWEEP=sweep_full.csv NF_PROFILE=singularity ./run_sweep.sh -c site.config
 ```
 
-One task per samplesheet row. `sweep_full.csv` is 30 cells:
+One task per samplesheet row. `sweep_full.csv` is 28 cells in six arms, written by
+`make_sweep_full.sh` (which carries the measurement behind each arm in its comments):
 
 | arm | cells | what it tests |
 | --- | --- | --- |
-| ICNN width {128,256,512,1024} × depth {3,4,6} | 12 | does scale close the R² gap? |
-| deepset + deepset-private, `phi` hidden {32,64,128} × `k_code` {16,64} | 12 | the localisation bias, at a trunk width a laptop could not afford |
-| `mlp` (unconstrained) and `rf` | 5 | ceiling and floor — both changed how the ICNN's numbers read |
-| the 4000-media set, ICNN + rf | 3 | the rows axis: same architectures, 1/5 the labels |
+| A `icnn-u`, `w_grad` {1,3,10,15,20} | 5 | **the axis that moves the gate.** 10 was the best of six points on one organism; 10-20 was never probed |
+| B `icnn-u` width {512,1024} × depth {3,6}, at `w_grad` 10 | 4 | capacity, re-tested where the gradient term actually binds — the last run measured it at `w_grad` 1 and called it inert |
+| C `icnn`, `mlp`, `rf` at the same `w_grad` | 3 | the x-space head being replaced, plus an unconstrained ceiling and a non-parametric floor |
+| D `deepset-u-private`, `phi` {32,64} × `k_code` {16,64} | 4 | the per-metabolite head with its coordinate fixed. **This arm is most of the cost** |
+| F `groupmax-u`, group {4,8,16} × temperature {0.03,0.1,0.3} | 9 | **kinks as the primitive.** Also the accuracy-vs-conditioning frontier: curvature scales as 1/T |
+| E the 4000-media set: `icnn-u`, `icnn`, `rf` | 3 | the rows axis |
 
-27 rows point at `labels_out/labels`, so stage 2 chains off stage 1 with no editing.
-The 3 rows tagged `m4k` point at `/path/to/20hm_bands/labels` — **edit that path** to
-your existing 4000-media set, or drop those rows.
+**Both label roots must exist.** Arm E reads `labels_out_4k/labels`; generate it by
+running stage 1 a second time:
+
+```bash
+OUTDIR=labels_out_4k NF_PROFILE=singularity ./run_labels.sh --label_media 4000 -c site.config
+```
+
+Or point `LABELS_4K` at an existing 4000-media root and regenerate the sheet. This
+matters: the previous sweep shipped a `/path/to/...` placeholder here, every task
+silently read the 20000-media root instead, and `m4k__rf` came back **bitwise
+identical** to `m20k__rf` — the rows axis was reported as measured when it had never
+run. Check `n_train_media` in two cells' `diagnostics.json` differ before believing
+any rows conclusion.
+
+Arm E has a prediction on file, which is what makes it a test rather than a fishing
+trip: **rows will not help.** The train-vs-held-out gap at the `w_grad` optimum is
+0.005 cosine / 0.013 R², so the head underfits, and rows only buy variance.
+
+**Arm F is the architecture bet.** Every concave head so far builds a corner out of
+a non-negative sum of smooth softplus ridges, and `mu_max` is piecewise *linear*
+with ~1700 distinct active sets per organism — depth compounds smoothness rather
+than making corners. `groupmax-u` makes the max the activation, so one corner is one
+unit, and it nests plain max-affine exactly at `--width 1 --depth 1 --gm-group K`.
+`--gm-temp` is not only an accuracy knob: a hard max has zero Hessian inside a piece
+(P3, the one thing §8's Newton cannot follow) and curvature scales as `1/T`, so this
+arm measures the frontier Newton has to buy from. It costs about what Arm A does.
+
+Drop Arm D first if the queue budget is tight — Arms A-C answer the gate question on
+their own. The shared-trunk `deepset-u` is deliberately absent: it OOM-killed in
+every cell last run, and sharing across organisms measured *worse* than private on
+every metric.
+
+Regenerate the whole sheet, or a variant:
+
+```bash
+./make_sweep_full.sh > sweep_full.csv
+```
 
 Regenerate with different axes:
 
 ```bash
-./make_sweep.py --labels m20k=labels_out/labels --arch icnn --width 128,512 --depth 3,4 --epochs 1500 -o sweep_full.csv
+./make_sweep.py --labels m20k=labels_out/labels --arch icnn-u --width 128,512 --w-grad 1,10 --epochs 1500 -o sweep_full.csv
 ```
 
 The samplesheet is `cell_id,arch,labels,args`, and `args` is the literal flag string
@@ -117,8 +164,15 @@ for that cell — so a cell's exact command stays greppable, and `rf` rows can c
 *swept* axes appear in the cell id. `./make_sweep.py --demo` self-checks the
 generator.
 
-**Cost**: the ICNN cells are ~9 min each at width 128 (0.35 s/epoch × 1500) and grow
-with width; the deepsets are the expensive arm — `phi` is priced *per metabolite*, so
+**Cost**, measured on the 2026-08 run of this pipeline at 20000 media (324 cpu-h for
+its 21 completed cells): ICNN cells ~5 min per organism at width 128, ~17 min at 512,
+~47-96 min at 1024; `mlp` ~12 min; `rf` ~1 min. Arms A-C and E are therefore ~20
+cpu-h all in. **Arm D is 420-920 cpu-h on its own** — 5-11 h per organism per cell —
+so budget the run around it or drop it. One more warning from last time: its
+`ph64/kc64` cells all died at exactly 11 h 59 m, i.e. a **12 h queue wallclock**, not
+the 48 h `max_time` in `site.config`. Check the queue's own limit before launching.
+
+The deepsets are the expensive arm — `phi` is priced *per metabolite*, so
 at trunk width 256 it measured 47 s/epoch, i.e. ~19 h for one cell. That arm is the
 reason this needs a cluster.
 
@@ -170,7 +224,7 @@ sweep_out/sweep/<cell_id>__<genome_id>/                 diagnostics.json + weigh
 */pipeline_info/                                        trace, report, timeline, DAG
 ```
 
-Every arch but the shared-trunk `deepset` is fanned out **one organism per task** —
+Every arch but the shared-trunk `deepset`/`deepset-u` is fanned out **one organism per task** —
 the organism axis is a vmap axis those heads do not share anything across, so 21
 short jobs replace one long one. `COLLECT_VALUE_METRICS` merges a cell's tasks back
 into a single leaderboard row, so the CSV is unchanged: one row per cell.
