@@ -94,8 +94,17 @@ $GEN --labels "m20k=$L20" --arch groupmax-u --width 128 --depth 3 \
 # trained from noise scores 0.712 -- a 0.21 optimisation gap. Both inits are swept
 # so the comparison is inside one arm at matched width, depth, K and T, rather than
 # borrowed from Arm F, which differs in width and depth as well.
+#
+# The T range is deliberately the *blunt* half of the axis, against what the
+# untrained tangent model prefers (0.01-0.03 there, with 0.3 collapsing to cosine
+# 0.83/0.79). Two reasons. Conditioning is the binding cost, not accuracy: the
+# seeded head reached cosine 0.9733 at T=0.03 with a median Hessian condition of
+# 1.9e24, which is what §8's Newton has to spend. And the untrained numbers are a
+# lower bound on the trained ones -- the smoothing bias is roughly a constant per
+# active set, so fine-tuning can absorb much of it into the intercepts, which an
+# untrained tangent model by definition cannot.
 $GEN --labels "m20k=$L20" --arch groupmax-u --width 1 --depth 1 \
-     --w-grad 10 --epochs 1500 --gm-group 100,1000 --gm-temp 0.01,0.03 \
+     --w-grad 10 --epochs 1500 --gm-group 100,1000 --gm-temp 0.03,0.1,0.3 \
      --gm-init labels,random | emit
 
 # --- Arm E: the rows axis, for real this time. 4000 vs 20000 media on the two heads
