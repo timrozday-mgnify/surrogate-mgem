@@ -116,12 +116,35 @@ def build_parser() -> argparse.ArgumentParser:
     tv.add_argument(
         "--arch",
         default="icnn",
-        choices=["icnn", "deepset", "deepset-private", "mlp"],
+        choices=[
+            "icnn",
+            "icnn-u",
+            "deepset",
+            "deepset-private",
+            "deepset-u",
+            "deepset-u-private",
+            "groupmax-u",
+            "mlp",
+        ],
         help="Head architecture. `mlp` is unconstrained — a ceiling "
         "measurement, not a usable head.",
     )
     tv.add_argument(
         "--emb-dim", type=int, default=8, help="Metabolite embedding width (deepset only)."
+    )
+    tv.add_argument(
+        "--gm-group",
+        type=int,
+        default=None,
+        help="groupmax-u only: units per max group. width=1 depth=1 group=K is "
+        "plain max-affine. Default 8.",
+    )
+    tv.add_argument(
+        "--gm-temp",
+        type=float,
+        default=None,
+        help="groupmax-u only: softmax temperature. Curvature scales as 1/T, so "
+        "this is the Newton conditioning knob (§8). Default 0.1.",
     )
     tv.add_argument(
         "--phi-hidden",
@@ -201,6 +224,8 @@ def main(argv: list[str] | None = None) -> int:
             w_grad=args.w_grad,
             emb_dim=args.emb_dim,
             phi_hidden=args.phi_hidden,
+        gm_group=args.gm_group,
+        gm_temp=args.gm_temp,
             k_code=args.k_code,
             seed=args.seed,
             organisms=organisms,

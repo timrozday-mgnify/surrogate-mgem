@@ -23,7 +23,7 @@ workflow VALUE_SWEEP {
     // `labels` is absolute or relative to the samplesheet, matching the roster's
     // model_path convention elsewhere.
     // One task per (cell, organism), not per cell. The organism axis is a vmap
-    // axis, not a modelling choice: only the shared-trunk `deepset` pools anything
+    // axis, not a modelling choice: only the shared-trunk `deepset`/`deepset-u` pool
     // across it, so every other arch trains the same heads whether they are stacked
     // 21-wide or 1-wide -- and 21 short jobs beat one long one on a queue. The
     // organisms come from the label root's own per-genome shard dirs (the sheet's
@@ -34,7 +34,11 @@ workflow VALUE_SWEEP {
         .splitCsv(header: true)
         .flatMap { row ->
             def labels = file(row.labels.startsWith('/') ? row.labels : "${ch_sweep.parent}/${row.labels}", checkIfExists: true)
-            def gids = row.arch == 'deepset'
+            // Shared-trunk archs only: fanning one of those out per organism would
+            // silently turn the shared trunk into a private one (a 1-wide stack
+            // shares nothing), i.e. it would run `deepset-private` under the other
+            // name. Every other arch is unaffected by the stack width.
+            def gids = row.arch in ['deepset', 'deepset-u']
                 ? []
                 : labels.listFiles().findAll { it.isDirectory() }.collect { it.name }.sort()
             def meta = [arch: row.arch, cell_args: row.args ?: '']

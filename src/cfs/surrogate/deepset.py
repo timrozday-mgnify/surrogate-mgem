@@ -156,8 +156,12 @@ def stack_heads(
     shared: bool = True,
     phi_hidden: int | None = None,
     k_code: int | None = None,
+    trunk_cls: type[Trunk] = Trunk,
 ) -> DeepSetHead:
     """Stack ``n_organisms`` heads. Only ``rho``/``mask`` get the organism axis.
+
+    ``trunk_cls`` swaps in a :class:`Trunk` subclass; :mod:`cfs.surrogate.deepset_u`
+    uses it to change ``phi``'s input coordinate without copying this function.
 
     ``phi``'s internals default to being derived from ``width`` — hidden
     ``width // 8``, code width 16, context ``2 * emb_dim`` — and ``phi_hidden`` /
@@ -180,7 +184,7 @@ def stack_heads(
     rho = eqx.filter_vmap(
         lambda k_: ValueHead(k_, k_code, jnp.ones(k_code, dtype=bool), width, depth)
     )(jax.random.split(kr, n_organisms))
-    make_trunk = lambda k_: Trunk(k_, n_in, emb_dim, k_code, hidden, depth)  # noqa: E731
+    make_trunk = lambda k_: trunk_cls(k_, n_in, emb_dim, k_code, hidden, depth)  # noqa: E731
     trunk = (
         make_trunk(kt) if shared else eqx.filter_vmap(make_trunk)(jax.random.split(kt, n_organisms))
     )
@@ -197,6 +201,7 @@ def stack_heads_private(
     emb_dim: int = 8,
     phi_hidden: int | None = None,
     k_code: int | None = None,
+    trunk_cls: type[Trunk] = Trunk,
 ) -> DeepSetHead:
     """The D1-preserving ablation: same architecture, nothing shared."""
     return stack_heads(
@@ -210,6 +215,7 @@ def stack_heads_private(
         shared=False,
         phi_hidden=phi_hidden,
         k_code=k_code,
+        trunk_cls=trunk_cls,
     )
 
 

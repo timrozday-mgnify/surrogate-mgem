@@ -44,7 +44,7 @@ import optax
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
-from cfs.surrogate import deepset, mlp, picnn
+from cfs.surrogate import deepset, deepset_u, groupmax, mlp, picnn, picnn_u
 from cfs.surrogate.data import ValueDataset, load_value_dataset
 
 LOGGER = logging.getLogger("cfs.surrogate.train")
@@ -54,7 +54,16 @@ GRAD_COSINE_GATE = 0.99
 # Architecture registry. The coupling surface is four names — `stack_heads`,
 # `batched_value`, `batched_value_and_grad`, `organism` — so a variant is a module,
 # not a plugin system. `deepset-private` is the same module with `shared=False`.
-_ARCH = {"icnn": picnn, "deepset": deepset, "deepset-private": deepset, "mlp": mlp}
+_ARCH = {
+    "icnn": picnn,
+    "icnn-u": picnn_u,
+    "deepset": deepset,
+    "deepset-private": deepset,
+    "deepset-u": deepset_u,
+    "deepset-u-private": deepset_u,
+    "groupmax-u": groupmax,
+    "mlp": mlp,
+}
 
 
 def _build(
@@ -68,9 +77,13 @@ def _build(
     emb_dim: int,
     phi_hidden: int | None = None,
     k_code: int | None = None,
+    gm_group: int | None = None,
+    gm_temp: float | None = None,
 ):
     mod = _ARCH[arch]
-    if mod is deepset:
+    # Both deepset modules take the same extra knobs; `shared` is the arch name, not
+    # the module, since each module serves a shared and a private variant.
+    if arch.startswith("deepset"):
         return mod.stack_heads(
             key,
             n_organisms,
@@ -79,9 +92,20 @@ def _build(
             width,
             depth,
             emb_dim,
-            shared=arch == "deepset",
+            shared=arch in ("deepset", "deepset-u"),
             phi_hidden=phi_hidden,
             k_code=k_code,
+        )
+    if mod is groupmax:
+        return mod.stack_heads(
+            key,
+            n_organisms,
+            n_in,
+            mask,
+            width,
+            depth,
+            group=gm_group or groupmax.DEFAULT_GROUP,
+            temp=groupmax.DEFAULT_TEMP if gm_temp is None else gm_temp,
         )
     return mod.stack_heads(key, n_organisms, n_in, mask, width, depth)
 
@@ -195,6 +219,8 @@ def train_value_heads(
     emb_dim: int = 8,
     phi_hidden: int | None = None,
     k_code: int | None = None,
+    gm_group: int | None = None,
+    gm_temp: float | None = None,
     seed: int = 0,
 ) -> eqx.Module:
     """Fit the stacked Head A. Labels are scaled by ``ds.mu_scale`` (§7.1)."""
@@ -225,6 +251,8 @@ def train_value_heads(
         emb_dim,
         phi_hidden=phi_hidden,
         k_code=k_code,
+        gm_group=gm_group,
+        gm_temp=gm_temp,
     )
     n = x.shape[1]
     steps_per_epoch = max(1, n // batch)
@@ -320,13 +348,19 @@ def _concavity_violations(heads, x, key, bv, n_pairs: int = 2000, tol: float = 1
     return jnp.mean(mid < chord - tol, axis=1)
 
 
-def _hessian_cond(heads, x, organism, n_points: int = 8):
-    """cond(Hessian) on the organism's own dims — predicts Phase-5 Newton failure."""
+def _hessian_cond(heads, x, organism, n_points: int = 8, compose=None):
+    """cond(Hessian) on the organism's own dims — predicts Phase-5 Newton failure.
+
+    ``compose`` re-expresses the head as a function of the diagnostic coordinate,
+    for a head whose concavity lives somewhere other than ``x``
+    (:mod:`cfs.surrogate.picnn_u`).
+    """
     conds = []
     for i in range(x.shape[0]):
         head = organism(heads, i)
+        fn = head if compose is None else compose(head)
         dims = np.flatnonzero(np.asarray(head.mask))
-        h = jax.vmap(jax.hessian(head))(x[i, :n_points])[:, dims][:, :, dims]
+        h = jax.vmap(jax.hessian(fn))(x[i, :n_points])[:, dims][:, :, dims]
         ev = jnp.abs(jnp.linalg.eigvalsh(h))
         conds.append(float(jnp.median(ev.max(axis=1) / jnp.maximum(ev.min(axis=1), 1e-30))))
     return conds
@@ -434,8 +468,17 @@ def evaluate(heads: eqx.Module, ds: ValueDataset, seed: int = 0, arch: str = "ic
     mu_hat, g_hat = _over_media(lambda xx: mod.batched_value_and_grad(heads, xx), x)
     # In u space (see `_du`), so the gate means the same thing across runs.
     g_hat = g_hat * _du(x, jnp.asarray(ds.x_scale))
-    viol = _concavity_violations(heads, x, jax.random.PRNGKey(seed), mod.batched_value)
-    conds = _hessian_cond(heads, x, mod.organism)
+    # Concavity and conditioning are only meaningful in the coordinate the head is
+    # actually concave in. `icnn-u` is concave in w = u/s, and reads 98% violating
+    # with cond ~1e32 if these are taken in x. Heads without the hook are concave
+    # in x and see the identity, so every existing arch is byte-identical.
+    to_diag = getattr(mod, "to_diag", None)
+    if to_diag is None:
+        x_diag, bv, compose = x, mod.batched_value, None
+    else:
+        x_diag, bv, compose = to_diag(x), mod.batched_value_diag, mod.head_in_diag
+    viol = _concavity_violations(heads, x_diag, jax.random.PRNGKey(seed), bv)
+    conds = _hessian_cond(heads, x_diag, mod.organism, compose=compose)
     extra = {
         gid: {"concavity_violation_rate": float(viol[i]), "hessian_cond_median": conds[i]}
         for i, gid in enumerate(ds.genome_ids)
@@ -467,8 +510,10 @@ def save(heads: eqx.Module, ds: ValueDataset, outdir: Path, arch: dict, diagnost
                 "mask": ds.mask.astype(int).tolist(),
                 "mu_scale": ds.mu_scale.tolist(),
                 "x_scale": ds.x_scale.tolist(),
-                "input_transform": (
-                    "u = c / (Km + c), x = u / (u + x_scale); Km from km_defaults.yaml"
+                "input_transform": getattr(
+                    _ARCH.get(arch.get("arch", "icnn")),
+                    "INPUT_TRANSFORM",
+                    "u = c / (Km + c), x = u / (u + x_scale); Km from km_defaults.yaml",
                 ),
                 "gradient_units": (
                     "d(mu_max)/dx = max(-shadow, 0) * Vmax * (u + x_scale)^2 / x_scale, "
@@ -498,6 +543,8 @@ def load(outdir: Path, width: int = 128, depth: int = 3) -> tuple[eqx.Module, di
         arch.get("emb_dim", 8),
         phi_hidden=arch.get("phi_hidden"),
         k_code=arch.get("k_code"),
+        gm_group=arch.get("gm_group"),
+        gm_temp=arch.get("gm_temp"),
     )
     return eqx.tree_deserialise_leaves(outdir / "value_heads.eqx", like), meta
 
@@ -518,6 +565,8 @@ def run(
     emb_dim: int = 8,
     phi_hidden: int | None = None,
     k_code: int | None = None,
+    gm_group: int | None = None,
+    gm_temp: float | None = None,
     seed: int = 0,
     organisms: list[str] | None = None,
 ) -> dict:
@@ -539,6 +588,8 @@ def run(
         emb_dim=emb_dim,
         phi_hidden=phi_hidden,
         k_code=k_code,
+        gm_group=gm_group,
+        gm_temp=gm_temp,
         seed=seed,
     )
     diagnostics = evaluate(heads, ds, seed=seed, arch=arch)
@@ -552,6 +603,9 @@ def run(
         "eps": eps,
         "seed": seed,
     }
+    if arch == "groupmax-u":
+        meta["gm_group"] = gm_group or groupmax.DEFAULT_GROUP
+        meta["gm_temp"] = groupmax.DEFAULT_TEMP if gm_temp is None else gm_temp
     if arch.startswith("deepset"):
         # Only when set: an absent key is what makes `load` fall back to the
         # width-derived default, so a checkpoint written before these flags existed
