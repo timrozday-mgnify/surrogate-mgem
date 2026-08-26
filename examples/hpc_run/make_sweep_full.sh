@@ -89,11 +89,16 @@ $GEN --labels "m20k=$L20" --arch groupmax-u --width 128 --depth 3 \
 # at random. `--gm-group` is the number of affine pieces K: 100 ranked planes
 # already match ~2000 random ones.
 #
-# The arm exists because random init measurably does not get there: at identical
-# class and identical T=0.1, the tangent model scores 0.923 and the same head
-# trained from noise scores 0.712 -- a 0.21 optimisation gap. Both inits are swept
-# so the comparison is inside one arm at matched width, depth, K and T, rather than
-# borrowed from Arm F, which differs in width and depth as well.
+# The arm exists because random init measurably does not get there. Matched A/B on
+# CR626927.1 (width 1, depth 1, K=250, T=0.03, same seed, only `--gm-init`
+# differing): labels 0.9733 cosine / 0.996 R2, random 0.5982 / 0.4795 with a median
+# Hessian condition of exactly 0 -- i.e. the head collapsed to a single affine piece
+# and 249 of 250 planes never became active.
+#
+# **That control is NOT in this sweep.** The `--gm-init random` cells were cut for
+# queue budget, so the attribution above rests on one organism measured on a laptop.
+# If a reviewer needs it across the roster, add `,random` back to the flag below: it
+# doubles the arm to 12 cells and ~35 cpu-h.
 #
 # The T range is deliberately the *blunt* half of the axis, against what the
 # untrained tangent model prefers (0.01-0.03 there, with 0.3 collapsing to cosine
@@ -105,7 +110,7 @@ $GEN --labels "m20k=$L20" --arch groupmax-u --width 128 --depth 3 \
 # untrained tangent model by definition cannot.
 $GEN --labels "m20k=$L20" --arch groupmax-u --width 1 --depth 1 \
      --w-grad 10 --epochs 1500 --gm-group 100,1000 --gm-temp 0.03,0.1,0.3 \
-     --gm-init labels,random | emit
+     --gm-init labels | emit
 
 # --- Arm E: the rows axis, for real this time. 4000 vs 20000 media on the two heads
 # that bracket the question plus the forest. Prediction on file, so this is a real

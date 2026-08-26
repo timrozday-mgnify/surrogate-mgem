@@ -32,7 +32,7 @@ run_labels.sh       stage 1 launcher   -> labels_out/labels/
 make_sweep.py       writes a sweep samplesheet from axis flags
 make_sweep_full.sh  regenerates sweep_full.csv as five named arms
 sweep_smoke.csv     4 cells against labels_stub — -stub only (no real data)
-sweep_full.csv      40 cells: the real sweep
+sweep_full.csv      34 cells: the real sweep
 sweep.config        stage 2 params: xla_devices, per-process resources
 run_sweep.sh        stage 2 launcher   -> sweep_out/sweep_leaderboard.csv
 site.config         EXAMPLE slurm + singularity config, shared by both stages
@@ -102,7 +102,7 @@ delete the partial shard first.
 SWEEP=sweep_full.csv NF_PROFILE=singularity ./run_sweep.sh -c site.config
 ```
 
-One task per samplesheet row. `sweep_full.csv` is 40 cells in seven arms, written by
+One task per samplesheet row. `sweep_full.csv` is 34 cells in seven arms, written by
 `make_sweep_full.sh` (which carries the measurement behind each arm in its comments):
 
 | arm | cells | what it tests |
@@ -112,7 +112,7 @@ One task per samplesheet row. `sweep_full.csv` is 40 cells in seven arms, writte
 | C `icnn`, `mlp`, `rf` at the same `w_grad` | 3 | the x-space head being replaced, plus an unconstrained ceiling and a non-parametric floor |
 | D `deepset-u-private`, `phi` {32,64} × `k_code` {16,64} | 4 | the per-metabolite head with its coordinate fixed. **This arm is most of the cost** |
 | F `groupmax-u`, group {4,8,16} × temperature {0.01,0.03,0.1} | 9 | **kinks as the primitive.** Also the accuracy-vs-conditioning frontier: curvature scales as 1/T |
-| G `groupmax-u` seeded from label tangents, K {100,1000} × T {0.03,0.1,0.3} × init {labels,random} | 12 | **initialisation, not architecture.** Both inits at matched K and T |
+| G `groupmax-u` seeded from label tangents, K {100,1000} × T {0.03,0.1,0.3} | 6 | **initialisation, not architecture.** Both inits at matched K and T |
 | E the 4000-media set: `icnn-u`, `icnn`, `rf` | 3 | the rows axis |
 
 **Both label roots must exist.** Arm E reads `labels_out_4k/labels`; generate it by
@@ -158,11 +158,17 @@ which is what §8's Newton spends — and the untrained figures are a lower boun
 the trained ones, since fine-tuning can absorb the smoothing bias into the
 intercepts and an untrained model cannot.
 
-It matters because random init measurably does not get there. At identical class
-and identical `T = 0.1`, the tangent model scores 0.923 and the same head trained
-from noise scores 0.712 — a 0.21 optimisation gap, which is the failure that
-LSPA/CAP-style max-affine fitting exists to fix. The arm sweeps both inits at
-matched K and T so that comparison is inside one arm.
+It matters because random init measurably does not get there. Matched A/B on one
+organism (width 1, depth 1, K=250, T=0.03, same seed, only `--gm-init` differing):
+**labels 0.9733 cosine / 0.996 R², random 0.5982 / 0.4795** — and the random run's
+median Hessian condition was *exactly 0*, meaning the head collapsed to a single
+affine piece with 249 of 250 planes never becoming active. That is the failure
+LSPA/CAP-style max-affine fitting exists to fix.
+
+**That control is not in this sweep** — the `--gm-init random` cells were cut for
+queue budget, so the attribution rests on one organism measured on a laptop. Add
+`,random` to the `--gm-init` flag in `make_sweep_full.sh` to restore it: 6 extra
+cells, ~35 cpu-h.
 
 Drop Arm D first if the queue budget is tight — Arms A-C answer the gate question on
 their own. The shared-trunk `deepset-u` is deliberately absent: it OOM-killed in
