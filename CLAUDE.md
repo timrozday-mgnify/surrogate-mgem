@@ -390,6 +390,38 @@
 > fix for the dead-piece collapse a plain Adam max-affine hits (K=256 and K=1024
 > scored identically).
 >
+> **Initialisation is the binding constraint, measured in a matched A/B.**
+> `groupmax-u`, width 1 / depth 1 / K=250 / T=0.03 / `w_grad` 10, CR626927.1, same
+> seed, 1500 epochs — *only* `--gm-init` differs:
+>
+> | init | cosine | R² | p05 | Hessian cond |
+> | --- | --- | --- | --- | --- |
+> | `labels` | **0.9733** | **0.996** | **0.834** | 1.9e24 |
+> | `random` | 0.5982 | 0.4795 | 0.000 | **0.0** |
+>
+> The `random` run's Hessian condition of exactly 0 is the diagnosis: zero curvature
+> everywhere means the head collapsed to a *single* affine piece — 249 of 250 planes
+> never became active, so never got useful gradient. That is the dead-piece failure
+> LSPA/CAP-style max-affine fitting exists to fix, and it is the same pathology as
+> the earlier hand-rolled max-affine probe where K=256 and K=1024 scored identically.
+> **The reasoning recorded earlier — that a fixed-temperature softmax gives every
+> piece non-zero weight and therefore removes the problem — is wrong.** The remedy
+> is not LSPA though: those algorithms *infer* the planes from values, and we have
+> the duals, so seeding them directly is simpler and strictly better.
+>
+> At K=250 the seeded head beats the **full 16 000-tangent cutting-plane model**
+> (0.9733 vs 0.969, p05 0.834 vs 0.791) on 111k parameters, while staying concave
+> (violations 0), monotone and analytically differentiable. Against the 0.99 gate it
+> is the closest anything has come — on **one organism**.
+>
+> **The bill is conditioning, and it is now the open problem.** 1.9e24 is worse than
+> anything else measured and it is exactly what §8's Newton spends. Sharp pieces buy
+> gradient accuracy and cost curvature; `T` is the knob, and 0.03 is evidently near
+> the sharp end. Arm G sweeps 0.01 and 0.03 — *both sharper* than the knee measured
+> on the untrained tangent model — so if conditioning binds, that range has to go
+> **up**, not down. Accuracy and conditioning are now a two-objective problem and
+> the frontier, not a single setting, is the deliverable.
+>
 > **Not the answer, on this evidence:** per-metabolite heads. `deepset` already is
 > one (shared `phi` per metabolite, pooled, per-organism `rho`) and is under the
 > same coordinate defect — `phi` is concave in `x_m`. Its mean-pooling also makes
