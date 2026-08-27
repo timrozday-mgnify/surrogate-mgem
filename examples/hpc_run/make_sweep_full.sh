@@ -56,21 +56,32 @@ $GEN --labels "m20k=$L20" --arch rf   --n-estimators 100 --delta 0.05 | emit
 # --- Arm D: CUT. It was `deepset-u-private`, phi {32,64} x k_code {16,64}, and at
 # 5-11 h per organism per cell it was 420-920 cpu-h -- more than 80% of the run.
 #
-# It is the per-metabolite bet, and the evidence moved away from it. The deficit
-# was never localisation: it was the concavity coordinate (fixed for every head by
-# `picnn_u`/`deepset_u`), and then initialisation, which a matched A/B puts at
-# 0.5982 -> 0.9733 cosine on its own. `deepset-u` inherits the coordinate fix but
-# nothing addresses its *other* structural limit -- mean pooling makes
-# d(mu)/dx_m = <rho'(S), d(phi_m)/dx_m>, so the rest of the medium reaches the
-# gradient pattern only through a `k_code`-wide vector, which is a narrow channel
-# for what is an argmin across metabolites.
+# It is the per-metabolite bet, and the full-width x-space rerun (2026-08-27, four
+# `deepset-private` cells x 21 organisms) refuted it rather than merely deferring
+# it. Best cell ph32/kc64: worst cosine 0.742 / median 0.810 / R2 0.564 against
+# `icnn w128/d3`'s 0.678 / 0.755 / 0.541, for ~157 cpu-h a cell against 1.6. Its
+# claimed conditioning advantage is gone (median Hessian cond 1e11-1e12, WORSE than
+# the ICNN's 1e10 -- the 5.9e5 smoke number was an underfit head), and
+# `cfs master-jacobian` shows that per-organism number does not reach §8 anyway.
+# Above all it does not fit the per-metabolite cells better, which was the bet: the
+# lift is uniform (<25 rows +0.012, 25-100 +0.062, 100-400 +0.020, >=400 +0.010)
+# and on the 284 cells where the ICNN scores <0.5 deepset scores 0.312 vs 0.286.
+# Both capacity axes are inert (paired median dcos -0.001 for k_code, +0.001 for
+# phi).
 #
-# The arch is built, tested and registered (`--arch deepset-u{,-private}`), so this
-# is a budget decision and not a dead end. Its one measured advantage is
-# conditioning -- a 20-epoch smoke run read 5.9e5 against `icnn-u`'s 1e15-1e18 --
-# though `cfs master-jacobian` has since shown that per-organism number does not
-# reach §8's Newton, so that advantage is now a weaker reason than it looked. To
-# restore:
+# `deepset-u` would inherit the coordinate fix but NOT the larger lever: layer 1 is
+# a per-metabolite scalar phi_m: R -> R^k, so `groupmax.init_from_tangents` (which
+# seeds affine planes over the whole metabolite vector, 0.5982 -> 0.9733 cosine) has
+# nothing to write into. Its other structural limit is untouched too -- mean pooling
+# makes d(mu)/dx_m = <rho'(S), d(phi_m)/dx_m>, so the rest of the medium reaches the
+# gradient pattern only through a `k_code`-wide vector, a narrow channel for what is
+# an argmin across metabolites.
+#
+# The arch is built, tested and registered (`--arch deepset-u{,-private}`). To
+# reopen the question cheaply, run ONE organism (CR626927.1) at ph32/kc64,
+# `--w-grad 10`, ~7.5 h, and compare against `icnn-u` 0.903 and seeded `groupmax-u`
+# 0.973 on the same held-out media; below 0.903 the arm is dead. To restore the
+# full arm:
 #
 #   $GEN --labels "m20k=$L20" --arch deepset-u-private --width 512 --depth 3 \
 #        --w-grad 10 --epochs 1500 --emb-dim 8 --phi-hidden 32,64 --k-code 16,64

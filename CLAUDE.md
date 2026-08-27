@@ -221,19 +221,13 @@
 >    0.259 → 0.374). The 21 organisms' ramps are not one function; a shared `phi`
 >    spends its capacity reconciling them rather than pooling evidence.
 >
-> **The deepset caveat, stated because it is a confound and not a footnote.** `phi`
-> is priced *per metabolite*, so at the design width (`width // 2` = 64) it cost
-> 123x the ICNN's FLOPs — 47 s/epoch against 0.35, i.e. 19 h a run. It was cut to
-> `width // 8` = 16 **for speed**, and both deepsets then *underfit the training
-> set* (value loss 0.895 and 0.626 against the ICNN's 0.375). More trunk capacity
-> demonstrably helps (that is result 4's mechanism), so **the deepset numbers above
-> are a lower bound and do not cleanly refute the architecture.** Restoring
-> hidden=64 is ~11 h/run even sharded. It was not judged worth a day given the
-> ICNN reaches 0.538 with 4.29M parameters at 0.35 s/epoch — but the honest status
-> is *not measured at full width*, not *refuted*. The one clear deepset win is
-> **conditioning: 4.0e3 against the ICNN's 3.4e7**, four orders better and directly
-> what §8's Newton composition needs; worth revisiting if M4 turns out to be
-> conditioning-limited rather than accuracy-limited.
+> **The deepset caveat above was real, and it is now discharged — see "Deepset is
+> measured at full width, and cut" below.** `phi` is priced *per metabolite*, so at
+> the design width (`width // 2` = 64) it cost 123x the ICNN's FLOPs — 47 s/epoch
+> against 0.35, i.e. 19 h a run. It was cut to `width // 8` = 16 **for speed**, and
+> both deepsets then *underfit the training set* (value loss 0.895 and 0.626
+> against the ICNN's 0.375), so the two rows in this table are a lower bound and
+> never refuted the architecture. The full-width rerun did, on 21 organisms.
 >
 > **The forest's gradients are probe-limited — do not quote an aggregate.** It has
 > no analytic gradient, so `baseline.py` uses central finite differences at
@@ -253,7 +247,10 @@
 > the 30 planned cells, one task per (cell, organism), 324 cpu-h. No
 > `sweep_leaderboard.csv` — aggregate `sweep/*/diagnostics.json` directly. All 6
 > shared-`deepset` cells OOM-killed at ~30 s (exit 137) and `deepset-private
-> ph64/kc64` hit the 12 h walltime (exit 140); 72 tasks aborted downstream.
+> ph64/kc64` hit the 12 h walltime (exit 140); 72 tasks aborted downstream. The
+> four `deepset-private` cells were rerun and **all four now hold 21/21 organisms**
+> (462 task dirs in `export/sweep_out/sweep/`), which is what the deepset verdict
+> below rests on.
 >
 > **The rows axis was not tested.** The three `m4k` samplesheet rows still carry
 > the literal `/path/to/20hm_bands/labels` placeholder, every task reports
@@ -428,6 +425,8 @@
 > `d(mu)/dx_m = <rho'(S), dphi_m/dx_m>`, so the medium reaches the gradient
 > *pattern* only through a `k_code`-wide vector, a narrow channel for what is an
 > argmin across metabolites. It costs 5-11 h/organism against the ICNN's 5 min.
+> Full-width numbers for it now exist and close the question — see **"Deepset is
+> measured at full width, and cut"** below.
 >
 > **Next — the second sweep.** Everything
 > above is CR626927.1 on a laptop; the gate is the worst of 21 organisms at 0.99.
@@ -487,10 +486,79 @@
 > are seeded rather than trained, and no supply model exists yet, so `lam` has no
 > physical scale. Re-run with `--checkpoint` once Arm G lands.
 >
+> ### Deepset is measured at full width, and cut — 2026-08-27
+>
+> The full-width rerun (`export/sweep_out/sweep/`, four `deepset-private` cells x
+> 21 organisms, held-out round-0 media, `w_grad` 1, x-space) discharges the
+> "lower bound, not refuted" caveat. Roster medians, worst over 21 organisms:
+>
+> | cell | worst cos | med cos | med R2 | med p05 | log10 Hess cond | h/organism |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | `deepset-private ph32/kc64` | **0.742** | **0.810** | 0.564 | 0.137 | 11.3 | 7.5 |
+> | `deepset-private ph64/kc64` | 0.733 | 0.809 | 0.564 | 0.132 | 11.7 | 12 |
+> | `deepset-private ph64/kc16` | 0.665 | 0.811 | 0.560 | 0.138 | 12.5 | 11 |
+> | `deepset-private ph32/kc16` | 0.653 | 0.797 | 0.554 | 0.137 | 12.1 | 5 |
+> | `icnn w128/d3` | 0.678 | 0.755 | 0.541 | 0.106 | 9.8 | 0.075 |
+> | `mlp w512` | 0.681 | 0.873 | 0.915 | 0.168 | 7.5 (60.7% non-concave) | 0.2 |
+> | `rf` | 0.357 | 0.664 | 0.994 | 0.000 | n/a | 0.01 |
+>
+> 1. **At full width it beats the x-space ICNN, and by little.** 18/21 organisms
+>    on cosine, median +0.055, worst +0.064 — and value R2 is *identical* (0.564 vs
+>    0.541, worst organism 0.352 vs 0.350). A small gradient lift, not an
+>    architecture change, and nowhere near the 0.99 gate. Cost is ~157 cpu-h for one
+>    21-organism cell against 1.6 for the whole `icnn w128/d3` cell.
+> 2. **The conditioning win is gone.** It was the reason to revisit deepset at all
+>    (the underfit shared-trunk run reported 4.0e3). At full width the median
+>    Hessian condition is **1e11-1e12, worse than the ICNN's 1e10**. And per "The
+>    conditioning bill is not §8's", that number does not reach Phase 5 anyway.
+> 3. **It does not fit the per-metabolite cells better — which was the whole bet.**
+>    Per (organism, metabolite) cell against `icnn w128/d3` on the same media, the
+>    lift is small and roughly uniform, *not* concentrated where coverage is thin:
+>    <25 rows +0.012 (n=357), 25-100 +0.062 (215), 100-400 +0.020 (141), >=400
+>    +0.010 (31). Split by difficulty instead of coverage: on the 284 cells where
+>    the ICNN scores <0.5, deepset scores **0.312 against 0.286**; on the 72 cells
+>    where the ICNN is already >=0.9, 0.958 vs 0.954. The two heads fail on the
+>    *same cells* by nearly the same amount. Same three ions lead the error on
+>    ~20/21 organisms in both (`EX_mg2_e` median 0.407 vs ICNN 0.322 vs forest
+>    0.995; `EX_cl_e` 0.105 / 0.037 / 0.990; `EX_ca2_e` 0.079 / 0.037 / 0.985).
+>    Private per-metabolite trunks did **not** localise the kink.
+> 4. **Both deepset capacity axes are inert, exactly like the ICNN's.** Paired
+>    per-organism medians: `k_code` 16->64 at ph32 **-0.001** (range -0.037 to
+>    +0.100), `phi` 32->64 at kc16 **+0.001** (-0.018 to +0.044), against `icnn`
+>    w128->w1024 d3 **-0.000**. The 0.653 -> 0.742 worst-cosine move is one
+>    organism's tail, not a trend — do not read it as a `k_code` effect.
+>
+> **Why `deepset-u` is not worth building on top of this.** The rerun is x-space,
+> so it measures the per-metabolite bet *under* the coordinate defect, and
+> `deepset_u.TrunkU` would inherit the `w` fix and presumably the ICNN's gain
+> (R2 0.477 -> 0.802). But the **larger** lever cannot be applied to it at all:
+> `groupmax.init_from_tangents` writes the labels' duals straight into layer 1 as
+> affine planes over the whole metabolite vector, worth cosine 0.598 -> 0.973 on
+> its own. Deepset's first layer is a per-metabolite *scalar* map `phi_m: R -> R^k`;
+> there are no planes over the metabolite vector to seed, and the duals do not
+> factor into per-metabolite ramps. So `deepset-u` would land near `icnn-u`, not
+> near seeded `groupmax-u`, at ~100x the compute. Result 3 above is the empirical
+> half of the same point: the cells it fails are the cells every smooth head fails.
+>
+> Structurally: `d(mu)/dw_m = <rho'(S), phi_m'(w_m)> / |M|` is a rank-`k_code`
+> bilinear form standing in for an argmin over 444 metabolites. The exact
+> log-sum-exp softmin factorisation through a *mean* pool needs `rho` convex and
+> decreasing, which the enforced concave-non-decreasing constraint excludes; an
+> approximation through a `k>=2` code is not ruled out, but it is a detour to
+> something `groupmax-u` computes natively, its max being over planes that span all
+> metabolites at once.
+>
+> **What would reopen it:** one cell, one organism — `deepset-u` ph32/kc64 on
+> CR626927.1 at `w_grad` 10, ~7.5 h, against `icnn-u` 0.903 and seeded
+> `groupmax-u` 0.973 on the same held-out media. Below 0.903 the arm is dead; above
+> it, the ~157 cpu-h roster cell becomes arguable. The arch stays built, tested and
+> registered (`--arch deepset-u{,-private}`) so that test costs no new code.
+>
 > **Cut, with reasons on file** (`make_sweep_full.sh` keeps the invocations):
 > `deepset-u` (was 80% of the run at 5-11 h/organism/cell; the per-metabolite bet
-> lost its evidence, and its one advantage — conditioning, 5.9e5 — is now known not
-> to reach §8); the `--gm-init random` control cells (the
+> is now refuted at full width — see the section directly above — and its one
+> claimed advantage, conditioning, is both gone and known not to reach §8);
+> the `--gm-init random` control cells (the
 > single-organism A/B is decisive, so the sweep no longer carries its own control
 > and the attribution rests on one laptop measurement); and Arm F's random-init
 > group/temperature grid (it would have re-measured collapse on 21 organisms).

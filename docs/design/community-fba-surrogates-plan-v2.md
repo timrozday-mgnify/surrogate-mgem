@@ -676,13 +676,38 @@ composition time.
 > - **Sharing `phi` across organisms hurts** (private beats shared on every metric),
 >   so D1's supersession is not worth taking.
 >
-> **Caveat, load-bearing.** `phi` is priced *per metabolite*, so at the design width
-> (`width // 2` = 64) the deepset cost 123× the ICNN's FLOPs — 47 s/epoch vs 0.35.
-> It was cut to `width // 8` = 16 **for speed**, and both variants then *underfit
-> the training set* (value loss 0.895 / 0.626 vs the ICNN's 0.375). The deepset
-> numbers are a **lower bound, not a refutation** — it has never been measured at
-> full width. Its conditioning (4.0e3, four orders better than the ICNN) is exactly
-> what §8's Newton needs.
+> **Caveat, since discharged.** `phi` is priced *per metabolite*, so at the design
+> width (`width // 2` = 64) the deepset cost 123× the ICNN's FLOPs — 47 s/epoch vs
+> 0.35. It was cut to `width // 8` = 16 **for speed**, and both variants then
+> *underfit the training set* (value loss 0.895 / 0.626 vs the ICNN's 0.375), so
+> the two rows above are a lower bound and never refuted the architecture. The
+> full-width rerun did — see below.
+>
+> **Deepset at full width — measured 2026-08-27, and cut.** Four `deepset-private`
+> cells × 21 organisms on the M3b cluster run, x-space, `w_grad` 1. Best cell
+> (`ph32/kc64`): worst cosine **0.742**, median 0.810, median R² 0.564 — against
+> `icnn w128/d3`'s 0.678 / 0.755 / 0.541. It wins on 18/21 organisms by a median
+> +0.055 cosine, at identical R², for ~157 cpu-h a cell against 1.6.
+>
+> - **The conditioning advantage is gone**, and it was the reason to revisit the
+>   arch. At full width median Hessian condition is 1e11–1e12, *worse* than the
+>   ICNN's 1e10. (And §8 does not pay that bill — see the master-Jacobian result.)
+> - **It does not fit the per-metabolite cells better**, which was the bet. The
+>   lift is uniform, not concentrated where coverage is thin: <25 rows +0.012,
+>   25–100 +0.062, 100–400 +0.020, ≥400 +0.010. Where the ICNN scores <0.5 (284
+>   cells) deepset scores 0.312 vs 0.286; where it is ≥0.9 (72 cells), 0.958 vs
+>   0.954. The same three ions lead the error on ~20/21 organisms in both.
+> - **Both capacity axes are inert**, like the ICNN's: paired per-organism median
+>   Δcosine is −0.001 for `k_code` 16→64 and +0.001 for `phi` 32→64.
+> - **`deepset-u` inherits the coordinate fix but not the bigger lever.**
+>   `groupmax.init_from_tangents` seeds layer 1 with the labels' duals as affine
+>   planes over the whole metabolite vector (cosine 0.598 → 0.973). Deepset's first
+>   layer is a per-metabolite *scalar* `phi_m: R → R^k` — there are no planes to
+>   seed. It would land near `icnn-u`, at ~100× the compute.
+>
+> Reopening test, if wanted: one organism (CR626927.1), `deepset-u` ph32/kc64 at
+> `w_grad` 10, ~7.5 h, against `icnn-u` 0.903 and seeded `groupmax-u` 0.973 on the
+> same held-out media. The arch stays built and registered, so it costs no code.
 >
 > **The forest's gradients are probe-limited.** No analytic gradient, so
 > `baseline.py` uses central differences at `delta * s_m` in `u`. Worst-organism
