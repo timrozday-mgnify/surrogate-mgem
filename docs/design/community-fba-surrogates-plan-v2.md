@@ -649,7 +649,7 @@ composition time.
 > any norm-relative loss by ~1e14.
 
 > **Architecture trial (2026-07-29) — the ICNN survives; the deficit is located.**
-> `cfs train-value --arch {icnn,deepset,deepset-private,mlp}` and `cfs baseline-rf`,
+> `cfs train-value --arch {icnn,icnn-u,deepset,deepset-private,mlp}` and `cfs baseline-rf`,
 > all on `20hm_bands/` at identical knobs and the *same* 800 held-out media.
 >
 > | | worst | mean | R² | Hess. cond | train loss (value) |
@@ -700,6 +700,79 @@ composition time.
 > `diagnostics.json` records `n_val_media` / `n_train_media` / `rounds_present`.
 > **The earlier finding that top-up rounds hurt is retracted** — it was never a
 > controlled experiment. Re-running it on the fixed ruler is open work.
+
+> **M3b ran (2026-08-26) and both of the bullets above about *where* the deficit
+> lives are superseded — see `CLAUDE.md` for the full read.** The short form: the
+> ICNN's capacity axis is inert (width 128→1024 × depth 3→6 moves paired
+> per-organism cosine and R² by ±0.001 on all 12 cells) because **concavity was
+> imposed in the wrong coordinate**. `mu_max` is an LP value function in its RHS
+> and `lb = -Vmax * u`, so it is concave and piecewise *linear* in `u`; but
+> `u = s*x/(1-x)` is **convex** in `x`, so a concave-in-`x` head fits each ramp
+> with a chord. Tangent test on the labels: violated in `x` on 32.3/39.7/56.9% of
+> row pairs (3 organisms), in `u` on **0.0%**. `{concave in x} ⊊ {concave in u}`
+> and the target is in the gap — every variant converges to the same projection,
+> which no amount of capacity moves.
+>
+> Consequences for the decisions recorded above:
+>
+> - **"The remaining error is localisation" is withdrawn.** The ions are the
+>   metabolites whose ramps are steepest in `u`, i.e. the ones the `x`-space chord
+>   approximates worst. A per-metabolite architecture does not address this; the
+>   `deepset`'s `phi` is concave in `x_m` and carries the identical defect.
+> - **The forest is no longer the ceiling.** The parameter-free cutting-plane model
+>   `mu_hat(u) = min_j [mu_j + pi_j.(u − u_j)]` scores cosine **0.969–0.996** and R²
+>   **0.997–0.999** on 6/6 organisms — beating the forest on gradients and the MLP
+>   on both, while being concave, monotone and analytically differentiable. One
+>   organism clears the 0.99 gate. Use it as the ceiling measurement; it needs no
+>   finite-difference probe, so the delta caveat below no longer applies to it.
+> - **P11 stays parked, but for a new reason.** The MLP's advantage was read as
+>   +0.009 cosine when the constraint was in `x`; it is now clear the constraint was
+>   never the problem, the coordinate was.
+>
+> `cfs train-value --arch icnn-u` (`src/cfs/surrogate/picnn_u.py`) is the
+> correction — the same ICNN over `w = min(u/s, 300)`, affine in `u`, so the class
+> is the full concave-in-`u` one. R² 0.477 → **0.802** on one organism at identical
+> knobs, concavity violations still 0. Its cosine has not moved yet.
+
+> **Second finding, 2026-08-26: initialisation, not architecture.** With the
+> coordinate corrected, the remaining gap is where the optimiser *starts*. Matched
+> A/B on CR626927.1 — `groupmax-u`, width 1 / depth 1 / K=250 / T=0.03 / `w_grad`
+> 10, same seed, only `--gm-init` differing:
+>
+> | init | cosine | R² | p05 | Hessian cond |
+> |---|---|---|---|---|
+> | `labels` | **0.9733** | **0.996** | **0.834** | 1.9e24 |
+> | `random` | 0.5982 | 0.4795 | 0.000 | **0.0** |
+>
+> Condition exactly 0 means no curvature anywhere: the head collapsed to a *single*
+> affine piece, so 249 of 250 planes never became active and never received useful
+> gradient. This is the dead-piece failure LSPA/CAP-style max-affine fitting exists
+> to fix, and it reproduces at width 128 / depth 3 too (cosine 0.76, cond 0.0 at
+> both T=0.01 and T=0.03), so it is what random init does to a group-max head
+> generally rather than a quirk of the narrow configuration.
+>
+> The remedy is **not** those fitting algorithms: they infer the planes from values,
+> and §5's labels give the duals directly, so every row is an exact supporting
+> hyperplane and the first layer can simply be told what its pieces are. Ranked by
+> active-set frequency (the dual's support is the LP basis), 100 planes match ~2000
+> drawn at random. `cfs train-value --arch groupmax-u --gm-init labels`.
+>
+> At K=250 the seeded head beats the full 16 000-tangent cutting-plane model
+> (0.9733 vs 0.969) on 111k parameters, concave and monotone with violations 0 —
+> the closest anything has come to the 0.99 gate, on one organism.
+>
+> **This makes conditioning the binding constraint, and it is now V-gate material.**
+> 1.9e24 is the worst number measured and it is precisely what §8.4's Newton spends
+> (`tags=lx.positive_semidefinite_tag`, `rtol=1e-10`). Sharp affine pieces buy
+> gradient accuracy and cost curvature; the log-sum-exp temperature is the knob, and
+> the second sweep's Arm G traces that frontier. If no temperature is both accurate
+> and conditionable, the answer is P9's remedy — damped Newton / trust region — not a
+> better head. **§7.3's diagnostic set should treat `hessian_cond_median` as an
+> objective, not a warning light.**
+>
+> Related work, for the record: GroupMax (arXiv 2206.06622, motivated by Bellman
+> *cuts*, i.e. exactly this), Maxout (1302.4389), Magnani & Boyd's LSPA and
+> Hannah & Dunson's CAP/AMAP for max-affine fitting.
 
 > ### 7.4 M3b — HPC sweep (next)
 >

@@ -1,31 +1,25 @@
 cell_id,arch,labels,args
-m20k__icnn__w128__d3,icnn,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__icnn__w128__d4,icnn,labels_out/labels,--width 128 --depth 4 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__icnn__w128__d6,icnn,labels_out/labels,--width 128 --depth 6 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__icnn__w256__d3,icnn,labels_out/labels,--width 256 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__icnn__w256__d4,icnn,labels_out/labels,--width 256 --depth 4 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__icnn__w256__d6,icnn,labels_out/labels,--width 256 --depth 6 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__icnn__w512__d3,icnn,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__icnn__w512__d4,icnn,labels_out/labels,--width 512 --depth 4 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__icnn__w512__d6,icnn,labels_out/labels,--width 512 --depth 6 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__icnn__w1024__d3,icnn,labels_out/labels,--width 1024 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__icnn__w1024__d4,icnn,labels_out/labels,--width 1024 --depth 4 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__icnn__w1024__d6,icnn,labels_out/labels,--width 1024 --depth 6 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__deepset__ph32__kc16,deepset,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 32 --k-code 16 --seed 0
-m20k__deepset__ph32__kc64,deepset,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 32 --k-code 64 --seed 0
-m20k__deepset__ph64__kc16,deepset,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 64 --k-code 16 --seed 0
-m20k__deepset__ph64__kc64,deepset,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 64 --k-code 64 --seed 0
-m20k__deepset__ph128__kc16,deepset,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 128 --k-code 16 --seed 0
-m20k__deepset__ph128__kc64,deepset,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 128 --k-code 64 --seed 0
-m20k__deepset-private__ph32__kc16,deepset-private,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 32 --k-code 16 --seed 0
-m20k__deepset-private__ph32__kc64,deepset-private,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 32 --k-code 64 --seed 0
-m20k__deepset-private__ph64__kc16,deepset-private,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 64 --k-code 16 --seed 0
-m20k__deepset-private__ph64__kc64,deepset-private,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 64 --k-code 64 --seed 0
-m20k__deepset-private__ph128__kc16,deepset-private,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 128 --k-code 16 --seed 0
-m20k__deepset-private__ph128__kc64,deepset-private,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --emb-dim 8 --phi-hidden 128 --k-code 64 --seed 0
-m20k__mlp__w128,mlp,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m20k__mlp__w512,mlp,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
+m20k__icnn-u__g1,icnn-u,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
+m20k__icnn-u__g3,icnn-u,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 3 --eps 1e-3 --seed 0
+m20k__icnn-u__g10,icnn-u,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --seed 0
+m20k__icnn-u__g15,icnn-u,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 15 --eps 1e-3 --seed 0
+m20k__icnn-u__g20,icnn-u,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 20 --eps 1e-3 --seed 0
+m20k__icnn-u__w512__d3,icnn-u,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --seed 0
+m20k__icnn-u__w512__d6,icnn-u,labels_out/labels,--width 512 --depth 6 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --seed 0
+m20k__icnn-u__w1024__d3,icnn-u,labels_out/labels,--width 1024 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --seed 0
+m20k__icnn-u__w1024__d6,icnn-u,labels_out/labels,--width 1024 --depth 6 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --seed 0
+m20k__icnn,icnn,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --seed 0
+m20k__mlp,mlp,labels_out/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --seed 0
 m20k__rf,rf,labels_out/labels,--eps 1e-3 --n-estimators 100 --delta 0.05 --seed 0
-m4k__icnn__w128,icnn,/path/to/20hm_bands/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m4k__icnn__w512,icnn,/path/to/20hm_bands/labels,--width 512 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 1 --eps 1e-3 --seed 0
-m4k__rf,rf,/path/to/20hm_bands/labels,--eps 1e-3 --n-estimators 100 --delta 0.05 --seed 0
+m20k__groupmax-u__T0.01,groupmax-u,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 8 --gm-temp 0.01 --gm-init labels --seed 0
+m20k__groupmax-u__T0.03,groupmax-u,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 8 --gm-temp 0.03 --gm-init labels --seed 0
+m20k__groupmax-u__T0.1,groupmax-u,labels_out/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 8 --gm-temp 0.1 --gm-init labels --seed 0
+m20k__groupmax-u__grp100__T0.01,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 100 --gm-temp 0.01 --gm-init labels --seed 0
+m20k__groupmax-u__grp100__T0.03,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 100 --gm-temp 0.03 --gm-init labels --seed 0
+m20k__groupmax-u__grp100__T0.1,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 100 --gm-temp 0.1 --gm-init labels --seed 0
+m20k__groupmax-u__grp1000__T0.01,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 1000 --gm-temp 0.01 --gm-init labels --seed 0
+m20k__groupmax-u__grp1000__T0.03,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 1000 --gm-temp 0.03 --gm-init labels --seed 0
+m20k__groupmax-u__grp1000__T0.1,groupmax-u,labels_out/labels,--width 1 --depth 1 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --gm-group 1000 --gm-temp 0.1 --gm-init labels --seed 0
+m4k__icnn-u,icnn-u,labels_out_4k/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --seed 0
+m4k__icnn,icnn,labels_out_4k/labels,--width 128 --depth 3 --epochs 1500 --batch 512 --lr 3e-3 --w-grad 10 --eps 1e-3 --seed 0
+m4k__rf,rf,labels_out_4k/labels,--eps 1e-3 --n-estimators 100 --delta 0.05 --seed 0

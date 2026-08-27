@@ -23,6 +23,7 @@ import sys
 # `baseline-rf` has neither --arch nor --width, so a shared cross product has to be
 # filtered per row rather than per axis.
 _DEEPSET_ONLY = {"--phi-hidden", "--k-code", "--emb-dim"}
+_GROUPMAX_ONLY = {"--gm-group", "--gm-temp", "--gm-init"}
 _RF_ONLY = {"--n-estimators", "--delta"}
 
 
@@ -50,6 +51,9 @@ def cells(
     w_grad,
     eps,
     emb_dim,
+    gm_group,
+    gm_temp,
+    gm_init,
     phi_hidden,
     k_code,
     n_estimators,
@@ -71,6 +75,9 @@ def cells(
         "--w-grad": w_grad,
         "--eps": eps,
         "--emb-dim": emb_dim,
+        "--gm-group": gm_group,
+        "--gm-temp": gm_temp,
+        "--gm-init": gm_init,
         "--phi-hidden": phi_hidden,
         "--k-code": k_code,
         "--n-estimators": n_estimators,
@@ -87,6 +94,9 @@ def cells(
         "--w-grad": "g",
         "--eps": "eps",
         "--emb-dim": "emb",
+        "--gm-group": "grp",
+        "--gm-temp": "T",
+        "--gm-init": "init",
         "--phi-hidden": "ph",
         "--k-code": "kc",
         "--n-estimators": "t",
@@ -106,6 +116,8 @@ def cells(
             if flag in _RF_ONLY and arch != "rf":
                 continue
             if flag in _DEEPSET_ONLY and not arch.startswith("deepset"):
+                continue
+            if flag in _GROUPMAX_ONLY and arch != "groupmax-u":
                 continue
             if arch == "rf" and flag not in _RF_ONLY | {"--eps", "--seed"}:
                 continue
@@ -144,6 +156,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--w-grad", type=_csv, default=["1"])
     p.add_argument("--eps", type=_csv, default=["1e-3"])
     p.add_argument("--emb-dim", type=_csv, default=["8"], help="deepset only.")
+    p.add_argument("--gm-group", type=_csv, default=[""], help="groupmax-u only; '' = default.")
+    p.add_argument("--gm-temp", type=_csv, default=[""], help="groupmax-u only; '' = default.")
+    p.add_argument("--gm-init", type=_csv, default=[""], help="groupmax-u only: random,labels.")
     p.add_argument("--phi-hidden", type=_csv, default=[""], help="deepset only; '' = default.")
     p.add_argument("--k-code", type=_csv, default=[""], help="deepset only; '' = default.")
     p.add_argument("--n-estimators", type=_csv, default=["100"], help="rf only.")
@@ -164,6 +179,9 @@ def main(argv: list[str] | None = None) -> int:
             w_grad=a.w_grad,
             eps=a.eps,
             emb_dim=a.emb_dim,
+            gm_group=a.gm_group,
+            gm_temp=a.gm_temp,
+            gm_init=a.gm_init,
             phi_hidden=a.phi_hidden,
             k_code=a.k_code,
             n_estimators=a.n_estimators,
@@ -194,6 +212,9 @@ def demo() -> None:
             w_grad=["1"],
             eps=["1e-3"],
             emb_dim=["8"],
+            gm_group=[""],
+            gm_temp=[""],
+            gm_init=[""],
             phi_hidden=[""],
             k_code=[""],
             n_estimators=["100"],
@@ -211,6 +232,35 @@ def demo() -> None:
     assert "--width" not in rf[0][3] and "--n-estimators 100" in rf[0][3], rf[0]
     assert "--n-estimators" not in icnn[0][3], icnn[0]
     assert "--phi-hidden" not in icnn[0][3], icnn[0]
+    # groupmax-only flags route the same way: onto groupmax-u rows and nowhere else.
+    gm = list(
+        cells(
+            [("bands", "/l")],
+            ["groupmax-u", "icnn-u"],
+            width=["128"],
+            depth=["3"],
+            epochs=["10"],
+            batch=["512"],
+            lr=["3e-3"],
+            w_grad=["10"],
+            eps=["1e-3"],
+            emb_dim=["8"],
+            gm_group=["8"],
+            gm_temp=["0.1"],
+            gm_init=["labels"],
+            phi_hidden=[""],
+            k_code=[""],
+            n_estimators=["100"],
+            delta=["0.05"],
+            seed=["0"],
+        )
+    )
+    gmax = [r for r in gm if r[1] == "groupmax-u"][0]
+    icnnu = [r for r in gm if r[1] == "icnn-u"][0]
+    assert "--gm-group 8" in gmax[3] and "--gm-temp 0.1" in gmax[3], gmax
+    assert "--gm-init labels" in gmax[3], gmax
+    assert "--gm-group" not in icnnu[3] and "--gm-temp" not in icnnu[3], icnnu
+    assert "--gm-init" not in icnnu[3], icnnu
     # deepset-only flags reach a deepset row; an empty axis value is dropped, which
     # is how a knob is left at the CLI's own default.
     ds = list(
@@ -225,6 +275,9 @@ def demo() -> None:
             w_grad=["1"],
             eps=["1e-3"],
             emb_dim=["8"],
+            gm_group=[""],
+            gm_temp=[""],
+            gm_init=[""],
             phi_hidden=["64"],
             k_code=["64"],
             n_estimators=["100"],

@@ -69,6 +69,17 @@ def _saturation(c: np.ndarray, km: np.ndarray) -> np.ndarray:
     return c / (km + c)
 
 
+def _shard_dir(labels_dir: Path, gid: str, eps: float) -> Path:
+    """``<gid>/eps_<e>``, falling back to the pre-c3c1862 hive layout.
+
+    Label sets written before the ``key=`` prefixes were dropped -- which is every
+    set on disk, including `20hm_bands` and `20hm_probe` -- use
+    ``genome_id=<gid>/eps=<e>``. Regenerating them is ~1 h/organism, so read both.
+    """
+    d = labels_dir / gid / f"eps_{eps:g}"
+    return d if d.is_dir() else labels_dir / f"genome_id={gid}" / f"eps={eps:g}"
+
+
 def _organism_arrays(
     labels_dir: Path, gid: str, eps: float, col: dict[str, int], km_cfg: dict, n_shared: int
 ):
@@ -87,7 +98,7 @@ def _organism_arrays(
 
     # Every parquet in the (organism, eps) directory: the base run writes
     # `part.parquet`, each §4.6 top-up round adds `part.round<n>.parquet`.
-    shard_dir = labels_dir / gid / f"eps_{eps:g}"
+    shard_dir = _shard_dir(labels_dir, gid, eps)
     parts = sorted(shard_dir.glob("*.parquet"))
     if not parts:
         raise FileNotFoundError(f"{gid}: no label shards under {shard_dir}")
@@ -206,7 +217,7 @@ def load_value_dataset(
     col = {ex: i for i, ex in enumerate(exchanges)}
     km_cfg = load_km_defaults()
 
-    shard_ids = {p.name for p in labels_dir.iterdir() if p.is_dir()}
+    shard_ids = {p.name.removeprefix("genome_id=") for p in labels_dir.iterdir() if p.is_dir()}
     if not shard_ids:
         raise ValueError(f"no per-genome shard dirs under {labels_dir}")
     # Stack in the frozen index's organism order, so row i of `mask` is organism i.

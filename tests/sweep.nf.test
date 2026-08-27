@@ -8,7 +8,8 @@ nextflow_pipeline {
         when {
             params {
                 stage  = "sweep"
-                // The example's smoke sheet: icnn + mlp -> TRAIN_VALUE, rf -> BASELINE_RF.
+                // The example's smoke sheet: icnn-u + deepset-u-private + mlp + groupmax-u ->
+                // TRAIN_VALUE, rf -> BASELINE_RF.
                 sweep  = "$projectDir/examples/hpc_run/sweep_smoke.csv"
                 index  = "$projectDir/examples/hpc_run/reference/metabolite_index.json"
                 outdir = "$outputDir"
@@ -17,11 +18,15 @@ nextflow_pipeline {
         then {
             assertAll(
                 { assert workflow.success },
-                { assert path("$outputDir/sweep/stub__icnn/diagnostics.json").exists() },
+                { assert path("$outputDir/sweep/stub__icnn-u/diagnostics.json").exists() },
                 { assert path("$outputDir/sweep/stub__mlp/value_heads.eqx").exists() },
                 { assert path("$outputDir/sweep/stub__rf/diagnostics.json").exists() },
-                // One header + one row per cell: the collect step saw all three.
-                { assert path("$outputDir/sweep_leaderboard.csv").readLines().size() == 4 },
+                // The shared-trunk branch: a `deepset-u` cell must NOT be fanned out
+                // per organism, or its shared trunk silently becomes a private one.
+                { assert path("$outputDir/sweep/stub__deepset-u-private/diagnostics.json").exists() },
+                // One header + one row per cell: the collect step saw all five.
+                { assert path("$outputDir/sweep/stub__groupmax-u/diagnostics.json").exists() },
+                { assert path("$outputDir/sweep_leaderboard.csv").readLines().size() == 6 },
             )
         }
     }

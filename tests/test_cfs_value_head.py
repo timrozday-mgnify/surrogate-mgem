@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 jax = pytest.importorskip("jax")
+jnp = pytest.importorskip("jax.numpy")
 pytest.importorskip("equinox")
 
 from cfs.surrogate.data import ValueDataset, _organism_arrays  # noqa: E402
@@ -65,7 +66,18 @@ def _synthetic() -> ValueDataset:
     )
 
 
-@pytest.mark.parametrize("arch", ["icnn", "deepset", "deepset-private"])
+@pytest.mark.parametrize(
+    "arch",
+    [
+        "icnn",
+        "icnn-u",
+        "deepset",
+        "deepset-private",
+        "deepset-u",
+        "deepset-u-private",
+        "groupmax-u",
+    ],
+)
 def test_gate_on_a_known_concave_target(arch):
     ds = _synthetic()
     # The sign-constrained head converges slower than the unconstrained one did:
@@ -111,6 +123,225 @@ def test_untrained_head_is_concave_monotone_and_masked():
     x1 = x0.copy()
     x1[0, 0, 0] = 1.0
     assert np.allclose(batched_value(heads, x0)[0], batched_value(heads, x1)[0])
+
+
+def test_icnn_u_is_concave_in_u_and_not_forced_concave_in_x():
+    """The whole point of `icnn-u`: the constraint moves to ``w = u/s``.
+
+    ``mu_max`` is concave in ``u`` and *not* in ``x`` (32-57% of label row pairs
+    violate the ``x`` tangent test on real GEMs), so a head locked to concavity in
+    ``x`` cannot represent it. This asserts the new head is concave where it should
+    be — and that it has genuinely given up the ``x`` constraint rather than
+    silently keeping it, which would make the arch a no-op.
+    """
+    from cfs.surrogate import picnn_u
+
+    mask = np.ones((2, M), dtype=bool)
+    mask[0, 0] = False
+    heads = picnn_u.stack_heads(jax.random.PRNGKey(3), 2, M, mask, width=16, depth=3)
+    rng = np.random.default_rng(3)
+    # Sample in w, not x: mapping x -> w -> x back cancels in float32 near x = 1.
+    wa, wb = (rng.uniform(0, 20, (2, 256, M)).astype(np.float32) for _ in range(2))
+    lam = 0.37
+    mid = picnn_u.batched_value_diag(heads, lam * wa + (1 - lam) * wb)
+    chord = lam * picnn_u.batched_value_diag(heads, wa) + (1 - lam) * picnn_u.batched_value_diag(
+        heads, wb
+    )
+    assert np.all(np.asarray(mid) >= np.asarray(chord) - 1e-4)
+
+    # `x` is what the loss and the gate see; `to_diag` is the head's own map, so
+    # the two entry points must agree.
+    x = (wa / (1.0 + wa)).astype(np.float32)
+    assert np.allclose(
+        np.asarray(picnn_u.batched_value(heads, x)),
+        np.asarray(picnn_u.batched_value_diag(heads, picnn_u.to_diag(x))),
+        atol=1e-5,
+    )
+
+    # Monotone in every masked coordinate — still true, still required.
+    _, grad = picnn_u.batched_value_and_grad(heads, x)
+    assert np.all(np.asarray(grad * heads.mask[:, None, :]) >= -1e-6)
+
+    # Not concave in x: some pair must violate, or the constraint never moved.
+    xa, xb = (rng.uniform(0, 1, (2, 512, M)).astype(np.float32) for _ in range(2))
+    midx = picnn_u.batched_value(heads, lam * xa + (1 - lam) * xb)
+    chordx = lam * picnn_u.batched_value(heads, xa) + (1 - lam) * picnn_u.batched_value(heads, xb)
+    assert np.any(np.asarray(midx) < np.asarray(chordx) - 1e-4)
+
+
+def test_groupmax_nests_max_affine_and_keeps_curvature():
+    """The two properties the head exists for.
+
+    1. ``width=1, depth=1, group=K`` must BE ``min_k(a_k . w + c_k)`` — the exact
+       form of an LP value function — and not merely resemble it.
+    2. The smoothed max must keep a non-zero Hessian. A hard max has none inside a
+       piece, which is P3 and the one thing §8's Newton cannot follow; ``temp`` is
+       what buys the curvature back, so curvature must actually rise as T rises.
+    """
+    from cfs.surrogate import groupmax
+
+    K, n_in = 6, 4
+    mask = np.ones((1, n_in), dtype=bool)
+    head = groupmax.organism(
+        groupmax.stack_heads(
+            jax.random.PRNGKey(7), 1, n_in, mask, width=1, depth=1, group=K, temp=1e-3
+        ),
+        0,
+    )
+    # Read the affine pieces straight off the parameters: out = softplus(out_z) *
+    # gmax(-softplus(wx) w + b) - softplus(out_x) w, and mu = -out.
+    a = np.asarray(jax.nn.softplus(head.wx[0]))  # (K, n_in), the slopes
+    b = np.asarray(head.b[0])  # (K,)
+    oz, ox = float(jax.nn.softplus(head.out_z)[0]), np.asarray(jax.nn.softplus(head.out_x))
+    rng = np.random.default_rng(7)
+    w = rng.uniform(0, 5, (32, n_in)).astype(np.float32)
+    # mu = -oz * max_k(-a_k.w + b_k) + ox.w = min_k(oz*a_k.w - oz*b_k) + ox.w
+    want = (oz * (w @ a.T) - oz * b).min(axis=1) + w @ ox
+    got = np.asarray(jax.vmap(head.on_w)(w))
+    assert np.allclose(got, want, atol=2e-3), np.abs(got - want).max()
+
+    # Curvature is real and is controlled by `temp`, not incidental to it.
+    def curv(t):
+        h = groupmax.organism(
+            groupmax.stack_heads(
+                jax.random.PRNGKey(7), 1, n_in, mask, width=4, depth=2, group=4, temp=t
+            ),
+            0,
+        )
+        H = np.asarray(jax.vmap(jax.hessian(h.on_w))(w[:8]))
+        return float(np.abs(np.linalg.eigvalsh(H)).max())
+
+    lo, hi = curv(0.05), curv(1.0)
+    assert lo > 0.0 and hi > lo, (lo, hi)
+
+
+def _min_affine_dataset(K=5, n=300, M=4, seed=0):
+    """A target that IS an LP value function: mu = min_k(a_k . w + c_k) in w space.
+
+    Built directly so the label-tangent init has a known right answer — every row's
+    dual is the active piece's coefficient vector, exactly as in a real solve.
+    """
+    from cfs.surrogate.picnn_u import to_diag
+
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0.05, 0.9, (1, n, M)).astype(np.float32)
+    w = np.asarray(to_diag(jnp.asarray(x)))
+    a = rng.uniform(0.1, 2.0, (K, M)).astype(np.float32)  # slopes >= 0: monotone
+    c = rng.uniform(0.5, 3.0, (K,)).astype(np.float32)
+    planes = w[0] @ a.T + c
+    k = planes.argmin(1)
+    mu = planes[np.arange(n), k][None]
+    g_w = a[k][None]
+    g_x = g_w / (1.0 - x) ** 2  # labels are d(mu)/dx
+    mask = np.ones((1, M), dtype=bool)
+    ok = np.ones((1, n), dtype=bool)
+    nv = n // 3
+    return ValueDataset(
+        genome_ids=["g0"],
+        exchanges=[f"EX_{j}" for j in range(M)],
+        mask=mask,
+        x_train=x[:, nv:],
+        mu_train=mu[:, nv:],
+        g_train=g_x[:, nv:],
+        gvalid_train=ok[:, nv:],
+        x_val=x[:, :nv],
+        mu_val=mu[:, :nv],
+        g_val=g_x[:, :nv],
+        gvalid_val=ok[:, :nv],
+        mu_scale=np.ones(1, np.float32),
+        x_scale=np.ones((1, M), np.float32),
+        index_hash="test",
+        rounds_present=[0],
+    )
+
+
+def test_label_tangent_init_recovers_the_target_before_training():
+    """`--gm-init labels` on the case it is exact for: width 1, depth 1, group K.
+
+    The head then *is* min_k(a_k.w + c_k), and the labels *are* that function's
+    supporting hyperplanes — so an untrained head must already be right. If this
+    drifts, the init is silently a warm start rather than a reproduction.
+    """
+    from cfs.surrogate import groupmax
+    from cfs.surrogate.picnn_u import to_diag
+
+    ds = _min_affine_dataset()
+    M = ds.x_train.shape[-1]
+    heads = groupmax.stack_heads(
+        jax.random.PRNGKey(0), 1, M, ds.mask, width=1, depth=1, group=64, temp=1e-4
+    )
+    seeded = groupmax.init_from_tangents(heads, ds)
+    wv = to_diag(jnp.asarray(ds.x_val))
+    before = np.asarray(groupmax.batched_value_diag(heads, wv))[0]
+    after = np.asarray(groupmax.batched_value_diag(seeded, wv))[0]
+    want = ds.mu_val[0]
+    assert np.abs(after - want).max() < 1e-2, np.abs(after - want).max()
+    # And it is the init doing it, not the target being easy to hit by accident.
+    assert np.abs(before - want).max() > 10 * np.abs(after - want).max()
+
+    # The gradient is the active plane's dual, which is what the gate scores.
+    _, g = groupmax.batched_value_and_grad(seeded, jnp.asarray(ds.x_val))
+    du = (1.0 - ds.x_val) ** 2  # d(mu)/dx -> d(mu)/dw
+    cos = np.sum(np.asarray(g) * ds.g_val, -1) / (
+        np.linalg.norm(np.asarray(g), axis=-1) * np.linalg.norm(ds.g_val, axis=-1) + 1e-30
+    )
+    assert np.nanmean(cos) > 0.99, np.nanmean(cos)
+    assert du.shape == ds.x_val.shape
+
+
+def test_active_set_ranking_puts_the_commonest_basis_first():
+    from cfs.surrogate.groupmax import rank_by_active_set
+
+    g = np.array([[1.0, 0, 0], [0, 1.0, 0], [1.0, 0, 0], [1.0, 0, 0], [0, 0, 1.0]])
+    order = rank_by_active_set(g, np.ones(5, bool))
+    # Pattern (0,) has 3 rows, (1,) and (2,) one each: a representative of the
+    # commonest basis must come first, and every row must appear exactly once.
+    assert order[0] in (0, 2, 3)
+    assert sorted(order.tolist()) == [0, 1, 2, 3, 4]
+
+
+def test_deepset_u_moves_phi_to_u_and_keeps_everything_else():
+    """`deepset-u` is `deepset` with one coordinate changed — assert exactly that.
+
+    The trunk must be the `u`-space one and its concavity must hold in `w`; the
+    `--phi-hidden`/`--k-code` knobs and the shared/private split must survive the
+    subclassing, since those are the M3b arm-3 axes.
+    """
+    from cfs.surrogate import deepset, deepset_u
+
+    mask = np.ones((2, M), dtype=bool)
+    mask[0, 0] = False
+    heads = deepset_u.stack_heads(
+        jax.random.PRNGKey(5), 2, M, mask, width=32, depth=2, phi_hidden=8, k_code=12
+    )
+    assert isinstance(heads.trunk, deepset_u.TrunkU)
+    assert heads.shared and heads.trunk.b[0].shape == (8,) and heads.trunk.ob.shape == (12,)
+    priv = deepset_u.stack_heads_private(jax.random.PRNGKey(5), 2, M, mask, width=32, depth=2)
+    assert not priv.shared
+
+    # Concave in w, sampled in w: mapping x -> w -> x cancels in float32 near x = 1.
+    rng = np.random.default_rng(5)
+    wa, wb = (rng.uniform(0, 20, (2, 128, M)).astype(np.float32) for _ in range(2))
+    lam = 0.42
+    mid = deepset_u.batched_value_diag(heads, lam * wa + (1 - lam) * wb)
+    chord = lam * deepset_u.batched_value_diag(heads, wa) + (
+        1 - lam
+    ) * deepset_u.batched_value_diag(heads, wb)
+    assert np.all(np.asarray(mid) >= np.asarray(chord) - 1e-4)
+
+    # The two entry points agree: `x` is what the loss sees, `w` what concavity does.
+    x = (wa / (1.0 + wa)).astype(np.float32)
+    assert np.allclose(
+        np.asarray(deepset_u.batched_value(heads, x)),
+        np.asarray(deepset_u.batched_value_diag(heads, deepset_u.to_diag(x))),
+        atol=1e-4,
+    )
+
+    # Still monotone, and the plain `deepset` trunk is untouched by the subclassing.
+    _, grad = deepset_u.batched_value_and_grad(heads, x)
+    assert np.all(np.asarray(grad * heads.mask[:, None, :]) >= -1e-6)
+    plain = deepset.stack_heads(jax.random.PRNGKey(5), 2, M, mask, width=32, depth=2)
+    assert type(plain.trunk) is deepset.Trunk
 
 
 def test_deepset_phi_knobs_override_the_width_derivation():
