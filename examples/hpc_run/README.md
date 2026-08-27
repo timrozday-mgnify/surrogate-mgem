@@ -188,20 +188,39 @@ queue budget, so the attribution rests on one organism measured on a laptop. Add
 cells, ~35 cpu-h.
 
 **Arm D is cut**, and it was 80% of the run. It was `deepset-u-private` at 5–11 h
-per organism per cell, 420–920 cpu-h. The per-metabolite bet no longer has the
-evidence behind it: the deficit was never localisation, it was the concavity
-coordinate and then initialisation, and a matched A/B puts the latter at 0.5982 →
-0.9733 cosine on its own. `deepset-u` inherits the coordinate fix but nothing
-addresses its *other* structural limit — mean pooling makes
+per organism per cell, 420–920 cpu-h. It started as a budget decision; the
+full-width rerun of the *x-space* `deepset-private` cells (2026-08-27, all four
+cells × 21 organisms) turned it into a refutation:
+
+- best cell `ph32/kc64` reaches worst cosine 0.742 / median 0.810 / median R² 0.564
+  against `icnn w128/d3`'s 0.678 / 0.755 / 0.541 — a real but small lift, at ~157
+  cpu-h per cell against 1.6;
+- **the conditioning advantage is gone** (median Hessian cond 1e11–1e12, *worse*
+  than the ICNN's 1e10; the 5.9e5 smoke number was an underfit head), and
+  `cfs master-jacobian` has separately shown that per-organism number does not
+  reach §8's Newton either way;
+- **it does not fit the per-metabolite cells better**, which was the entire bet.
+  The lift is uniform rather than concentrated where coverage is thin (<25 rows
+  +0.012, 25–100 +0.062, 100–400 +0.020, ≥400 +0.010), and on the 284 cells where
+  the ICNN scores <0.5 deepset scores 0.312 vs 0.286. Same three ions lead the
+  error on ~20/21 organisms in both;
+- both capacity axes are inert (paired median Δcosine −0.001 for `k_code` 16→64,
+  +0.001 for `phi` 32→64), exactly like the ICNN's width/depth.
+
+`deepset-u` would inherit the coordinate fix but **not** the larger lever:
+`groupmax.init_from_tangents` seeds layer 1 with the labels' duals as affine planes
+over the whole metabolite vector (0.5982 → 0.9733 cosine on its own), and deepset's
+first layer is a per-metabolite *scalar* `phi_m: R → R^k` with no planes to seed.
+Its other structural limit is untouched too — mean pooling makes
 `d(mu)/dx_m = <rho'(S), d(phi_m)/dx_m>`, so the rest of the medium reaches the
 gradient pattern only through a `k_code`-wide vector, a narrow channel for what is
 an argmin across metabolites.
 
-The arch stays built, tested and registered (`--arch deepset-u{,-private}`), so
-this is a budget decision, not a dead end. Its one measured advantage is
-**conditioning** — a 20-epoch smoke run read 5.9e5 against `icnn-u`'s 1e15–1e18 —
-though `cfs master-jacobian` has since shown that per-organism number does not reach
-§8's Newton, so that advantage is a weaker reason than it looked. `make_sweep_full.sh` carries the commented-out invocation to restore it.
+The arch stays built, tested and registered (`--arch deepset-u{,-private}`), and
+`make_sweep_full.sh` carries the commented-out invocation. If you want the question
+reopened cheaply: one organism (CR626927.1), `ph32/kc64` at `w_grad` 10, ~7.5 h,
+against `icnn-u` 0.903 and seeded `groupmax-u` 0.973 on the same held-out media.
+Below 0.903 the arm is dead.
 The shared-trunk variant was already absent: it OOM-killed in every cell last run,
 and sharing across organisms measured *worse* than private on every metric.
 
