@@ -158,9 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--emb-dim", type=_csv, default=["8"], help="deepset only.")
     p.add_argument("--gm-group", type=_csv, default=[""], help="groupmax-u only; '' = default.")
     p.add_argument("--gm-temp", type=_csv, default=[""], help="groupmax-u only; '' = default.")
-    p.add_argument(
-        "--gm-init", type=_csv, default=[""], help="groupmax-u only: random,labels."
-    )
+    p.add_argument("--gm-init", type=_csv, default=[""], help="groupmax-u only: random,labels.")
     p.add_argument("--phi-hidden", type=_csv, default=[""], help="deepset only; '' = default.")
     p.add_argument("--k-code", type=_csv, default=[""], help="deepset only; '' = default.")
     p.add_argument("--n-estimators", type=_csv, default=["100"], help="rf only.")

@@ -237,11 +237,21 @@ def _min_affine_dataset(K=5, n=300, M=4, seed=0):
     ok = np.ones((1, n), dtype=bool)
     nv = n // 3
     return ValueDataset(
-        genome_ids=["g0"], exchanges=[f"EX_{j}" for j in range(M)], mask=mask,
-        x_train=x[:, nv:], mu_train=mu[:, nv:], g_train=g_x[:, nv:], gvalid_train=ok[:, nv:],
-        x_val=x[:, :nv], mu_val=mu[:, :nv], g_val=g_x[:, :nv], gvalid_val=ok[:, :nv],
-        mu_scale=np.ones(1, np.float32), x_scale=np.ones((1, M), np.float32),
-        index_hash="test", rounds_present=[0],
+        genome_ids=["g0"],
+        exchanges=[f"EX_{j}" for j in range(M)],
+        mask=mask,
+        x_train=x[:, nv:],
+        mu_train=mu[:, nv:],
+        g_train=g_x[:, nv:],
+        gvalid_train=ok[:, nv:],
+        x_val=x[:, :nv],
+        mu_val=mu[:, :nv],
+        g_val=g_x[:, :nv],
+        gvalid_val=ok[:, :nv],
+        mu_scale=np.ones(1, np.float32),
+        x_scale=np.ones((1, M), np.float32),
+        index_hash="test",
+        rounds_present=[0],
     )
 
 
