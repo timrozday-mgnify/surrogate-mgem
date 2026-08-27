@@ -286,7 +286,11 @@ def init_from_tangents(heads: GroupMaxHead, ds, seed: int = 0) -> GroupMaxHead:
         c = mu[idx] - np.einsum("km,km->k", a, w[idx])
         # pre-act_j = -softplus(wx_j).y + b_j, and gmax = max_j, so
         # mu = softplus(out_z) * min_j(a_j.y - b_j) + ... => b_j = -c_j.
-        wx0[i] = np.log(np.expm1(np.maximum(a, 1e-9)))
+        # softplus^-1, stable: `expm1` overflows at a ~ 88 in float32 and the head
+        # is then seeded with inf weights and NaN curvature. Real label tangents
+        # reach it -- 3/21 organisms on `20hm_bands` -- and softplus is the
+        # identity to float precision well before that.
+        wx0[i] = np.where(a > 30.0, a, np.log(np.expm1(np.clip(a, 1e-9, 30.0))))
         b0[i] = -c
 
     heads = eqx.tree_at(lambda h: (h.wx[0], h.b[0]), heads, (jnp.asarray(wx0), jnp.asarray(b0)))

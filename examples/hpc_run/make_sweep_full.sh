@@ -68,8 +68,9 @@ $GEN --labels "m20k=$L20" --arch rf   --n-estimators 100 --delta 0.05 | emit
 # The arch is built, tested and registered (`--arch deepset-u{,-private}`), so this
 # is a budget decision and not a dead end. Its one measured advantage is
 # conditioning -- a 20-epoch smoke run read 5.9e5 against `icnn-u`'s 1e15-1e18 --
-# which is worth revisiting if Arm G comes back accurate but unaffordable for §8's
-# Newton. To restore:
+# though `cfs master-jacobian` has since shown that per-organism number does not
+# reach §8's Newton, so that advantage is now a weaker reason than it looked. To
+# restore:
 #
 #   $GEN --labels "m20k=$L20" --arch deepset-u-private --width 512 --depth 3 \
 #        --w-grad 10 --epochs 1500 --emb-dim 8 --phi-hidden 32,64 --k-code 16,64
@@ -94,7 +95,7 @@ $GEN --labels "m20k=$L20" --arch rf   --n-estimators 100 --delta 0.05 | emit
 # random cells: the `--gm-group` axis at width 128, which is largely redundant with
 # Arm G's `K` since both move the total number of affine pieces.
 $GEN --labels "m20k=$L20" --arch groupmax-u --width 128 --depth 3 \
-     --w-grad 10 --epochs 1500 --gm-group 8 --gm-temp 0.03,0.1,0.3 \
+     --w-grad 10 --epochs 1500 --gm-group 8 --gm-temp 0.01,0.03,0.1 \
      --gm-init labels | emit
 
 # --- Arm G: the same head SEEDED from the labels' own supporting hyperplanes,
@@ -115,16 +116,29 @@ $GEN --labels "m20k=$L20" --arch groupmax-u --width 128 --depth 3 \
 # If a reviewer needs it across the roster, add `,random` back to the flag below: it
 # doubles the arm to 12 cells and ~35 cpu-h.
 #
-# The T range is deliberately the *blunt* half of the axis, against what the
-# untrained tangent model prefers (0.01-0.03 there, with 0.3 collapsing to cosine
-# 0.83/0.79). Two reasons. Conditioning is the binding cost, not accuracy: the
-# seeded head reached cosine 0.9733 at T=0.03 with a median Hessian condition of
-# 1.9e24, which is what §8's Newton has to spend. And the untrained numbers are a
-# lower bound on the trained ones -- the smoothing bias is roughly a constant per
-# active set, so fine-tuning can absorb much of it into the intercepts, which an
-# untrained tangent model by definition cannot.
+# **`T` is an accuracy knob and nothing else** -- measured 2026-08-26, and this arm
+# used to say the opposite. It was pointed at the *blunt* half of the axis
+# (0.03-0.3) on the theory that conditioning binds before accuracy does: the seeded
+# head reaches cosine 0.9733 at T=0.03 with a median Hessian condition of 1.9e24,
+# and §8.4 Newton-solves under `positive_semidefinite_tag`. That inference was from
+# the wrong matrix. `cfs master-jacobian` reports the spectrum of what Newton
+# actually inverts, `sum_i X_i H_i` over the 365 shared exchanges, at real held-out
+# media: after a diagonal (Jacobi) preconditioner it carries curvature in ~10-25 of
+# 365 directions, and that count does not improve with T (22 at 0.01, 20 at 0.03,
+# 13 at 0.3). Going 30x blunter costs cosine 0.951 -> 0.833 and buys nothing Newton
+# can use -- the Hessian sum is singular either way, and the `inflow(c)` supply term
+# is what makes the solve well-posed, with `cond = 1 + top_ev/lam` set by the supply
+# model rather than by the head.
+#
+# So the range moves to the *sharp* half, which is where accuracy lives, and 0.3 is
+# dropped for collapsing (cosine 0.83 / R2 0.74 on the untrained tangent model).
+# 0.01 and 0.03 score within 0.001 of each other untrained and 0.1 is past the knee,
+# so these three points span it. Treat the untrained numbers as a lower bound: the
+# smoothing bias is roughly a constant per active set, so fine-tuning can absorb
+# much of it into the intercepts, which an untrained tangent model cannot -- the
+# trained knee should sit blunter than 0.03, which is the reason 0.1 stays in.
 $GEN --labels "m20k=$L20" --arch groupmax-u --width 1 --depth 1 \
-     --w-grad 10 --epochs 1500 --gm-group 100,1000 --gm-temp 0.03,0.1,0.3 \
+     --w-grad 10 --epochs 1500 --gm-group 100,1000 --gm-temp 0.01,0.03,0.1 \
      --gm-init labels | emit
 
 # --- Arm E: the rows axis, for real this time. 4000 vs 20000 media on the two heads

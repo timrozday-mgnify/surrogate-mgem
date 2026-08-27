@@ -110,8 +110,8 @@ One task per samplesheet row. `sweep_full.csv` is 24 cells in six arms, written 
 | A `icnn-u`, `w_grad` {1,3,10,15,20} | 5 | **the axis that moves the gate.** 10 was the best of six points on one organism; 10-20 was never probed |
 | B `icnn-u` width {512,1024} × depth {3,6}, at `w_grad` 10 | 4 | capacity, re-tested where the gradient term actually binds — the last run measured it at `w_grad` 1 and called it inert |
 | C `icnn`, `mlp`, `rf` at the same `w_grad` | 3 | the x-space head being replaced, plus an unconstrained ceiling and a non-parametric floor |
-| F `groupmax-u` seeded, width 128 × depth 3, T {0.03,0.1,0.3} | 3 | does depth buy anything **once the pieces are seeded**? Arm G is width 1 / depth 1, so nothing else asks |
-| G `groupmax-u` seeded from label tangents, K {100,1000} × T {0.03,0.1,0.3} | 6 | **initialisation, not architecture.** Both inits at matched K and T |
+| F `groupmax-u` seeded, width 128 × depth 3, T {0.01,0.03,0.1} | 3 | does depth buy anything **once the pieces are seeded**? Arm G is width 1 / depth 1, so nothing else asks |
+| G `groupmax-u` seeded from label tangents, K {100,1000} × T {0.01,0.03,0.1} | 6 | **initialisation, not architecture.** Both inits at matched K and T |
 | E the 4000-media set: `icnn-u`, `icnn`, `rf` | 3 | the rows axis |
 
 **Both label roots must exist.** Arm E reads `labels_out_4k/labels`; generate it by
@@ -150,9 +150,14 @@ a non-negative sum of smooth softplus ridges, and `mu_max` is piecewise *linear*
 with ~1700 distinct active sets per organism — depth compounds smoothness rather
 than making corners. `groupmax-u` makes the max the activation, so one corner is one
 unit, and it nests plain max-affine exactly at `--width 1 --depth 1 --gm-group K`.
-`--gm-temp` is not only an accuracy knob: a hard max has zero Hessian inside a piece
-(P3, the one thing §8's Newton cannot follow) and curvature scales as `1/T`, so this
-arm measures the frontier Newton has to buy from. It costs about what Arm A does.
+`--gm-temp` **is only an accuracy knob** — this arm used to claim otherwise, on the
+grounds that a hard max has zero Hessian inside a piece (P3) and curvature scales as
+`1/T`. That is true of one organism's Hessian and false of the matrix §8.4 inverts.
+`cfs master-jacobian` measures `sum_i X_i H_i` over the 365 shared exchanges at real
+media: Jacobi-preconditioned it carries curvature in ~10–25 of 365 directions and
+that count does **not** rise with T (22 at 0.01, 20 at 0.03, 13 at 0.3). The Hessian
+sum is singular whatever T is; the supply term is what makes §8.4 well-posed. So the
+range moved to the sharp half, where accuracy lives. It costs about what Arm A does.
 
 **Arm G is the one to read first.** Every labelled row is an exact supporting
 hyperplane of `mu_max`, so the head's first layer can simply be *told* its affine
@@ -195,8 +200,8 @@ an argmin across metabolites.
 The arch stays built, tested and registered (`--arch deepset-u{,-private}`), so
 this is a budget decision, not a dead end. Its one measured advantage is
 **conditioning** — a 20-epoch smoke run read 5.9e5 against `icnn-u`'s 1e15–1e18 —
-which is worth revisiting if Arm G comes back accurate but unaffordable for §8's
-Newton. `make_sweep_full.sh` carries the commented-out invocation to restore it.
+though `cfs master-jacobian` has since shown that per-organism number does not reach
+§8's Newton, so that advantage is a weaker reason than it looked. `make_sweep_full.sh` carries the commented-out invocation to restore it.
 The shared-trunk variant was already absent: it OOM-killed in every cell last run,
 and sharing across organisms measured *worse* than private on every metric.
 

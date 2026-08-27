@@ -196,6 +196,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--labels). One organism per job is what the sweep fans out; only the "
         "shared-trunk `deepset` pools anything across the stack.",
     )
+    mj = sub.add_parser(
+        "master-jacobian",
+        help="V-for-§8: spectrum of the master Jacobian sum_i X_i H_i at real media.",
+    )
+    mj.add_argument("--labels", type=Path, required=True, help="Label shard root (§4.5).")
+    mj.add_argument("--index", type=Path, required=True, help="Frozen metabolite_index.json.")
+    mj.add_argument("--out", type=Path, required=True, help="Report dir.")
+    mj.add_argument(
+        "--checkpoint",
+        type=Path,
+        help="A `train-value` output dir. Omitted: seed a width-1 `groupmax-u` from "
+        "the label tangents at each --gm-temp, which needs no training.",
+    )
+    mj.add_argument("--eps", type=float, default=1e-3)
+    mj.add_argument("--gm-temp", default="0.01,0.03,0.1,0.3,1.0", help="Temperatures to scan.")
+    mj.add_argument("--gm-group", type=int, default=250, help="Affine pieces K when seeding.")
+    mj.add_argument("--n-media", type=int, default=6, help="Held-out media to evaluate at.")
+    mj.add_argument("--seed", type=int, default=0)
+    mj.add_argument("--organisms", help="Comma-separated genome_ids (default: every shard).")
+
     return parser
 
 
@@ -211,6 +231,23 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "organisms", None)
         else None
     )
+
+    if args.command == "master-jacobian":
+        from cfs.validate.master_jacobian import run
+
+        run(
+            args.labels,
+            args.index,
+            args.out,
+            checkpoint=args.checkpoint,
+            eps=args.eps,
+            gm_temp=[float(v) for v in args.gm_temp.split(",") if v],
+            gm_group=args.gm_group,
+            n_media=args.n_media,
+            organisms=organisms,
+            seed=args.seed,
+        )
+        return 0
 
     if args.command == "train-value":
         # The only subcommand that reads labels rather than models: no roster, no
@@ -231,9 +268,9 @@ def main(argv: list[str] | None = None) -> int:
             w_grad=args.w_grad,
             emb_dim=args.emb_dim,
             phi_hidden=args.phi_hidden,
-        gm_group=args.gm_group,
-        gm_temp=args.gm_temp,
-        gm_init=args.gm_init,
+            gm_group=args.gm_group,
+            gm_temp=args.gm_temp,
+            gm_init=args.gm_init,
             k_code=args.k_code,
             seed=args.seed,
             organisms=organisms,
