@@ -8,7 +8,7 @@ process ACTIVE_LEARN {
     tag "$meta.id"
     label 'process_medium'
 
-    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.6"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-data:0.1.7"
 
     input:
     tuple val(meta), path(dataset), path(roster), path(models)

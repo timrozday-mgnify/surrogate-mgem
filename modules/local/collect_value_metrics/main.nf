@@ -9,7 +9,7 @@ process COLLECT_VALUE_METRICS {
     tag "$meta.id"
     label 'process_single'
 
-    container "ghcr.io/timrozday-mgnify/surrogate-mgem-train:0.1.6"
+    container "ghcr.io/timrozday-mgnify/surrogate-mgem-train:0.1.7"
 
     input:
     tuple val(meta), path(cells)

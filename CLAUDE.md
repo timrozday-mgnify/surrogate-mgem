@@ -699,7 +699,7 @@ GENERATE_DATA (per shard) ─┐
 - **Containers only** (no bioconda package) — the modules are container-only with
   no `environment.yml`; the `conda` profile won't cover them. Two images, built
   out-of-repo via `docker/{train,data}.Dockerfile`, referenced by GHCR convention
-  (`ghcr.io/timrozday-mgnify/surrogate-mgem-{train,data}:0.1.6`). Bump the tag in
+  (`ghcr.io/timrozday-mgnify/surrogate-mgem-{train,data}:0.1.7`). Bump the tag in
   every module together. The **train image carries `.[jax]`** (M3 Head A) as well as
   torch — including `pyyaml`, which `load_value_dataset` needs for
   `km_defaults.yaml` and which was only in the `data` extra until the sweep hit it.
