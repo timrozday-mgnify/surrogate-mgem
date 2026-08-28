@@ -452,3 +452,66 @@ def test_chunked_evaluation_matches_the_whole_set():
     for a, b in zip(whole, chunked, strict=True):
         assert a.shape == b.shape
         np.testing.assert_allclose(np.asarray(a), np.asarray(b), rtol=1e-5, atol=1e-6)
+
+
+def test_reanchor_revives_dead_planes_and_fixes_the_rows_they_left_behind():
+    """A plane the optimiser has killed is re-seeded from a row that needs it.
+
+    Set up the exact failure the pass exists for: seed the head from tangents, then
+    flatten the planes carrying one regime — which is what training does to them —
+    and check the pass finds those slots and puts real tangents back.
+    """
+    import equinox as eqx
+
+    from cfs.surrogate import groupmax
+    from cfs.surrogate.picnn_u import to_diag
+
+    ds = _min_affine_dataset(K=5, n=600, M=4)
+    M = ds.x_train.shape[-1]
+    heads = groupmax.stack_heads(
+        jax.random.PRNGKey(0), 1, M, ds.mask, width=1, depth=1, group=64, temp=1e-3
+    )
+    seeded = groupmax.init_from_tangents(heads, ds)
+
+    # Kill every plane whose slope is closest to one of the target's pieces: a flat
+    # plane parked above the data never wins the min, so that regime is orphaned.
+    a0 = np.asarray(jax.nn.softplus(seeded.wx[0]))[0]
+    steepest = a0.argmax(-1)[a0.max(-1).argmax()]  # the coordinate they lead on
+    doomed = np.flatnonzero(a0.argmax(-1) == steepest)
+    wx0 = np.asarray(seeded.wx[0]).copy()
+    b0 = np.asarray(seeded.b[0]).copy()
+    wx0[0, doomed] = -30.0  # softplus(-30) ~ 0: flat
+    b0[0, doomed] = -float(ds.mu_train.max()) - 5.0
+    broken = eqx.tree_at(lambda h: (h.wx[0], h.b[0]), seeded, (jnp.asarray(wx0), jnp.asarray(b0)))
+
+    # Score only the rows the killed planes were responsible for -- the whole-set
+    # mean dilutes one orphaned regime among four healthy ones.
+    orphan = np.asarray(ds.g_val[0]).argmax(-1) == steepest
+
+    def cos(h):
+        _, g = groupmax.batched_value_and_grad(h, jnp.asarray(ds.x_val))
+        g, t = np.asarray(g)[0][orphan], ds.g_val[0][orphan]
+        return float(
+            np.nanmean(
+                np.sum(g * t, -1)
+                / (np.linalg.norm(g, axis=-1) * np.linalg.norm(t, axis=-1) + 1e-30)
+            )
+        )
+
+    fixed, slots = groupmax.reanchor(broken, ds, frac=0.25)
+    assert slots.shape == (1, 16)
+    # It spends the budget on the dead planes, not on live ones.
+    assert set(slots[0]).issubset(set(doomed.tolist())), (sorted(slots[0]), sorted(doomed))
+    assert cos(broken) < 0.8, cos(broken)
+    assert cos(fixed) > cos(broken) + 0.1, (cos(broken), cos(fixed))
+
+    # One pass serves the worst orphaned regime; the flag takes several because the
+    # rest only become the worst rows once that one is fixed. It reaches the target
+    # exactly and stays there — a pass with nothing left to revive is a no-op.
+    h = broken
+    for i in range(4):
+        h, _ = groupmax.reanchor(h, ds, frac=0.1, seed=i)
+    assert cos(h) > 0.999, cos(h)
+    # Still a valid concave head: every seeded slope is non-negative.
+    assert (np.asarray(jax.nn.softplus(h.wx[0])) >= 0).all()
+    assert to_diag(jnp.asarray(ds.x_val)).shape == ds.x_val.shape

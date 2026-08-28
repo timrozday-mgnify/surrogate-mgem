@@ -222,6 +222,7 @@ def train_value_heads(
     gm_group: int | None = None,
     gm_temp: float | None = None,
     gm_init: str | None = None,
+    gm_reanchor: int = 0,
     seed: int = 0,
 ) -> eqx.Module:
     """Fit the stacked Head A. Labels are scaled by ``ds.mu_scale`` (§7.1)."""
@@ -267,6 +268,9 @@ def train_value_heads(
         len(ds.genome_ids), (heads, opt_state, x, mu, g, gvalid, x_scale, gfloor)
     )
 
+    # Evenly spaced over the run, none at the very end: a re-anchored plane needs
+    # epochs left to settle.
+    reanchor_at = {round(epochs * (k + 1) / (gm_reanchor + 1)) for k in range(gm_reanchor)}
     rng = np.random.default_rng(seed)
     t0 = time.time()
     for epoch in range(epochs):
@@ -288,6 +292,19 @@ def train_value_heads(
                 optimiser,
                 bvg,
             )
+        if epoch + 1 in reanchor_at:
+            # Adam's moments for an overwritten plane describe the plane that used
+            # to be there and would walk it straight back, so clear them.
+            heads, slots = groupmax.reanchor(heads, ds, seed=seed + epoch)
+            opt_state = jax.tree.map(
+                lambda a, sl=slots, shape=heads.wx[0].shape[:2]: a.at[
+                    np.arange(len(sl))[:, None], sl
+                ].set(0.0)
+                if eqx.is_array(a) and a.shape[: sl.ndim] == shape
+                else a,
+                opt_state,
+            )
+            LOGGER.info("epoch %4d  re-anchored %d planes/organism", epoch, slots.shape[1])
         if epoch % 20 == 0 or epoch == epochs - 1:
             LOGGER.info(
                 "epoch %4d  loss=%.5f  value=%.5f  grad=%.5f  (%.0fs)",
@@ -573,6 +590,7 @@ def run(
     gm_group: int | None = None,
     gm_temp: float | None = None,
     gm_init: str | None = None,
+    gm_reanchor: int = 0,
     seed: int = 0,
     organisms: list[str] | None = None,
 ) -> dict:
@@ -597,6 +615,7 @@ def run(
         gm_group=gm_group,
         gm_temp=gm_temp,
         gm_init=gm_init,
+        gm_reanchor=gm_reanchor,
         seed=seed,
     )
     diagnostics = evaluate(heads, ds, seed=seed, arch=arch)
@@ -614,6 +633,7 @@ def run(
         meta["gm_group"] = gm_group or groupmax.DEFAULT_GROUP
         meta["gm_temp"] = groupmax.DEFAULT_TEMP if gm_temp is None else gm_temp
         meta["gm_init"] = gm_init or "random"
+        meta["gm_reanchor"] = gm_reanchor
     if arch.startswith("deepset"):
         # Only when set: an absent key is what makes `load` fall back to the
         # width-derived default, so a checkpoint written before these flags existed

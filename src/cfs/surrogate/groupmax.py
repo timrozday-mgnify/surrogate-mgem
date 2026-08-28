@@ -237,6 +237,24 @@ def rank_by_active_set(g_w: np.ndarray, valid: np.ndarray) -> np.ndarray:
     return np.asarray(out, dtype=int)
 
 
+def _softplus_inv_np(a: np.ndarray) -> np.ndarray:
+    """``softplus^-1``, stable: ``expm1`` overflows at ``a ~ 88`` in float32 and the
+    head is then seeded with inf weights and NaN curvature. Real label tangents
+    reach it -- 3/21 organisms on ``20hm_bands`` -- and softplus is the identity to
+    float precision well before that."""
+    return np.where(a > 30.0, a, np.log(np.expm1(np.clip(a, 1e-9, 30.0))))
+
+
+def _tangent_planes(g_w, w, mu, mask):
+    """Rows -> ``(a, c)`` with ``mu ~ min_k(a_k . w - (-c_k))``.
+
+    pre-act_j = ``-softplus(wx_j).y + b_j`` and the group max is ``max_j``, so
+    ``mu = softplus(out_z) * min_j(a_j.y - b_j) + ...`` and ``b_j = -c_j``.
+    """
+    a = g_w * mask  # >= 0
+    return a, mu - np.einsum("km,km->k", a, w)
+
+
 def init_from_tangents(heads: GroupMaxHead, ds, seed: int = 0) -> GroupMaxHead:
     """Seed the first layer's units with real supporting hyperplanes of ``mu_max``.
 
@@ -282,15 +300,8 @@ def init_from_tangents(heads: GroupMaxHead, ds, seed: int = 0) -> GroupMaxHead:
         if idx.size < n_slots:  # too few usable rows: cycle, then jitter the rest
             idx = np.concatenate([idx, rng.choice(idx, n_slots - idx.size)])
         idx = idx[:n_slots]
-        a = g_w[idx] * ds.mask[i]  # (n_slots, M), >= 0
-        c = mu[idx] - np.einsum("km,km->k", a, w[idx])
-        # pre-act_j = -softplus(wx_j).y + b_j, and gmax = max_j, so
-        # mu = softplus(out_z) * min_j(a_j.y - b_j) + ... => b_j = -c_j.
-        # softplus^-1, stable: `expm1` overflows at a ~ 88 in float32 and the head
-        # is then seeded with inf weights and NaN curvature. Real label tangents
-        # reach it -- 3/21 organisms on `20hm_bands` -- and softplus is the
-        # identity to float precision well before that.
-        wx0[i] = np.where(a > 30.0, a, np.log(np.expm1(np.clip(a, 1e-9, 30.0))))
+        a, c = _tangent_planes(g_w[idx], w[idx], mu[idx], ds.mask[i])
+        wx0[i] = _softplus_inv_np(a)
         b0[i] = -c
 
     heads = eqx.tree_at(lambda h: (h.wx[0], h.b[0]), heads, (jnp.asarray(wx0), jnp.asarray(b0)))
@@ -308,3 +319,94 @@ def init_from_tangents(heads: GroupMaxHead, ds, seed: int = 0) -> GroupMaxHead:
             ),
         )
     return heads
+
+
+def _unit_usage(head: GroupMaxHead, w: np.ndarray) -> np.ndarray:
+    """Mean softmax weight of each first-layer unit — how often it is its group's max.
+
+    ``(n_slots,)``, summing to ``width`` over the whole layer. A unit at ~0 never
+    reaches the output, so nothing it holds is being used.
+    """
+    a = -jax.nn.softplus(head.wx[0]) @ (jnp.asarray(w) * head.mask).T + head.b[0][:, None]
+    p = jax.nn.softmax(a.reshape(-1, head.group, a.shape[-1]) / head.temp, axis=1)
+    return np.asarray(p.reshape(a.shape[0], -1).mean(-1))
+
+
+def reanchor(heads: GroupMaxHead, ds, frac: float = 0.1, seed: int = 0) -> tuple:
+    """Re-seed the least-used first-layer planes from the worst-fit rows' tangents.
+
+    :func:`init_from_tangents` fixes *initialisation*; it does not stop a plane
+    going dead during training, and that is the failure that sets the gate.
+    Measured on the 20000-media labels (seeded ``groupmax-u``, width 1 depth 1
+    K=1000, held-out media): on the cells that fail, the model gets the limiting
+    metabolite right on ~92% of rows but predicts ``d(mu)/dw`` of **1e-9** against
+    a true 1.3e-3, while fitting the *value* on those same rows to 0.1%. Planes
+    with the right slope are present -- 59-210 of the 1000, seeded from those rows'
+    own duals -- but they sit **0.2-1.5 above the active minimum**, i.e. 15-40x the
+    temperature, so the softmax gives them weight ~1e-7. The Sobolev term cannot
+    reach them: its only path is that same exponentially-closed softmax.
+
+    Nor is it coverage or capacity -- train and held-out cosine agree on the failing
+    cells (0.988 / 0.987 and 0.521 / 0.484) -- and it *roves*: at fixed
+    hyperparameters over five seeds the collapse lands on ``EX_o2_e`` in one run
+    (0.500) and ``EX_thr__L_e`` in another (0.613), both well covered, both fine in
+    the other seeds. Organism cosine varies by 0.036 across those seeds.
+
+    So this is the alternation step of LSPA/CAP-style max-affine fitting, which the
+    module docstring wrongly dismissed as unnecessary "because we have the duals".
+    Having the duals makes it *cheaper*, not redundant: the planes to install are
+    the labels' own tangents rather than a least-squares refit.
+
+    Rows are picked worst-cosine-first in ``u`` space (the gate's coordinate) and
+    de-duplicated by active set, so a budget of slots is not spent on one regime.
+    Returns ``(heads, slots)``; ``slots`` is ``(G, n)`` of the indices overwritten,
+    for the caller to clear the optimiser moments on.
+    """
+    n_slots = heads.wx[0].shape[1]
+    n = max(1, int(round(frac * n_slots)))
+    G = ds.x_train.shape[0]
+    wx0 = np.asarray(heads.wx[0]).copy()
+    b0 = np.asarray(heads.b[0]).copy()
+    slots = np.zeros((G, n), dtype=int)
+    rng = np.random.default_rng(seed)
+
+    for i in range(G):
+        head = organism(heads, i)
+        x = ds.x_train[i]
+        s = ds.x_scale[i]
+        w = np.asarray(to_diag(jnp.asarray(x)))
+        g_w = ds.g_train[i] * (1.0 - x) ** 2 / ds.mu_scale[i]
+        mu = ds.mu_train[i] / ds.mu_scale[i]
+        pred = np.asarray(jax.vmap(jax.grad(head.on_w))(jnp.asarray(w))) * ds.mask[i]
+        # The gate is scored in u space, so rank the rows there: dmu/du = dmu/dw / s.
+        t, p = (g_w * ds.mask[i]) / s, pred / s
+        tn, pn = np.linalg.norm(t, axis=-1), np.linalg.norm(p, axis=-1)
+        usable = np.asarray(ds.gvalid_train[i]) & (tn > 0)
+        cos = np.where(usable, (p * t).sum(-1) / np.maximum(pn * tn, 1e-30), np.inf)
+
+        # Worst first, one row per active set while distinct patterns last, then
+        # worst-first regardless: on a dense-support organism the pattern dedup can
+        # collapse to a single pick, and spending the whole budget on copies of one
+        # row installs one plane where the caller asked for `n`.
+        order = [int(j) for j in np.argsort(cos) if usable[j]]
+        if not order:
+            continue
+        seen: set[tuple] = set()
+        pick, rest = [], []
+        for j in order:
+            k = tuple(np.flatnonzero(g_w[j] > 0))
+            (rest if k in seen else pick).append(j)
+            seen.add(k)
+            if len(pick) == n:
+                break
+        idx = np.asarray((pick + rest + order)[:n])
+        # Overwrite the units that are doing the least work. Ties are common at
+        # init, so break them randomly rather than always taking the low indices.
+        dead = np.lexsort((rng.random(n_slots), _unit_usage(head, w)))[:n]
+        a, c = _tangent_planes(g_w[idx], w[idx], mu[idx], ds.mask[i])
+        wx0[i, dead] = _softplus_inv_np(a)
+        b0[i, dead] = -c
+        slots[i] = dead
+
+    heads = eqx.tree_at(lambda h: (h.wx[0], h.b[0]), heads, (jnp.asarray(wx0), jnp.asarray(b0)))
+    return heads, slots

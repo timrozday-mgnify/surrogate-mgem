@@ -154,6 +154,14 @@ def build_parser() -> argparse.ArgumentParser:
         "tangents ranked by active-set frequency, instead of from noise.",
     )
     tv.add_argument(
+        "--gm-reanchor",
+        type=int,
+        default=0,
+        help="groupmax-u only: number of re-anchor passes -- re-seed the least-used "
+        "planes from the worst-fit rows' tangents, evenly spaced over the run. "
+        "Seeding fixes initialisation; this fixes planes that go dead during it.",
+    )
+    tv.add_argument(
         "--phi-hidden",
         type=int,
         default=None,
@@ -271,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
             gm_group=args.gm_group,
             gm_temp=args.gm_temp,
             gm_init=args.gm_init,
+            gm_reanchor=args.gm_reanchor,
             k_code=args.k_code,
             seed=args.seed,
             organisms=organisms,
