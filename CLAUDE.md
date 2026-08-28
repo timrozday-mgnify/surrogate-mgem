@@ -16,7 +16,7 @@
 > The existing **`src/surrogate_mgem/`** package (PyTorch + MICOM growth
 > surrogate, documented below) is **legacy/reference** — kept, not deleted.
 >
-> ### Progress — M0–M2 and §4 done on the real roster; M3 built, gate not yet met
+> ### Progress — M0–M2 and §4 done on the real roster; M3 at 0.958 of a 0.99 gate
 >
 > | Milestone | State | Code |
 > | --- | --- | --- |
@@ -24,8 +24,8 @@
 > | M1 degeneracy → D4 | **done, V1 complete** — **68.9%** of 371k exchange-FVA observations degenerate roster-wide (59.7–82.8% per genome; 88% at α=0.7 vs 50% at α=1.0) ⇒ **D4 = elastic net** | `src/cfs/validate/degeneracy.py` |
 > | M2 solve interface | **done, §3.4 gate verified on a real GEM** — MM uptake bounds (§3.3), FBA for `mu_max` + duals, then the **Clarabel** elastic-net QP for `z` | `src/cfs/groundtruth/solve.py` |
 > | §4 sampling + bulk labels | **done, generated** — active subspace, stratified-Sobol design, parquet driver | `src/cfs/sampling/`, `--stage labels` |
-> | M3 Head A (value) | **gate not met, but the deficit is located and mostly closed.** Two independent causes, each measured: concavity was imposed in the wrong coordinate (`x`, not `u`), and then *initialisation* collapsed the max-affine head. Best to date on one organism: `groupmax-u` seeded from label tangents, **cosine 0.973 / R² 0.996 / p05 0.834**, concave, 111k parameters — against the old ICNN's 0.715/0.477. Roster-wide numbers do not exist yet | `src/cfs/surrogate/{picnn_u,deepset_u,groupmax}.py` |
-> | M3b HPC sweep | **ran 2026-08-25 (350 tasks, 324 cpu-h) and is the source of the above.** Its own conclusion — "scale closes the gap" — was refuted: width/depth are inert, rows are inert. A second 24-cell sweep is built and unlaunched | `examples/hpc_run/`, `--stage sweep` |
+> | M3 Head A (value) | **gate not met; roster-wide worst is 0.958 against 0.99.** Three causes, each measured and each fixed: concavity imposed in the wrong coordinate (`x`, not `u`), random initialisation collapsing the max-affine head, and planes going *dead during training* and being unable to revive. Seeded `groupmax-u` + `--gm-reanchor 3`, 21 organisms: worst cosine **0.958**, median 0.978, median R² 0.995 | `src/cfs/surrogate/{picnn_u,deepset_u,groupmax}.py` |
+> | M3b HPC sweep | **two runs. 2026-08-25** (350 tasks, 324 cpu-h) refuted its own "scale closes the gap": width/depth inert. **2026-08-27** (442/442 tasks, 21 cells x 21 organisms) is the source of the roster numbers below. The rows arm has now failed to run three times | `examples/hpc_run/`, `--stage sweep` |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
@@ -345,8 +345,13 @@
 > 0.812, `icnn` 0.715 — from *inside* the concave class, violations still 0, and is
 > closing on the cutting-plane's 0.969.
 >
-> Three things this does **not** establish. It is **one organism**; the gate is the
-> worst over 21. `w_grad` 30 collapses on both axes, and whether that is a real
+> **Everything in this subsection is retracted at roster scale — see "The second
+> sweep ran" below.** `icnn-u` at `w_grad` 10 scores **0.494 worst over 21
+> organisms**, and its whole `w_grad` x width grid is flat at 0.47-0.49. The
+> coordinate fix stands; the frontier measured on top of it does not generalise.
+>
+> Three things this did **not** establish, written before that was known. It is
+> **one organism**; the gate is the worst over 21. `w_grad` 30 collapses on both axes, and whether that is a real
 > trade or an optimisation failure at fixed `lr` is untested (10-30 is unprobed).
 > And the price is conditioning — 9.6e11 → 1.7e18 — so the accuracy the gradient
 > term buys is being paid for in exactly the currency §8's Newton spends. The
@@ -404,8 +409,11 @@
 > the earlier hand-rolled max-affine probe where K=256 and K=1024 scored identically.
 > **The reasoning recorded earlier — that a fixed-temperature softmax gives every
 > piece non-zero weight and therefore removes the problem — is wrong.** The remedy
-> is not LSPA though: those algorithms *infer* the planes from values, and we have
-> the duals, so seeding them directly is simpler and strictly better.
+> is not LSPA *for the initialisation*: those algorithms infer the planes from
+> values, and we have the duals, so seeding them directly is simpler and strictly
+> better. **But the claim that this makes the alternation step unnecessary is also
+> wrong** — planes still die during training and cannot revive. See
+> `--gm-reanchor` below.
 >
 > At K=250 the seeded head beats the **full 16 000-tangent cutting-plane model**
 > (0.9733 vs 0.969, p05 0.834 vs 0.791) on 111k parameters, while staying concave
@@ -428,20 +436,99 @@
 > Full-width numbers for it now exist and close the question — see **"Deepset is
 > measured at full width, and cut"** below.
 >
-> **Next — the second sweep.** Everything
-> above is CR626927.1 on a laptop; the gate is the worst of 21 organisms at 0.99.
-> `examples/hpc_run/sweep_full.csv` is **24 cells in six arms, ~150 cpu-h** (half
-> the last run, answering more), regenerated by `make_sweep_full.sh`, which carries
-> the measurement motivating each arm:
+> **The second sweep has since run** — 442/442 tasks, and everything above that is
+> one laptop organism is superseded by the roster numbers in "The second sweep ran"
+> below. `examples/hpc_run/sweep_full.csv` is now 30 cells (arms A-C, E-G as run,
+> plus H for `--gm-reanchor` and the seed axis), regenerated by
+> `make_sweep_full.sh`, which carries the measurement motivating each arm.
 >
-> | arm | cells | asks |
+> ### The second sweep ran, and the gate is now a plane-death problem — 2026-08-27/28
+>
+> `~/Documents/surrogate-mgem_runs/hpc_run/export/`: 442/442 tasks, 21 cells x 21
+> organisms, one `n_train_media=16000` throughout, `sweep_leaderboard.csv` present.
+> Worst / median over the 21 organisms, held-out round-0 media:
+>
+> | cell | worst | med cos | med p05 | med R² |
+> | --- | --- | --- | --- | --- |
+> | `groupmax-u` seeded, w1/d1 K=1000, T 0.1 | **0.937** | 0.975 | 0.878 | 0.988 |
+> | same, T 0.01 / T 0.03 | 0.934 / 0.930 | 0.975 | 0.87 | 0.997 |
+> | `groupmax-u` seeded, w128/d3 grp8, T 0.03 | 0.911 | **0.984** | **0.943** | 0.990 |
+> | `groupmax-u` seeded, w1/d1 K=100, T 0.01 | 0.744 | 0.956 | 0.692 | 0.972 |
+> | `icnn` (x-space) | 0.691 | 0.817 | 0.049 | 0.435 |
+> | `mlp w512` | 0.617 | 0.893 | 0.187 | 0.908 |
+> | `icnn-u`, best of 9 cells | 0.494 | 0.864 | 0.050 | 0.736 |
+> | `rf` | 0.357 | 0.664 | 0.000 | 0.994 |
+>
+> 1. **Seeded `groupmax-u` generalises; the one-organism 0.973 was not a fluke.**
+>    19/21 organisms are >= 0.95 and value R² >= 0.975 on every one, concave,
+>    violations 0.
+> 2. **`icnn-u` at `w_grad` 10 does NOT transfer, and that claim is retracted.**
+>    0.903 on CR626927.1 became **0.494 worst** roster-wide, and its whole
+>    `w_grad` x width grid is flat at 0.47-0.49. The coordinate fix is real; the
+>    `w_grad` frontier it was measured on is one organism.
+> 3. **`K` is the lever, `T` is not.** K 100 -> 1000 is +0.19 worst cosine; T over
+>    0.01-0.1 moves it 0.007 at K=1000. Pick T=0.03 and stop sweeping it.
+> 4. **The rows arm never ran** — no `labels_out_4k` was staged, so all three `m4k`
+>    cells are absent from the trace. Third attempt, third miss.
+>
+> **The residual is planes dying during training, not coverage, capacity or labels.**
+> On a failing cell the model gets the limiting metabolite right on ~92% of rows but
+> predicts `d(mu)/dw` of **1e-9** against a true 1.3e-3, while fitting the *value* on
+> those same rows to 0.1%. Planes with the right slope are present — 59-210 of the
+> 1000, seeded from those rows' own duals — but sit **0.2-1.5 above the active
+> minimum**, i.e. 15-40x the temperature, so their softmax weight is 1e-3 to 1e-7.
+> Since a plane's gradient *is* that weight, death is an absorbing state, and the
+> Sobolev term's only channel to a dead plane is the same closed softmax. Train and
+> held-out cosine agree on those cells (0.988/0.987, 0.521/0.484), so more media
+> cannot help.
+>
+> **It roves with the seed, which makes the sweep's cell ranking noise.** At fixed
+> hyperparameters over 5 seeds the collapse lands on `EX_o2_e` in one run (0.500) and
+> `EX_thr__L_e` in another (0.613) — both well covered, both fine in the others.
+> Per-organism cosine sd is **0.015**, against 0.007 between the leaderboard's top
+> three cells. Never quote a single-seed `groupmax-u` cell.
+>
+> Two dead ends, so nobody re-chases them: `EX_12ppd__R_e` as a co-limiting partner
+> (its dual is exactly 0 — it was argsort's first tie among zeros), and `W_CAP`
+> clipping (26% of one failing cell's rows are clipped, but clipped and unclipped
+> rows score the same, 0.688 vs 0.721).
+>
+> ### `--gm-reanchor` — the alternation step, measured 2026-08-28
+>
+> `cfs.surrogate.groupmax.reanchor` overwrites the lowest-softmax-weight first-layer
+> slots with the worst-fit rows' label tangents, mid-training, Adam moments cleared
+> for those slots. `--gm-reanchor N` spaces N passes over the run (default 0, off);
+> costs <2% of runtime. A dead plane cannot revive itself, but an *installed* one is
+> tangent at its anchor row and therefore at or below every other plane there, so it
+> is alive on arrival.
+>
+> **This retracts the note that LSPA/CAP-style alternation is unnecessary "because we
+> have the duals".** Having the duals makes the alternation step cheap — write the
+> exact tangent instead of a least-squares refit — not redundant. Seeding fixed
+> initialisation only; nothing was fixing drift.
+>
+> | measurement | baseline | `--gm-reanchor 3` |
 > | --- | --- | --- |
-> | A `icnn-u` `w_grad` {1,3,10,15,20} | 5 | where the frontier's optimum sits, roster-wide |
-> | B `icnn-u` width {512,1024} × depth {3,6} at `w_grad` 10 | 4 | capacity, at the operating point |
-> | C `icnn` / `mlp` / `rf` | 3 | the x-space head, plus ceiling and floor |
-> | F `groupmax-u` seeded, width 128 × depth 3, T {0.01,0.03,0.1} | 3 | does depth help *once the pieces are seeded*? |
-> | G `groupmax-u` seeded, width 1 × depth 1, K {100,1000} × T {0.01,0.03,0.1} | 6 | K, and where the accuracy knee in `T` sits |
-> | E the 4000-media set | 3 | the rows axis, wired to a real second label root |
+> | AAXE02 x 5 seeds, worst / mean / sd | 0.927 / 0.945 / 0.0149 | **0.962 / 0.966 / 0.0029** |
+> | AAXE02 x 5 seeds, worst p05 | 0.500 | **0.724** |
+> | 21 organisms, seed 0: worst / median | 0.930 / 0.977 | **0.958** / 0.978 |
+>
+> **It removes the downside tail; it does not raise the typical organism.** 19/21
+> organisms move by <0.003 and the median is flat — the roster gain is one organism
+> (DACTBY01 0.930 -> 0.968, `EX_leu__L_e` **0.488 -> 0.969**, `EX_glu__L_e` 0.718 ->
+> 0.982). That is the point: on any given seed only one or two organisms have a dead
+> plane, and which ones is the seed's business. The variance collapse (sd 0.0149 ->
+> 0.0029) is the more useful number than the mean. Value R² is unchanged to three
+> decimals everywhere, and cells that were never dead are untouched.
+>
+> **The new worst organism is a different problem.** `GCA_000209935.1` sits at 0.958
+> in both arms, led by `EX_ham_e` (1495 held-out rows, 0.945) — well covered, no dead
+> plane, unmoved by re-anchoring. Same for `EX_arg__L_e` on AAXE02 (184 rows, 0.888
+> in all ten runs). Whatever closes the last 0.03 is not this.
+>
+> **Next:** `examples/hpc_run/sweep_full.csv` is 30 cells; Arm H is
+> `grp1000 T=0.03` x `--gm-reanchor {0,3}` x seed {0,1,2}, which is the smallest
+> design that separates the pass from the seed noise on 21 organisms.
 >
 > ### The conditioning bill is not §8's — measured, 2026-08-26
 >
@@ -576,7 +663,8 @@
 > shared-trunk cell out per organism silently makes its trunk private. The `m4k`
 > rows shipped a `/path/to/...` placeholder last time and every task read the 20k
 > root instead, so **check `n_train_media` differs between two cells before
-> believing any rows conclusion**.
+> believing any rows conclusion**. It happened again in the 2026-08-27 run — no
+> `labels_out_4k` was staged at all, so the three `m4k` cells simply never ran.
 >
 > Sharding note for the cluster: the organism axis splits cleanly via
 > `train._shard_organisms` (1.8× on CPU with

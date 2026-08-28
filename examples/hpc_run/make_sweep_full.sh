@@ -152,6 +152,27 @@ $GEN --labels "m20k=$L20" --arch groupmax-u --width 1 --depth 1 \
      --w-grad 10 --epochs 1500 --gm-group 100,1000 --gm-temp 0.01,0.03,0.1 \
      --gm-init labels | emit
 
+# --- Arm H: the re-anchor pass, and the seed axis it exposed. `--gm-reanchor N`
+# re-seeds the least-used planes from the worst-fit rows' tangents mid-training.
+# Seeding fixes *initialisation*; planes still drift dead during training and
+# cannot revive (their softmax weight and their gradient are both exp(-gap/T), and
+# the measured gaps are 0.2-1.5 at T=0.03-0.1). The loss does not object: the
+# neighbour that takes over fits the value to 0.1%, so only the slope is wrong --
+# predicted d(mu)/dw 1e-9 against a true 1.3e-3.
+#
+# Measured, AAXE02 x 5 seeds, grp1000 T=0.03, only --gm-reanchor differing:
+# worst 0.927 -> 0.962, mean 0.945 -> 0.966, sd 0.0149 -> 0.0029, p05 0.500 ->
+# 0.724. The cells it revives are exactly the dead ones (`EX_o2_e` 0.500/0.605/
+# 0.676 -> 0.92-0.93; `EX_thr__L_e` 0.613/0.820/0.858 -> 0.964-0.975), healthy
+# cells and value R2 are untouched, and it costs under 2% of runtime.
+#
+# The seed axis is here because that spread is the real finding: at sd 0.015 per
+# organism against 0.007 between Arm G's top three cells, a *single-seed* cell
+# ranking is noise. Three seeds per cell is the minimum that says so.
+$GEN --labels "m20k=$L20" --arch groupmax-u --width 1 --depth 1 \
+     --w-grad 10 --epochs 1500 --gm-group 1000 --gm-temp 0.03 \
+     --gm-init labels --gm-reanchor 0,3 --seed 0,1,2 | emit
+
 # --- Arm E: the rows axis, for real this time. 4000 vs 20000 media on the two heads
 # that bracket the question plus the forest. Prediction on file, so this is a real
 # test: rows will NOT help. Train-vs-held-out gap at the w_grad optimum is 0.005
