@@ -25,6 +25,8 @@
 > | M2 solve interface | **done, §3.4 gate verified on a real GEM** — MM uptake bounds (§3.3), FBA for `mu_max` + duals, then the **Clarabel** elastic-net QP for `z` | `src/cfs/groundtruth/solve.py` |
 > | §4 sampling + bulk labels | **done, generated** — active subspace, stratified-Sobol design, parquet driver | `src/cfs/sampling/`, `--stage labels` |
 > | M3 Head A (value) | **gate not met; roster-wide worst is 0.958 against 0.99.** Three causes, each measured and each fixed: concavity imposed in the wrong coordinate (`x`, not `u`), random initialisation collapsing the max-affine head, and planes going *dead during training* and being unable to revive. Seeded `groupmax-u` + `--gm-reanchor 3`, 21 organisms: worst cosine **0.958**, median 0.978, median R² 0.995 | `src/cfs/surrogate/{picnn_u,deepset_u,groupmax}.py` |
+> | M4 Head B (behaviour) | **done** — `z_i(c, alpha)` masked MLP, worst held-out R2 0.856 / median 0.921, worst flux cosine 0.993 | `src/cfs/surrogate/behaviour.py` |
+> | M5 dFBA composition | **built and measured; the 1% gate is not met.** 10 communities of size 2-21 against per-organism FBA on the same integrator: median log-X error 4-5%, and **error does not grow with community size** | `src/cfs/compose/dfba.py` |
 > | M3b HPC sweep | **two runs. 2026-08-25** (350 tasks, 324 cpu-h) refuted its own "scale closes the gap": width/depth inert. **2026-08-27** (442/442 tasks, 21 cells x 21 organisms) is the source of the roster numbers below. The rows arm has now failed to run three times | `examples/hpc_run/`, `--stage sweep` |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
@@ -530,6 +532,77 @@
 > `grp1000 T=0.03` x `--gm-reanchor {0,3}` x seed {0,1,2}, which is the smallest
 > design that separates the pass from the seed noise on 21 organisms.
 >
+> ### M4 + M5: the heads compose, and community error does not grow with size — 2026-08-28
+>
+> Head B and the §8.1 composition are built: `src/cfs/surrogate/behaviour.py`
+> (`cfs train-behaviour`) and `src/cfs/compose/dfba.py` (`cfs community`).
+> Checkpoints on `20hm_bands`: `value_ra3` (seeded `groupmax-u` w1/d1 K=1000
+> T=0.03 `--gm-reanchor 3`, worst cosine **0.947**, median 0.966, value R2 median
+> 0.986) and `behaviour_b1` (600 epochs, lr 1e-3, worst **R2 0.856**, median
+> 0.921, worst median flux cosine 0.993, worst sign agreement 0.941).
+>
+> **Head B's binding constraint was output scaling, not capacity.** The head emits
+> `z / z_scale` and the label scale is applied outside it. Predicting raw
+> mmol/gDW/h instead scores held-out **R2 0.017**, worse than predicting the
+> per-alpha mean; the same net on the normalised target scores **0.885** on the
+> same organism. Exchange fluxes run to O(400) on the gases and O(1e-3) on the
+> ions, so a `sqrt(2/n_in)` init starts ~400x short on the dimensions carrying the
+> variance and Adam spends the run walking biases — the same failure
+> `picnn_u`'s scale-aware init exists for. `z_scale` is in the checkpoint;
+> `behaviour.flux` is the accessor. Do not "simplify" the head to raw units.
+>
+> **10 communities, sizes 2-21, `20hm_bands` media, 40 Euler steps, per-organism
+> FBA as ground truth on the identical integrator/step/inoculum:**
+>
+> | size | dc/dt cosine | mu rel | log-X final | overgrowth (V5) | cross-feed |
+> | --- | --- | --- | --- | --- | --- |
+> | 2 (x5, median) | 0.983 | 0.016 | 0.055 | <=0.066 | 6/8 |
+> | 3 (x2) | 0.847 | 0.083 | 0.122 | <=0.210 | 8/9 |
+> | 5 | 0.915 | 0.133 | 0.322 | 0.182 | 10/11 |
+> | 10 | 0.996 | 0.013 | 0.041 | -0.002 | 27/27 |
+> | **21** | **0.997** | **0.014** | **0.044** | **-0.001** | **38/38** |
+>
+> 1. **Size is not the error axis.** The 21-member community is the *second most*
+>    accurate run in the set and recovers every one of its 38 cross-feeding links
+>    (a metabolite one member secretes and another consumes). Errors are
+>    per-organism and largely independent, so they partially cancel in the pool
+>    sum rather than compounding — which is the central bet of D1(a)+§8.1 and it
+>    holds. 89/93 links recovered overall.
+> 2. **A slow member is.** Every bad cell contains an organism with `mu0 < 1.3
+>    h^-1` (GCA_000007325.1 at 0.42, AAXE02 at 1.23 on its drawn medium): the
+>    2-member 0.866/0.215 row, the 3-member 0.695/0.219 row and the 5-member row.
+>    Head A's held-out R2 is taken over each organism's *own* `mu` spread, so a
+>    near-starving organism is a small absolute error and a large relative one,
+>    and the composition integrates the relative one. **The next Head A signal is
+>    accuracy at low `mu`, not the roster-worst cosine.**
+> 3. **M5's 1% gate is not met, and the shortfall is the value head's, not the
+>    integrator's.** Median log-X error is 4-5%: `d(log X)/dt = mu`, so a 1.4%
+>    `mu` error over ~2 doublings integrates to ~4%. Closing it needs a better
+>    `mu`, not a better ODE solver.
+> 4. **P4 does not bite.** Re-solving the true LP at the state the surrogate
+>    walked *itself* to (V5) gives `overgrowth <= 0.21` of initial `mu` and ~0 on
+>    the large communities. The composition does not run away to a fictitious
+>    fast-growing state.
+>
+> **Two traps this cost time to find, both now in the code.** A batch culture has
+> two independent clocks — members doubling and the pool emptying — and a horizon
+> set by the growth clock alone killed the true community at step 2 of 40, leaving
+> two live points to score. `run` now solves for the *inoculum* instead
+> (`dc/dt` is linear in `X`, so one probe solve fixes it) so the pool empties at
+> the end of `--doublings`. And metrics are scored only while the true community
+> is alive and normalised by fixed initial scales: a dead culture has `mu = 0`
+> everywhere, where a per-step relative error divides by zero — the first version
+> reported `nan` and a 237% `mu` error for a run whose live phase agreed to 2%.
+> Concentration error is per metabolite relative to its own `c0`; a plain L2 over
+> the pool is 0.7% on a trajectory where the limiting ion is gone in the truth and
+> untouched in the surrogate.
+>
+> **Not measured yet:** §8.2 SteadyCom and §8.3 MICOM (this is §8.1 only, and
+> deliberately — a joint community LP is a *different model*, so mixing it in
+> would make a Head B error and a modelling choice indistinguishable); the
+> `--steps` refinement check; abundances other than equal-split; and M6's implicit
+> gradients through the Newton form.
+>
 > ### The conditioning bill is not §8's — measured, 2026-08-26
 >
 > `cfs train-value` reports `hessian_cond_median` from `train._hessian_cond`: **one
@@ -749,6 +822,14 @@ tests, per-process container ternary.
   `params.xla_devices` are the only two. Worked example plus generator:
   `examples/hpc_run/`. Stub: `tests/sweep.nf.test`.
 - **`train`** — the legacy sweep below.
+
+M4/M5 are CLI-only (no Nextflow stage yet): `cfs train-behaviour` trains Head B on
+the same shards and the *same* held-out media split as `cfs train-value`
+(`cfs.surrogate.data._stack` is shared, so the two heads cannot silently disagree
+on `x_scale` or on which media are held out — `Surrogate.__init__` re-checks both),
+and `cfs community` composes a value + behaviour checkpoint pair into §8.1's dFBA
+and scores it against per-organism FBA. `cfs community` needs the `data` extra
+(cobra) *and* the `jax` extra, the only subcommand that needs both.
 
 DAG (`workflows/surrogate_training.nf`):
 

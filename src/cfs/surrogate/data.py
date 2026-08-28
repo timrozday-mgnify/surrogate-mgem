@@ -65,6 +65,26 @@ class ValueDataset:
     rounds_present: list[int]  # §4.6 top-up rounds in the training set; val is always round 0
 
 
+@dataclass
+class BehaviourDataset:
+    """Stacked Head B training data (§6.3). One row is one (medium, alpha) pair."""
+
+    genome_ids: list[str]
+    exchanges: list[str]
+    mask: np.ndarray  # (G, M) bool
+    alphas: np.ndarray  # (A,) the §4.4 grid the labels were solved on
+    x_train: np.ndarray  # (G, N*A, M) saturation, same transform as Head A
+    a_train: np.ndarray  # (G, N*A) normalised growth rate
+    z_train: np.ndarray  # (G, N*A, M) net exchange flux per unit biomass
+    x_val: np.ndarray
+    a_val: np.ndarray
+    z_val: np.ndarray
+    z_scale: np.ndarray  # (G, M) per-metabolite flux scale; loss is dimensionless
+    x_scale: np.ndarray  # (G, M) the Head A kink scale, so the heads compose
+    index_hash: str
+    rounds_present: list[int]
+
+
 def _saturation(c: np.ndarray, km: np.ndarray) -> np.ndarray:
     return c / (km + c)
 
@@ -81,9 +101,20 @@ def _shard_dir(labels_dir: Path, gid: str, eps: float) -> Path:
 
 
 def _organism_arrays(
-    labels_dir: Path, gid: str, eps: float, col: dict[str, int], km_cfg: dict, n_shared: int
+    labels_dir: Path,
+    gid: str,
+    eps: float,
+    col: dict[str, int],
+    km_cfg: dict,
+    n_shared: int,
+    with_z: bool = False,
 ):
-    """Read one organism's primary-eps shard into shared-index arrays."""
+    """Read one organism's primary-eps shard into shared-index arrays.
+
+    ``with_z`` additionally returns Head B's targets: the elastic-net exchange
+    fluxes at every ``alpha`` on the §4.4 grid, shaped ``(n_alpha, n_media, M)``
+    and in the same ``medium_id`` order as the value arrays, plus the alpha grid.
+    """
     from cfs.groundtruth.solve import km_for_exchange
 
     side = json.loads((labels_dir / f"{gid}.exchanges.json").read_text())
@@ -102,8 +133,8 @@ def _organism_arrays(
     parts = sorted(shard_dir.glob("*.parquet"))
     if not parts:
         raise FileNotFoundError(f"{gid}: no label shards under {shard_dir}")
-    df = pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True)
-    df = df[df["alpha"] == 1.0].sort_values("medium_id").reset_index(drop=True)
+    full = pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True)
+    df = full[full["alpha"] == 1.0].sort_values("medium_id").reset_index(drop=True)
 
     km = np.array([km_for_exchange(ex, km_cfg) for ex in ex_order])
     vmax = np.array([float(vmax_side.get(ex, _VMAX_DEFAULT)) for ex in ex_order])
@@ -138,6 +169,19 @@ def _organism_arrays(
 
     mask = np.zeros(n_shared, dtype=bool)
     mask[pos] = True
+    mid = df["medium_id"].to_numpy(dtype=np.int64)
+
+    z = alphas = None
+    if with_z:
+        # Keep the stored float64 values for the `==` selection; cast only on return.
+        alphas = np.sort(full["alpha"].unique())
+        z = np.zeros((len(alphas), n, n_shared), dtype=np.float32)
+        for k, a in enumerate(alphas):
+            sub = full[full["alpha"] == a].sort_values("medium_id")
+            if not np.array_equal(sub["medium_id"].to_numpy(dtype=np.int64), mid):
+                raise ValueError(f"{gid}: alpha={a} covers different media than alpha=1")
+            z[k][:, pos] = np.stack(sub["z"].to_numpy())
+
     return (
         x,
         mu.astype(np.float32),
@@ -145,7 +189,9 @@ def _organism_arrays(
         gvalid,
         mask,
         df["index_hash"].iloc[0],
-        df["medium_id"].to_numpy(dtype=np.int64),
+        mid,
+        z,
+        None if alphas is None else alphas.astype(np.float32),
     )
 
 
@@ -178,34 +224,20 @@ def _kink_scale(x: np.ndarray, g: np.ndarray) -> np.ndarray:
     return scale
 
 
-def load_value_dataset(
+def _stack(
     labels_dir: Path | str,
     index_path: Path | str,
-    eps: float = 1e-3,
-    val_frac: float = 0.2,
-    seed: int = 0,
-    organisms: list[str] | None = None,
-) -> ValueDataset:
-    """Load the labels of ``organisms`` (default: all) into stacked train/val arrays.
+    eps: float,
+    val_frac: float,
+    seed: int,
+    organisms: list[str] | None,
+    with_z: bool = False,
+):
+    """Everything both heads share: read, check (P13), split by medium, rescale.
 
-    Any number of organisms stacks, one included: the stack is a vmap axis, not a
-    modelling choice, and only the shared-trunk ``deepset`` pools anything across
-    it. Stacking one organism per job is what the sweep does — the split is by
-    ``medium_id`` and the media are identical across organisms, so the held-out
-    set of a one-organism stack is the same media as the full stack's.
-
-    The split is by ``medium_id``, never by row: media are the independent unit.
-    Every shard must carry the same ``index_hash`` (P13) or this raises.
-
-    **The held-out set is drawn from the base design only** — round-0 media, never
-    a §4.6 top-up round. Top-up rounds deliberately sample where the model is
-    worst, so letting them into the validation set makes the *test* harder every
-    round and the gate stops being comparable to its own previous value: the
-    probe-band runs went 491 -> 595 -> 781 usable held-out rows over two rounds,
-    and the cosine they reported fell accordingly. Permuting the round-0 media
-    alone keeps the held-out set byte-identical whether the run has 0 rounds or 3,
-    which is what makes a round-over-round number mean anything. Top-up media all
-    go to training, which is what they were generated for.
+    Returns the stacked arrays plus the train/val medium indices. Head A and Head
+    B must see the *same* input transform and the same held-out media, so this
+    lives in one place rather than in two loaders that can drift apart.
     """
     from cfs.groundtruth.index import index_hash, load_index
     from cfs.groundtruth.solve import load_km_defaults
@@ -230,7 +262,10 @@ def load_value_dataset(
             raise ValueError(f"requested organisms have no shards: {missing}")
         gids = [g for g in gids if g in set(organisms)]
 
-    parts = [_organism_arrays(labels_dir, g, eps, col, km_cfg, len(exchanges)) for g in gids]
+    parts = [
+        _organism_arrays(labels_dir, g, eps, col, km_cfg, len(exchanges), with_z=with_z)
+        for g in gids
+    ]
     hashes = {p[5] for p in parts} | {index_hash(index_path)}
     if len(hashes) != 1:
         raise ValueError(f"labels and index disagree on index_hash: {hashes} (P13)")
@@ -285,8 +320,6 @@ def load_value_dataset(
     g = g * (x + s) ** 2 / s
     x = x / (x + s)
 
-    mu_scale = mu.std(axis=1)
-    mu_scale[mu_scale <= 0] = 1.0
     present = sorted(int(r) for r in np.unique(rounds))
     LOGGER.info(
         "%d organisms x %d media (%d train / %d held out, base design only), "
@@ -300,20 +333,136 @@ def load_value_dataset(
         mask.sum(1).min(),
         mask.sum(1).max(),
     )
+    return {
+        "gids": gids,
+        "exchanges": exchanges,
+        "mask": mask,
+        "x": x,
+        "mu": mu,
+        "g": g,
+        "gvalid": gvalid,
+        "z": np.stack([p[7] for p in parts]) if with_z else None,  # (G, A, N, M)
+        "alphas": parts[0][8],
+        "x_scale": x_scale,
+        "ti": ti,
+        "vi": vi,
+        "index_hash": hashes.pop(),
+        "rounds_present": present,
+    }
+
+
+def load_value_dataset(
+    labels_dir: Path | str,
+    index_path: Path | str,
+    eps: float = 1e-3,
+    val_frac: float = 0.2,
+    seed: int = 0,
+    organisms: list[str] | None = None,
+) -> ValueDataset:
+    """Load the labels of ``organisms`` (default: all) into stacked train/val arrays.
+
+    Any number of organisms stacks, one included: the stack is a vmap axis, not a
+    modelling choice, and only the shared-trunk ``deepset`` pools anything across
+    it. Stacking one organism per job is what the sweep does — the split is by
+    ``medium_id`` and the media are identical across organisms, so the held-out
+    set of a one-organism stack is the same media as the full stack's.
+
+    The split is by ``medium_id``, never by row: media are the independent unit.
+    Every shard must carry the same ``index_hash`` (P13) or this raises.
+
+    **The held-out set is drawn from the base design only** — round-0 media, never
+    a §4.6 top-up round. Top-up rounds deliberately sample where the model is
+    worst, so letting them into the validation set makes the *test* harder every
+    round and the gate stops being comparable to its own previous value: the
+    probe-band runs went 491 -> 595 -> 781 usable held-out rows over two rounds,
+    and the cosine they reported fell accordingly. Permuting the round-0 media
+    alone keeps the held-out set byte-identical whether the run has 0 rounds or 3,
+    which is what makes a round-over-round number mean anything. Top-up media all
+    go to training, which is what they were generated for.
+    """
+    d = _stack(labels_dir, index_path, eps, val_frac, seed, organisms)
+    ti, vi = d["ti"], d["vi"]
+    mu_scale = d["mu"].std(axis=1)
+    mu_scale[mu_scale <= 0] = 1.0
     return ValueDataset(
-        genome_ids=gids,
-        exchanges=exchanges,
-        mask=mask,
-        x_train=x[:, ti],
-        mu_train=mu[:, ti],
-        g_train=g[:, ti],
-        gvalid_train=gvalid[:, ti],
-        x_val=x[:, vi],
-        mu_val=mu[:, vi],
-        g_val=g[:, vi],
-        gvalid_val=gvalid[:, vi],
+        genome_ids=d["gids"],
+        exchanges=d["exchanges"],
+        mask=d["mask"],
+        x_train=d["x"][:, ti],
+        mu_train=d["mu"][:, ti],
+        g_train=d["g"][:, ti],
+        gvalid_train=d["gvalid"][:, ti],
+        x_val=d["x"][:, vi],
+        mu_val=d["mu"][:, vi],
+        g_val=d["g"][:, vi],
+        gvalid_val=d["gvalid"][:, vi],
         mu_scale=mu_scale.astype(np.float32),
-        x_scale=x_scale,
-        index_hash=hashes.pop(),
-        rounds_present=present,
+        x_scale=d["x_scale"],
+        index_hash=d["index_hash"],
+        rounds_present=d["rounds_present"],
+    )
+
+
+def load_behaviour_dataset(
+    labels_dir: Path | str,
+    index_path: Path | str,
+    eps: float = 1e-3,
+    val_frac: float = 0.2,
+    seed: int = 0,
+    organisms: list[str] | None = None,
+) -> BehaviourDataset:
+    """Head B labels: ``z_i(c, alpha)`` over the §4.4 alpha grid.
+
+    Same media split and same input transform as :func:`load_value_dataset` — the
+    two heads are evaluated at one medium in §8, so a Head B trained on a different
+    held-out set or a different ``x_scale`` cannot be composed with a Head A.
+
+    The (medium, alpha) pairs are flattened into one row axis. Alpha is a *model
+    input*, not a batch axis: §8.2 evaluates ``z`` at an ``alpha`` off the grid.
+    """
+    d = _stack(labels_dir, index_path, eps, val_frac, seed, organisms, with_z=True)
+    ti, vi, a = d["ti"], d["vi"], d["alphas"]
+    x, z = d["x"], d["z"]  # (G, N, M), (G, A, N, M)
+    g, n_a, _, m = z.shape
+
+    def flat(idx):
+        # (G, A, |idx|, M) -> (G, A*|idx|, M); alpha broadcast to match.
+        xa = np.broadcast_to(x[:, None, idx, :], (g, n_a, len(idx), m))
+        aa = np.broadcast_to(a[None, :, None], (g, n_a, len(idx)))
+        return (
+            xa.reshape(g, -1, m),
+            aa.reshape(g, -1).astype(np.float32),
+            z[:, :, idx, :].reshape(g, -1, m),
+        )
+
+    xt, at, zt = flat(ti)
+    xv, av, zv = flat(vi)
+    # Per-(organism, metabolite) scale so the loss is dimensionless and one
+    # high-flux exchange (usually O2 or CO2, O(10) against an ion's O(1e-3)) does
+    # not own the objective. Robust to the ~63% exact zeros: std over the rows
+    # where the organism can exchange it at all, floored.
+    z_scale = zt.std(axis=1)
+    z_scale[z_scale <= 0] = 1.0
+    LOGGER.info(
+        "Head B: %d alphas %s, %d train / %d held-out rows per organism",
+        n_a,
+        np.round(a, 3).tolist(),
+        xt.shape[1],
+        xv.shape[1],
+    )
+    return BehaviourDataset(
+        genome_ids=d["gids"],
+        exchanges=d["exchanges"],
+        mask=d["mask"],
+        alphas=a,
+        x_train=xt,
+        a_train=at,
+        z_train=zt,
+        x_val=xv,
+        a_val=av,
+        z_val=zv,
+        z_scale=z_scale.astype(np.float32),
+        x_scale=d["x_scale"],
+        index_hash=d["index_hash"],
+        rounds_present=d["rounds_present"],
     )

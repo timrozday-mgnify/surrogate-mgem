@@ -417,7 +417,11 @@ def test_organism_arrays_signs_and_scatter(tmp_path):
 
     km_cfg = {"classes": {"sugars": 0.01}, "default": 0.01, "keywords": {"sugars": ["glc"]}}
     col = {"EX_o2_e": 0, "EX_glc__D_e": 1, "EX_other_e": 2}
-    x, mu, g, gvalid, mask, ihash, mid = _organism_arrays(tmp_path, "g0", 1e-3, col, km_cfg, 3)
+    x, mu, g, gvalid, mask, ihash, mid, z, alphas = _organism_arrays(
+        tmp_path, "g0", 1e-3, col, km_cfg, 3
+    )
+    # Head B's targets are opt-in: without `with_z` the alpha grid is not even read.
+    assert z is None and alphas is None
     assert mid.tolist() == [0, 1]
 
     assert x.shape == (2, 3) and ihash == "h"

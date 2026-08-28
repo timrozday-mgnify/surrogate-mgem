@@ -185,6 +185,55 @@ def build_parser() -> argparse.ArgumentParser:
         "shared-trunk `deepset` pools anything across the stack.",
     )
 
+    tb = sub.add_parser("train-behaviour", help="M4: train Head B (exchange fluxes) on labels.")
+    tb.add_argument("--labels", type=Path, required=True, help="Label shard root (§4.5).")
+    tb.add_argument("--index", type=Path, required=True, help="Frozen metabolite_index.json.")
+    tb.add_argument("--out", type=Path, required=True, help="Checkpoint + diagnostics dir.")
+    tb.add_argument("--eps", type=float, default=1e-3, help="Which eps family level to train on.")
+    tb.add_argument("--width", type=int, default=256)
+    tb.add_argument("--depth", type=int, default=3)
+    tb.add_argument("--epochs", type=int, default=300)
+    tb.add_argument("--batch", type=int, default=512)
+    tb.add_argument("--lr", type=float, default=3e-3)
+    tb.add_argument("--seed", type=int, default=0)
+    tb.add_argument("--organisms", help="Comma-separated genome_ids (default: every shard).")
+
+    cm = sub.add_parser(
+        "community", help="M5/§8.1: compose the frozen heads into communities vs the LP."
+    )
+    cm.add_argument("--roster", type=Path, required=True, help="CSV: genome_id, model_path.")
+    cm.add_argument("--labels", type=Path, required=True, help="Label root (for the subspaces).")
+    cm.add_argument("--value", type=Path, required=True, help="Head A checkpoint dir.")
+    cm.add_argument("--behaviour", type=Path, required=True, help="Head B checkpoint dir.")
+    cm.add_argument("--out", type=Path, required=True, help="Report + trajectory dir.")
+    cm.add_argument(
+        "--communities",
+        help="Semicolon-separated member lists, e.g. 'A,B;C,D,E'. Default: sample --sizes.",
+    )
+    cm.add_argument(
+        "--sizes",
+        default="2,2,2,5",
+        help="Community sizes to sample from the checkpoint's roster when "
+        "--communities is not given.",
+    )
+    cm.add_argument("--steps", type=int, default=100, help="Euler steps (one LP/organism each).")
+    cm.add_argument(
+        "--doublings",
+        type=float,
+        default=4.0,
+        help="Horizon, in doublings of the fastest member at t=0.",
+    )
+    cm.add_argument(
+        "--biomass",
+        type=float,
+        default=None,
+        help="Total initial biomass (gDW/L). Default: solved for, so the pool "
+        "empties exactly at the end of the horizon.",
+    )
+    cm.add_argument("--eps", type=float, default=1e-3, help="Elastic-net level for the LP truth.")
+    cm.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the medium.")
+    cm.add_argument("--seed", type=int, default=0)
+
     rf = sub.add_parser("baseline-rf", help="Random-forest baseline on the same split and gate.")
     rf.add_argument("--labels", type=Path, required=True, help="Label shard root (§4.5).")
     rf.add_argument("--index", type=Path, required=True, help="Frozen metabolite_index.json.")
@@ -286,6 +335,59 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(diagnostics, indent=2))
         return 0 if diagnostics["passed"] else 1
+
+    if args.command == "train-behaviour":
+        from cfs.surrogate.behaviour import run as run_b
+
+        print(
+            json.dumps(
+                run_b(
+                    args.labels,
+                    args.index,
+                    args.out,
+                    eps=args.eps,
+                    width=args.width,
+                    depth=args.depth,
+                    epochs=args.epochs,
+                    batch=args.batch,
+                    lr=args.lr,
+                    seed=args.seed,
+                    organisms=organisms,
+                )["summary"],
+                indent=2,
+            )
+        )
+        return 0
+
+    if args.command == "community":
+        from cfs.compose.dfba import run as run_c
+
+        if args.communities:
+            comms = [[g for g in c.split(",") if g] for c in args.communities.split(";") if c]
+        else:
+            gids = json.loads((args.value / "value_heads.json").read_text())["genome_ids"]
+            rng = __import__("numpy").random.default_rng(args.seed)
+            comms = [
+                sorted(rng.choice(gids, size=int(n), replace=False).tolist())
+                for n in args.sizes.split(",")
+                if n
+            ]
+        report = run_c(
+            args.roster,
+            args.labels,
+            args.value,
+            args.behaviour,
+            args.out,
+            communities=comms,
+            steps=args.steps,
+            doublings=args.doublings,
+            biomass=args.biomass,
+            eps=args.eps,
+            seed=args.seed,
+            scales=args.scales,
+        )
+        print(json.dumps(report["summary"], indent=2))
+        return 0
 
     if args.command == "baseline-rf":
         # A measurement, not a gate: it always exits 0, however it scores.

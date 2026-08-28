@@ -1,0 +1,299 @@
+"""M4 / §6.3 Head B — the behaviour map ``z_i(c, alpha)``.
+
+Head A says how fast an organism *can* grow. Head B says what it does to the
+medium while doing it, and it is the half §8 composes: the dFBA right-hand side
+is ``dc/dt = sum_i X_i z_i(c, alpha_i) + inflow(c)``, so every cross-feeding
+interaction in a community is a Head B output of one organism landing in another
+organism's Head A input.
+
+Unlike Head A this head carries **no structural constraint** (§6.3): ``z`` is a
+signed vector (negative = uptake, positive = secretion) and nothing about the LP
+makes it convex, monotone or even continuous in general — D4's elastic net is what
+makes it continuous, which is the whole reason §5.4 exists. So this is a plain
+softplus MLP over ``(x, alpha)``, masked to ``M_i`` on both ends.
+
+Two deliberate simplifications:
+
+* §6.3 suggests predicting non-negative uptake and secretion heads and returning
+  the difference. A difference of two non-negative outputs is any real number, so
+  it constrains nothing — it is presentational. One signed output instead.
+* The loss is scaled per ``(organism, metabolite)``, not per row. Exchange fluxes
+  span O(1e-3) (ions) to O(10) (O2/CO2) *within* one organism, and an unscaled
+  MSE simply fits the gas exchanges. Head A's per-row norm-relative trick is not
+  needed here because there is no all-zero-target row problem: ``z`` is nonzero
+  on ~37% of entries but essentially never all-zero.
+
+Trained by ``cfs train-behaviour``; consumed by :mod:`cfs.compose.dfba`.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from pathlib import Path
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import numpy as np
+import optax
+from jax import Array
+
+from cfs.surrogate.data import BehaviourDataset, load_behaviour_dataset
+
+LOGGER = logging.getLogger("cfs.surrogate.behaviour")
+
+
+class BehaviourHead(eqx.Module):
+    """``(x, alpha) -> z`` in the shared index, zero outside ``M_i``."""
+
+    w: list[Array]
+    b: list[Array]
+    mask: Array
+
+    def __init__(self, key, n_in: int, mask, width: int = 256, depth: int = 3):
+        keys = jax.random.split(key, depth + 1)
+        # +1 input for alpha; the output is the full shared index, masked.
+        sizes = [n_in + 1] + [width] * depth + [n_in]
+        self.w = [
+            jax.random.normal(k, (o, i)) * jnp.sqrt(2.0 / i)
+            for k, i, o in zip(keys, sizes[:-1], sizes[1:], strict=True)
+        ]
+        self.b = [jnp.zeros(o) for o in sizes[1:]]
+        self.mask = jnp.asarray(mask, dtype=bool)
+
+    def __call__(self, x: Array, alpha: Array) -> Array:
+        """Returns ``z / z_scale`` -- **normalised** flux, not mmol/gDW/h.
+
+        The head works in units of each metabolite's own flux std. Raw ``z`` runs
+        to O(400) on the gas exchanges and O(1e-3) on the ions, and a net
+        initialised at ``sqrt(2/n_in)`` starts ~400x short on the ones that carry
+        the variance; it then spends the run walking biases, which is the same
+        failure `picnn_u`'s scale-aware init exists to avoid. Multiply by
+        ``z_scale`` (stored in the checkpoint) to get fluxes -- :func:`flux`.
+        """
+        h = jnp.concatenate([x * self.mask, jnp.atleast_1d(alpha)])
+        for w, b in zip(self.w[:-1], self.b[:-1], strict=True):
+            h = jax.nn.softplus(w @ h + b)
+        return (self.w[-1] @ h + self.b[-1]) * self.mask
+
+
+def stack_heads(key, n_organisms: int, n_in: int, mask, width: int = 256, depth: int = 3):
+    keys = jax.random.split(key, n_organisms)
+    make = eqx.filter_vmap(lambda k, m: BehaviourHead(k, n_in, m, width, depth), in_axes=(0, 0))
+    return make(keys, jnp.asarray(mask, dtype=bool))
+
+
+@eqx.filter_vmap(in_axes=(0, 0, 0))
+def batched_z(heads: BehaviourHead, x: Array, alpha: Array) -> Array:
+    return jax.vmap(heads)(x, alpha)
+
+
+def flux(heads, x: Array, alpha: Array, z_scale: Array) -> Array:
+    """``z`` in mmol/gDW/h: the head's normalised output times the label scale."""
+    return batched_z(heads, x, alpha) * z_scale[:, None, :]
+
+
+def organism(heads: BehaviourHead, i: int) -> BehaviourHead:
+    """Slice organism ``i`` out of the stack (all leaves carry the organism axis)."""
+    return jax.tree.map(lambda a: a[i] if eqx.is_array(a) else a, heads)
+
+
+# --------------------------------------------------------------------------- #
+# Training
+# --------------------------------------------------------------------------- #
+
+
+def _loss(heads, x, a, zn):
+    """MSE against the *normalised* target, over the organism's own exchanges."""
+    w = heads.mask[:, None, :]  # (G, 1, M)
+    sq = w * (batched_z(heads, x, a) - zn) ** 2
+    return jnp.sum(sq) / jnp.maximum(jnp.sum(w) * x.shape[1], 1.0)
+
+
+@eqx.filter_jit
+def _step(heads, opt_state, x, a, zn, optimiser):
+    loss, grads = eqx.filter_value_and_grad(_loss)(heads, x, a, zn)
+    updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(heads, eqx.is_inexact_array))
+    return eqx.apply_updates(heads, updates), opt_state, loss
+
+
+def train_behaviour_heads(
+    ds: BehaviourDataset,
+    *,
+    width: int = 256,
+    depth: int = 3,
+    epochs: int = 300,
+    batch: int = 512,
+    lr: float = 3e-3,
+    seed: int = 0,
+) -> eqx.Module:
+    x = jnp.asarray(ds.x_train)
+    a = jnp.asarray(ds.a_train)
+    zn = jnp.asarray(ds.z_train / ds.z_scale[:, None, :])
+    heads = stack_heads(
+        jax.random.PRNGKey(seed), len(ds.genome_ids), x.shape[-1], ds.mask, width, depth
+    )
+    n = x.shape[1]
+    steps = max(1, n // batch)
+    optimiser = optax.adam(optax.cosine_decay_schedule(lr, epochs * steps))
+    opt_state = optimiser.init(eqx.filter(heads, eqx.is_inexact_array))
+    rng = np.random.default_rng(seed)
+    t0 = time.time()
+    for epoch in range(epochs):
+        perm = rng.permutation(n)
+        for s in range(steps):
+            idx = jnp.asarray(perm[s * batch : (s + 1) * batch])
+            heads, opt_state, loss = _step(
+                heads, opt_state, x[:, idx], a[:, idx], zn[:, idx], optimiser
+            )
+        if epoch % 20 == 0 or epoch == epochs - 1:
+            LOGGER.info("epoch %4d  loss=%.5f  (%.0fs)", epoch, float(loss), time.time() - t0)
+    return heads
+
+
+# --------------------------------------------------------------------------- #
+# Diagnostics
+# --------------------------------------------------------------------------- #
+
+
+def _predict(heads, x, a, z_scale, size: int = 512) -> np.ndarray:
+    """Held-out fluxes in label units, in slices (the val set is A x media rows)."""
+    sc = jnp.asarray(z_scale)
+    out = [
+        np.asarray(
+            flux(heads, jnp.asarray(x[:, i : i + size]), jnp.asarray(a[:, i : i + size]), sc)
+        )
+        for i in range(0, x.shape[1], size)
+    ]
+    return np.concatenate(out, axis=1)
+
+
+def evaluate(heads, ds: BehaviourDataset) -> dict:
+    """Held-out flux accuracy, per organism and per (organism, metabolite).
+
+    Three numbers, because they fail independently:
+
+    * ``r2`` — how much of the flux variance is explained. The composition budget.
+    * ``cosine`` — the *pattern* of exchange in one medium. What decides which
+      metabolite crosses from one organism to another; a model can score well on
+      R2 while getting a small cross-fed flux's sign wrong.
+    * ``sign_agreement`` on the entries where the true flux is non-trivial. A sign
+      error is a cross-feeding link pointing backwards, which §8's Newton will
+      happily converge to.
+    """
+    z_hat = _predict(heads, ds.x_val, ds.a_val, ds.z_scale)
+    z = ds.z_val
+    out = {"genome_ids": ds.genome_ids, "per_organism": {}}
+    for i, gid in enumerate(ds.genome_ids):
+        m = ds.mask[i]
+        t, p = z[i][:, m], z_hat[i][:, m]
+        ss_res = float(((t - p) ** 2).sum())
+        ss_tot = float(((t - t.mean(0)) ** 2).sum())
+        num = (t * p).sum(1)
+        den = np.linalg.norm(t, axis=1) * np.linalg.norm(p, axis=1)
+        ok = den > 0
+        big = np.abs(t) > 1e-6
+        out["per_organism"][gid] = {
+            "r2": 1.0 - ss_res / max(ss_tot, 1e-30),
+            "cosine_median": float(np.median(num[ok] / den[ok])),
+            "cosine_p05": float(np.percentile(num[ok] / den[ok], 5)),
+            "sign_agreement": float((np.sign(t[big]) == np.sign(p[big])).mean()),
+            "n_exchanges": int(m.sum()),
+        }
+    r2 = [v["r2"] for v in out["per_organism"].values()]
+    cos = [v["cosine_median"] for v in out["per_organism"].values()]
+    sgn = [v["sign_agreement"] for v in out["per_organism"].values()]
+    out["summary"] = {
+        "worst_r2": min(r2),
+        "median_r2": float(np.median(r2)),
+        "worst_cosine_median": min(cos),
+        "median_cosine": float(np.median(cos)),
+        "worst_sign_agreement": min(sgn),
+        "n_val_rows": int(ds.x_val.shape[1]),
+        "index_hash": ds.index_hash,
+    }
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Checkpoint (P13 / P14)
+# --------------------------------------------------------------------------- #
+
+
+def save(heads, ds: BehaviourDataset, outdir: Path, arch: dict, diagnostics: dict) -> None:
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    eqx.tree_serialise_leaves(outdir / "behaviour_heads.eqx", heads)
+    (outdir / "behaviour_heads.json").write_text(
+        json.dumps(
+            {
+                "index_hash": ds.index_hash,
+                "genome_ids": ds.genome_ids,
+                "exchanges": ds.exchanges,
+                "mask": ds.mask.astype(int).tolist(),
+                "x_scale": ds.x_scale.tolist(),
+                "z_scale": ds.z_scale.tolist(),
+                "alphas": ds.alphas.tolist(),
+                "input_transform": (
+                    "u = c / (Km + c), x = u / (u + x_scale); Km from km_defaults.yaml"
+                ),
+                "output_units": "mmol / gDW / h per unit biomass; negative = uptake",
+                "arch": arch,
+            },
+            indent=2,
+        )
+    )
+    (outdir / "behaviour_diagnostics.json").write_text(json.dumps(diagnostics, indent=2))
+
+
+def load(outdir: Path) -> tuple[eqx.Module, dict]:
+    outdir = Path(outdir)
+    meta = json.loads((outdir / "behaviour_heads.json").read_text())
+    arch = meta.get("arch", {})
+    like = stack_heads(
+        jax.random.PRNGKey(0),
+        len(meta["genome_ids"]),
+        len(meta["exchanges"]),
+        np.array(meta["mask"], dtype=bool),
+        arch.get("width", 256),
+        arch.get("depth", 3),
+    )
+    return eqx.tree_deserialise_leaves(outdir / "behaviour_heads.eqx", like), meta
+
+
+def run(
+    labels_dir: Path,
+    index_path: Path,
+    outdir: Path,
+    *,
+    eps: float = 1e-3,
+    width: int = 256,
+    depth: int = 3,
+    epochs: int = 300,
+    batch: int = 512,
+    lr: float = 3e-3,
+    seed: int = 0,
+    organisms: list[str] | None = None,
+) -> dict:
+    ds = load_behaviour_dataset(labels_dir, index_path, eps=eps, seed=seed, organisms=organisms)
+    heads = train_behaviour_heads(
+        ds, width=width, depth=depth, epochs=epochs, batch=batch, lr=lr, seed=seed
+    )
+    diagnostics = evaluate(heads, ds)
+    save(
+        heads,
+        ds,
+        outdir,
+        {"width": width, "depth": depth, "epochs": epochs, "lr": lr, "eps": eps, "seed": seed},
+        diagnostics,
+    )
+    LOGGER.info(
+        "Head B: worst R2 %.3f, median %.3f; worst median cosine %.3f; worst sign agreement %.3f",
+        diagnostics["summary"]["worst_r2"],
+        diagnostics["summary"]["median_r2"],
+        diagnostics["summary"]["worst_cosine_median"],
+        diagnostics["summary"]["worst_sign_agreement"],
+    )
+    return diagnostics
