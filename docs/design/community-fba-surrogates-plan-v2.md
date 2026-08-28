@@ -594,6 +594,34 @@ class BehaviourHead(eqx.Module):
 No convexity constraint. Output masked to `M_i`, scattered to `M` at
 composition time.
 
+> **Implementation status (2026-08-28) — M4 built.**
+> `src/cfs/surrogate/behaviour.py`, CLI `cfs train-behaviour`. A masked softplus
+> MLP over `(x, alpha)`, `x` the same saturation coordinate Head A uses, trained
+> on the alpha grid the §4.4 labels already carry (8 levels x 4000 media). Both
+> heads come off `cfs.surrogate.data._stack`, so they cannot silently disagree on
+> `x_scale` or on which media are held out; `compose.dfba.Surrogate` re-checks
+> both plus `index_hash` before composing (P13/P14).
+>
+> 21 organisms, 600 epochs, lr 1e-3, held-out round-0 media: worst **R² 0.856**,
+> median 0.921; worst per-organism median flux cosine **0.993**; worst sign
+> agreement 0.941.
+>
+> **Two departures from the sketch above, both deliberate.**
+>
+> The separate non-negative uptake and secretion heads are *not* built. A
+> difference of two non-negative outputs is any real number, so it constrains
+> nothing — it is presentational, and one signed output is the same function
+> class in half the parameters.
+>
+> The head emits `z / z_scale`, **not** `z`, with the per-(organism, metabolite)
+> label scale stored in the checkpoint and applied by `behaviour.flux`. This is
+> load-bearing, not cosmetic: raw-unit output scores held-out **R² 0.017** —
+> worse than predicting the per-alpha mean — against 0.885 for the identical net
+> on the normalised target. Exchange fluxes span O(400) on the gases to O(1e-3)
+> on the ions *within one organism*, so a `sqrt(2/n_in)` init starts ~400x short
+> on the dimensions carrying the variance and Adam spends the run walking biases.
+> Same failure as §7's input-side scale problem, in the output layer.
+
 ---
 
 ## 7. Phase 4 — training
@@ -882,6 +910,67 @@ def dfba_rhs(c, X):
 For the equilibrium, Newton-solve `rhs = 0` rather than integrating. Trajectory
 gradients are badly conditioned; a one-shot root-find is not.
 
+> **Implementation status (2026-08-28) — M5 built and measured; the 1% gate is
+> not met.** `src/cfs/compose/dfba.py`, CLI `cfs community`. Both frozen heads
+> into the right-hand side above (`inflow = 0`, batch culture), integrated with
+> explicit Euler and the pool clipped at zero. The ground truth is per-organism
+> FBA — `cfs.groundtruth.solve.solve`, the same call that made the labels — at
+> the community's shared medium, on the **identical** integrator, step size,
+> inoculum and MM bounds, so the comparison isolates the surrogates. A joint
+> community LP is deliberately *not* used here: SteadyCom's equal-growth
+> constraint and MICOM's tradeoff are different models, and mixing that in would
+> make a Head B error and a modelling choice indistinguishable. §8.2/§8.3 are
+> where those belong.
+>
+> 10 communities, `20hm_bands` media over the union of the members' active
+> subspaces, 40 steps, equal-split abundances:
+>
+> | size | dc/dt cosine | mu rel err | log-X final err | overgrowth (V5) | cross-feeding links |
+> |---|---|---|---|---|---|
+> | 2 (x5, median) | 0.983 | 0.016 | 0.055 | <=0.066 | 6/8 |
+> | 3 (x2) | 0.847 | 0.083 | 0.122 | <=0.210 | 8/9 |
+> | 5 | 0.915 | 0.133 | 0.322 | 0.182 | 10/11 |
+> | 10 | 0.996 | 0.013 | 0.041 | -0.002 | 27/27 |
+> | **21** | **0.997** | **0.014** | **0.044** | **-0.001** | **38/38** |
+>
+> 1. **Community size is not the error axis.** The 21-member run is the second
+>    most accurate in the set and recovers every one of its 38 cross-feeding
+>    links — a metabolite one member secretes and another consumes, which is the
+>    behaviour no member's labels contain, since each organism was solved alone.
+>    89/93 links recovered overall. Per-organism errors are largely independent,
+>    so they partially cancel in `sum_i X_i z_i` rather than compounding: this is
+>    the central bet of D1(a) plus this section, and it holds.
+> 2. **A slow member is the error axis.** Every bad cell contains an organism
+>    with `mu0 < 1.3 h^-1` on its drawn medium. Head A's held-out R² is taken
+>    over each organism's *own* mu spread, so a near-starving organism is a small
+>    absolute error and a large relative one, and `d(log X)/dt = mu` integrates
+>    the relative one. The next Head A signal to chase is accuracy at low `mu`,
+>    not the roster-worst gradient cosine of §7.
+> 3. **M5's 1% gate is missed by ~4x, and the shortfall is Head A's.** A 1.4%
+>    `mu` error over ~2 doublings *is* a 4% log-X error. Closing it needs a
+>    better `mu`, not a better ODE solver.
+> 4. **P4 does not bite.** Re-solving the true LP at the state the surrogate
+>    walked *itself* to (V5) gives overgrowth <= 0.21 of initial `mu`, and ~0 on
+>    the large communities. The composition does not run away to a fictitious
+>    fast-growing state.
+>
+> **Two measurement traps, both now handled in the code.** A batch culture has
+> two independent clocks — members doubling, and the pool emptying — and a
+> horizon set by the growth clock alone killed the true community at step 2 of
+> 40, leaving two live points to score. `run` solves for the *inoculum* instead
+> (`dc/dt` is linear in `X`, so one probe solve fixes it) so the pool empties at
+> the end of the horizon. And the metrics are scored only while the true
+> community is alive, normalised by fixed initial scales: a dead culture has
+> `mu = 0` everywhere, where a per-step relative error divides by zero — the
+> first version reported `nan` and a 237% `mu` error for a run whose live phase
+> agreed to 2%. Concentration error is per metabolite relative to its own `c0`;
+> a plain L2 over the pool reads 0.7% on a trajectory where the limiting ion is
+> gone in the truth and untouched in the surrogate.
+>
+> **Not measured:** the `--steps` refinement check, abundances other than equal
+> split, and the Newton form of the equilibrium (M6) — this is the integrated
+> trajectory only.
+
 ### 8.2 SteadyCom
 
 Bisect on common `mu`; `alpha_i = mu / mu_max_i(c)`; check a non-negative
@@ -975,7 +1064,7 @@ mixes beautifully while sampling the wrong thing.
 | V2 | Label repeatability and Lipschitz continuity | After Phase 1 | P1, P14 |
 | V3 | Held-out accuracy, **gradient error reported separately** | After Phase 4 | P3, P11 |
 | V4 | Finite-difference the full objective gradient at 20 points | Before any HMC | P3, adjoint errors |
-| V5 | Round-trip: true LP at composed optimum, 100 cases, report the tail | After Phase 5 | P4 |
+| V5 | Round-trip: true LP at composed optimum, 100 cases, report the tail | After Phase 5 | P4 — **first 10 cases done 2026-08-28** (`round_trip_end` in `cfs community`): overgrowth <= 0.21 of initial `mu`, ~0 on the large communities. Not yet 100 cases |
 | V6 | Exact MILP minimal medium comparison | Phase 6 | Everything, end to end |
 | V7 | Simulation-based calibration | Before any posterior | P5, P6 |
 | V8 | Published defined media, never trained on | Before writeup | P12, P15 |
@@ -990,8 +1079,8 @@ mixes beautifully while sampling the wrong thing.
 | M1 | Degeneracy survey, D4 decided | V1 complete, choice documented |
 | M2 | Ground truth pipeline | V2 passes |
 | M3 | Head A trained, all 20, vmapped | Gradient cosine > 0.99 held-out |
-| M4 | Head B trained, alpha sweep validated | V3 passes |
-| M5 | dFBA composition | Trajectory matches COBRApy dFBA to 1% |
+| M4 | Head B trained, alpha sweep validated | V3 passes — **built 2026-08-28**, worst held-out R² 0.856 / median 0.921 (§6.3) |
+| M5 | dFBA composition | Trajectory matches COBRApy dFBA to 1% — **built and measured 2026-08-28; gate not met at ~4-5%, and the error is Head A's `mu`, not the integrator** (§8.1) |
 | M6 | Newton equilibrium + implicit gradients | V4 passes |
 | M7 | Minimal medium, surrogate vs exact MILP | V5, V6 pass |
 | M8 | SteadyCom / MICOM framings | Agreement with reference implementations |
@@ -1041,9 +1130,9 @@ community-fba-surrogates/
 │   │   ├── stacked.py             # §6.1 vmap harness
 │   │   └── train.py
 │   ├── compose/
-│   │   ├── residual.py
-│   │   ├── framings.py
-│   │   └── solve.py               # Optimistix wrappers
+│   │   ├── dfba.py                # §8.1 — built; `cfs community`
+│   │   ├── framings.py            # §8.2/§8.3 — not built
+│   │   └── solve.py               # Optimistix wrappers — not built
 │   ├── science/
 │   │   └── minimal_medium.py
 │   └── validate/
