@@ -1382,6 +1382,12 @@ mixes beautifully while sampling the wrong thing.
 | M7 | Minimal medium, surrogate vs exact MILP | V5, V6 pass |
 | M8 | SteadyCom / MICOM framings | Agreement with reference implementations |
 
+**M9–M14 are the applications layer and live in §13** — forward simulation
+(batch and chemostat, built), convex medium design, minimal medium, chemostat
+steady state, interaction maximisation, and the one place a posterior is the right
+instrument. §13.7 states what accuracy each of them actually needs, which is less
+than M3's and M5's gates for all but the last two.
+
 M1 is new and comes before any training. It is a two-day job and it determines
 the shape of your entire label set.
 
@@ -1401,6 +1407,246 @@ a per-metabolite architecture rather than a bigger dense one. Anything that read
 as hand-tuning a metabolite is still not the deliverable.
 
 ---
+
+---
+
+## 13. Phase 7 — what the surrogates are *for*
+
+Phases 1–6 build and measure the heads. This section is the applications layer:
+the optimisation and sampling problems the frozen heads make cheap. It is written
+after M0–M5 landed with **M3 and M5 both short of their gates** (worst held-out
+gradient cosine 0.956 against 0.99; median community log-X error 0.9–7.6% against
+1%), and it is deliberately ordered so that the use cases whose accuracy
+requirement the heads *already meet* come first.
+
+### 13.0 The interface everything below is built on
+
+Two functions and one sum, all of them cheap and analytically differentiable:
+
+```python
+mu_i(c)          # concave, non-decreasing in u = c/(Km+c); Head A + calibration
+z_i(c, alpha)    # exchange fluxes, mmol/gDW/h; Head B x mu_i, clamped at -Vmax u
+dc/dt = sum_i X_i z_i(c) + D (c_feed - c)      dX_i/dt = X_i (mu_i(c) - D)
+```
+
+Every application is an objective or a likelihood on those. Nothing below needs a
+new network, and nothing below should be allowed to require one: if an application
+wants a quantity the heads do not emit, that is a Phase 3 change, not a Phase 7
+one.
+
+**The structural fact that decides which problems are easy.** `mu_i` is concave
+and non-decreasing in `u`, and `u_m = c_m/(Km_m + c_m)` is a concave increasing
+map of `c_m`. So **`mu_i` is concave in `c`**, and so is `min_i mu_i` and any
+non-negative weighted sum. Anything expressible as *maximise a concave function of
+the medium* or *minimise a linear cost subject to a growth floor* is therefore a
+**convex program with a unique optimum** — no multistart, no HMC, no local optima.
+That covers §13.2 and §13.3, which is why they are first.
+
+`z` carries no such structure, and neither does anything integrated through a
+trajectory. Those are §13.5 onward, and they are where sampling earns its place.
+
+### 13.1 Forward simulation — batch and continuous — **built 2026-08-30**
+
+`cfs simulate` (`compose.dfba.simulate`, `with_chemostat`). §8.1's map with the
+LP removed: given members, a medium and an inoculum, integrate. `--dilution D`
+makes it a chemostat — `inflow(c) = D (c_feed - c)` and net growth `mu - D` —
+which needs no change to `integrate`, because the biomass update is already the
+exponential map. `D = 0` is exactly the batch culture M5 measures.
+
+Reports the trajectory, who washes out, which metabolite empties first, and the
+cross-feeding links (a metabolite one member secretes and another consumes) at the
+midpoint. This is the cheapest useful thing the heads do: seconds against one
+LP per organism per step.
+
+The inoculum is solved for, not given: `dc/dt` is linear in `X`, so one probe at
+unit biomass fixes the biomass whose pool empties at the end of the horizon. This
+is §8.1's two-clocks trap and it bites here too — an arbitrary 1e-3 gDW/L killed
+the first batch run at 3% of its horizon. `--biomass` overrides. In a chemostat
+the horizon is at least five residence times.
+
+Measured on `value_r1` + `behaviour_r1`, 3 members, 100 steps, ~5 s: batch runs
+the full horizon with 88 cross-feeding links; at `D = 0.5 h^-1` the two members
+whose `mu` falls below `D` wash out (`X` 3e-10) and the third persists. `washed_out`
+is reported only for `D > 0` — in a batch culture every `mu` is 0 at the end
+because the pool is empty, not because anyone lost.
+
+**What it is good for at the accuracy actually measured.** Ordering, structure and
+qualitative dynamics — who dominates, what is exchanged, when the culture stops.
+Cross-feeding recall is 1.00 at sizes 3–21 (§8.1). It is **not** good for
+quantitative yield: 3–8% on log-biomass, and on a *batch* culture the endpoint
+turns on which metabolite empties first, which flips under changes that improve
+the right-hand side on every measure (§8.1, the MM-clamp result). Report rates and
+structure; treat a batch endpoint as an estimate with a wide error bar, and prefer
+a chemostat steady state (§13.4) when a number has to be quoted.
+
+### 13.2 Maximise a member's growth rate over the medium — convex
+
+```
+maximise    mu_k(c)        subject to    sum_m cost_m c_m <= B,   0 <= c <= c_max
+```
+
+Concave objective, linear constraints: projected gradient in `u`-space converges
+to the global optimum, and the gradient is the head's own analytic one. Head A's
+worst *gradient* cosine is 0.956, and the argmax depends only on the gradient
+direction, so this is the use case whose requirement the current heads most nearly
+meet. The community version — maximise member `k` while the others are present —
+is the same program with `mu_k` evaluated at the §13.4 steady state, and is no
+longer convex; do the static one first and use it as the warm start.
+
+**Selective media are the same problem, one sign flipped:** `mu_k(c) - max_{j!=k}
+mu_j(c)` is a difference of concave functions, so it is *not* convex — DC
+programming (convex–concave procedure) or §13.6's sampler. Worth doing: "a defined
+medium on which member `k` outgrows the rest of this community" is a directly
+testable wet-lab claim.
+
+**Always round-trip the answer through the true LP (V5/P4).** An optimiser's whole
+job is to find where the surrogate is most optimistic.
+
+### 13.3 Minimal medium — convex, and this is §9
+
+§9's program with the structure made explicit: `mu_community(c) >= mu_target` with
+`mu_community = min_i mu_i` is a *concave* constraint, so the feasible set is
+convex and the L1-penalised objective is a convex program. Two versions, and the
+difference matters:
+
+* **Static** — the growth floor is on `mu_i(c)` at `t = 0`. Convex, unique, and
+  the one to build. It answers "what is the smallest defined medium on which this
+  community all grows at rate `mu_target`".
+* **Dynamic** — the floor is on the §13.4 steady state or on a batch yield. Not
+  convex, because the equilibrium map is not. Needs §13.6 or a homotopy from the
+  static answer.
+
+V6 (exact MILP on the true community model) validates the static one, and §9.1 is
+right that this is the headline claim. §9.2's shadow prices come free from the
+same solve.
+
+**The known risk is exactly where Head A is weakest.** A minimal medium is
+determined by the *binding set* — which metabolites are limiting — and the
+roster's persistent worst cells are the ions (`EX_mg2_e`, `EX_cl_e`, `EX_ca2_e`;
+§7). A minimal-medium answer that drops an ion is the failure mode to look for
+first, and the MILP comparison is what finds it.
+
+### 13.4 Chemostat steady state, coexistence and stability — needs M6
+
+Newton-solve `dc/dt = 0, mu_i(c) = D` rather than integrating (§8.1 already says
+this, and §8.4 is the price form). The steady state is the right place to quote
+numbers, to define objectives, and to differentiate through: trajectory gradients
+are badly conditioned, an equilibrium's are not, and the implicit-function
+derivative gives sensitivity to every medium component, every abundance and every
+`Km` at the cost of one linear solve.
+
+What falls out for free once it exists:
+
+* **Coexistence** — which members survive at dilution `D`, i.e. the classical
+  competitive-exclusion question, on a real community rather than a toy model.
+* **Stability** — eigenvalues of the Jacobian at the fixed point.
+* **Invasion / colonisation resistance** — `mu_new(c*) - D` at the resident steady
+  state: one head evaluation per candidate invader.
+* **Keystone members** — leave-one-out over the community, `N` simulations, no new
+  machinery at all. Cheap enough to be worth doing before anything clever.
+
+Conditioning is measured (§7, "the conditioning bill is not §8's"): the Hessian
+sum is rank ~10–25 of 365, so the supply term is what makes the solve well-posed
+and `J` must be **diagonally preconditioned** whatever the head is. P9's damping
+and `throw=False` apply; log the failure rate.
+
+### 13.5 Maximise metabolic interaction — non-convex, and the weakest use case
+
+Define the interaction rate as the mass actually handed between members:
+
+```
+E(c, X) = sum_m min( sum_i X_i max(z_im, 0),  sum_i X_i max(-z_im, 0) )
+```
+
+— per metabolite, the smaller of total secretion and total uptake, so a metabolite
+everyone excretes and nobody eats scores zero. Maximise over `c` at the §13.4
+steady state. Non-concave (a min of two objectives that are neither), so:
+multistart projected gradient, or §13.6 at a temperature, which additionally
+answers "how many *different* media achieve this" — a more useful answer than one
+point.
+
+**This is the use case with the weakest support from the measurements**, and it
+should be labelled as exploratory in any writeup. It depends on flux *magnitude*,
+which is Head B's worst axis (worst held-out R² 0.907 against a worst flux cosine
+of 0.995 — the direction is far better than the size), and on cross-feeding
+structure, which the per-organism labels never contain directly. That structure is
+recovered at 1.00 recall (§8.1), which is the reason to attempt it at all.
+
+### 13.6 Where HMC is the right tool — and where it is not
+
+Three of the four use cases above are optimisation, and a sampler is the wrong
+instrument for them: it is slower, it needs the surrogate's error model, and for
+§13.2/§13.3 it would sample a distribution whose mode a convex solver already
+returns exactly. Sampling earns its place in exactly two places:
+
+**(a) The inverse problem — infer the medium from the community.** Given observed
+abundances (16S, plating, OD) and optionally measured metabolite depletion, sample
+
+```
+p(c | X_obs) proportional to  p(X_obs | c) p(c)
+```
+
+with the forward map from §13.1/§13.4. This is a genuine posterior with no
+optimisation counterpart, it is the scientifically strongest thing in this
+section, and it is what the differentiability of the heads is *for* — 365
+dimensions is far past anything a gradient-free sampler will do. It is also where
+the whole Phase-5 accuracy story becomes a likelihood width rather than a gate.
+
+**(b) Design ensembles.** `p(c) ∝ exp(objective(c) / T)` on a budget-constrained
+support: instead of one designed medium, the family of media that work. That
+directly gives which components are pinned and which are free — §9.2's point,
+generalised — and it is robust where a single argmax of an imperfect surrogate is
+not.
+
+**The prerequisite is an error model, and we do not have one.** A deterministic
+surrogate plugged into a likelihood produces a posterior that is confidently
+wrong: all of the error lands in the prior's tails and none in the data's. The
+held-out residuals are already measured per organism (§7.3, §6.3), so the cheap
+version is a per-organism Gaussian on `log mu` and on `z`, widened by the M5
+replicate spread. Do that before any chain. V7 (simulation-based calibration) is
+the check, and P5 (no warm-starting from chain history) and P6 (multiple
+equilibria show up as clustered divergences, and no step size fixes them) both
+apply as written. **V4 — finite-differencing the full objective gradient at 20
+points — comes before any of this**, per the validation table.
+
+### 13.7 Accuracy required, per use case
+
+The honest version of "M3 and M5 did not meet their gates": the gates were set for
+the hardest downstream use, and most uses need less.
+
+| Use case | Depends on | Currently | Verdict |
+|---|---|---|---|
+| §13.1 simulation, structure and ordering | `z` direction, cross-feeding | flux cosine 0.995, recall 1.00 | usable now |
+| §13.1 quantitative yield | integrated `mu` | 3–8% log-X, batch endpoint unstable | rates only; prefer §13.4 |
+| §13.2 growth maximisation | `d(mu)/dc` direction | worst cosine 0.956 | usable now, round-trip every answer |
+| §13.3 minimal medium | the binding set | ions are the worst cells | build it; V6 decides |
+| §13.4 steady state | `mu` level + Jacobian | `mu` rel err <= 3%; `J` rank-deficient | needs M6 + preconditioning |
+| §13.5 interaction | `z` magnitude | worst R² 0.907 | exploratory |
+| §13.6 posterior | a calibrated error model | none exists | blocked until one does |
+
+### 13.8 New pitfalls
+
+| ID | Pitfall | Symptom | Solution |
+|---|---|---|---|
+| P20 | Deterministic surrogate inside a likelihood | Posterior far too narrow; SBC ranks pile up at the edges | Per-organism residual model from the held-out set, widened by the M5 replicate spread. No chain before it exists |
+| P21 | The designer walks out of the design | Spectacular objective, LP disagrees; medium far from any training medium | Trust region on the §6.3 nearest-training-medium distance — the same metric that diagnosed P18 — plus V5 at every reported optimum |
+| P22 | An objective on flux *magnitude* | Inherits Head B's weakest axis while the diagnostics (cosine, sign agreement) look fine | Prefer direction- and structure-valued objectives; label magnitude-valued results exploratory |
+| P23 | Optimising a batch-culture endpoint | The answer flips under changes that improve the right-hand side on every measure — the endpoint turns on which metabolite empties first | Optimise rates, or a chemostat steady state. Never a batch endpoint |
+
+### 13.9 Milestones
+
+| M | Deliverable | Gate |
+|---|---|---|
+| M9 | `cfs simulate`, batch + chemostat | **done 2026-08-30**; agrees with `cfs community`'s surrogate path on `D = 0` |
+| M10 | §13.2 growth maximisation, convex solver | Optimum survives V5 round-trip on 20 cases |
+| M11 | §13.3 static minimal medium | V6: agrees with the exact MILP on the true community |
+| M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% |
+| M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
+| M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
+
+M9–M11 need nothing that does not already exist. M12 is M6. M13 and M14 are the
+research half, and M14 is blocked on a piece of work — the error model — that is
+small and has not been started.
 
 ## Appendix — repository layout
 
@@ -1428,7 +1674,7 @@ community-fba-surrogates/
 │   │   ├── stacked.py             # §6.1 vmap harness
 │   │   └── train.py
 │   ├── compose/
-│   │   ├── dfba.py                # §8.1 — built; `cfs community`
+│   │   ├── dfba.py                # §8.1 — built; `cfs community`, `cfs simulate` (§13.1)
 │   │   ├── framings.py            # §8.2/§8.3 — not built
 │   │   └── solve.py               # Optimistix wrappers — not built
 │   ├── science/

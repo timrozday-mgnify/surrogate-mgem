@@ -260,6 +260,36 @@ def build_parser() -> argparse.ArgumentParser:
     cm.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the medium.")
     cm.add_argument("--seed", type=int, default=0)
 
+    sim = sub.add_parser(
+        "simulate", help="§13.1: integrate one community forward — batch or chemostat, no LP."
+    )
+    sim.add_argument("--value", type=Path, required=True, help="Head A checkpoint dir.")
+    sim.add_argument("--behaviour", type=Path, required=True, help="Head B checkpoint dir.")
+    sim.add_argument("--out", type=Path, required=True, help="Report + trajectory dir.")
+    sim.add_argument("--organisms", required=True, help="Comma-separated genome_ids.")
+    sim.add_argument("--medium", type=Path, default=None, help="JSON {exchange_id: mM}.")
+    sim.add_argument(
+        "--labels", type=Path, default=None, help="Label root: draw a §4.3 medium instead."
+    )
+    sim.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the draw.")
+    sim.add_argument(
+        "--abundances", default=None, help="Comma-separated initial shares (default: equal)."
+    )
+    sim.add_argument(
+        "--biomass",
+        type=float,
+        default=None,
+        help="Total inoculum, gDW/L. Default: solved for, so the pool empties at the end.",
+    )
+    sim.add_argument("--steps", type=int, default=200)
+    sim.add_argument("--hours", type=float, default=None, help="Horizon (default: --doublings).")
+    sim.add_argument("--doublings", type=float, default=4.0)
+    sim.add_argument(
+        "--dilution", type=float, default=0.0, help="Chemostat D (1/h). 0 = batch culture."
+    )
+    sim.add_argument("--feed", type=Path, default=None, help="Feed JSON (default: the medium).")
+    sim.add_argument("--seed", type=int, default=0)
+
     rf = sub.add_parser("baseline-rf", help="Random-forest baseline on the same split and gate.")
     rf.add_argument("--labels", type=Path, required=True, help="Label shard root (§4.5).")
     rf.add_argument("--index", type=Path, required=True, help="Frozen metabolite_index.json.")
@@ -415,6 +445,35 @@ def main(argv: list[str] | None = None) -> int:
             scales=args.scales,
         )
         print(json.dumps(report["summary"], indent=2))
+        return 0
+
+    if args.command == "simulate":
+        import numpy as np
+
+        from cfs.compose.dfba import simulate
+
+        report = simulate(
+            args.value,
+            args.behaviour,
+            args.out,
+            organisms=[g for g in args.organisms.split(",") if g],
+            labels_dir=args.labels,
+            medium=args.medium,
+            abundances=(
+                np.array([float(a) for a in args.abundances.split(",")])
+                if args.abundances
+                else None
+            ),
+            biomass=args.biomass,
+            steps=args.steps,
+            hours=args.hours,
+            doublings=args.doublings,
+            dilution=args.dilution,
+            feed=args.feed,
+            seed=args.seed,
+            scales=args.scales,
+        )
+        print(json.dumps(report, indent=2))
         return 0
 
     if args.command == "baseline-rf":

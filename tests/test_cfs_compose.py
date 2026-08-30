@@ -181,3 +181,32 @@ def test_behaviour_target_is_specific_flux(tmp_path):
     spec = ds.z_train[0] / ds.mu_train[0][:, None]
     assert np.allclose(spec[ds.mu_train[0] > 1.001 * floor, 0], 2.0)
     assert np.allclose(ds.z_scale[0], spec.std(axis=0))
+
+
+# --------------------------------------------------------------------------- #
+# §13.1 — continuous culture
+# --------------------------------------------------------------------------- #
+
+
+def test_chemostat_washes_out_a_slow_member():
+    # D > mu => X -> 0, D < mu => the member persists. This is the whole of
+    # `with_chemostat`'s biomass half, and it is the coexistence question §13.4
+    # is built on, so it is worth a closed form: X(t) = X0 exp((mu - D) t).
+    from cfs.compose.dfba import with_chemostat
+
+    mu = np.array([1.0, 0.2])
+    base = lambda c, X: (np.zeros(1), mu)  # noqa: E731
+    traj = integrate(with_chemostat(base, 0.5, np.zeros(1)), np.zeros(1), np.ones(2), 0.1, 100)
+    assert np.allclose(traj.x[-1], np.exp((mu - 0.5) * 10.0))
+    assert traj.x[-1, 0] > 100 and traj.x[-1, 1] < 0.05
+
+
+def test_chemostat_pool_relaxes_to_the_feed():
+    # No biomass: dc/dt = D (feed - c) => c -> feed with time constant 1/D.
+    from cfs.compose.dfba import with_chemostat
+
+    feed = np.array([3.0])
+    base = lambda c, X: (np.zeros(1), np.zeros(1))  # noqa: E731
+    traj = integrate(with_chemostat(base, 1.0, feed), np.zeros(1), np.ones(1), 0.01, 1000)
+    assert np.isclose(traj.c[-1, 0], 3.0, atol=1e-3)
+    assert np.isclose(traj.c[100, 0], 3.0 * (1 - np.exp(-1.0)), atol=1e-2)

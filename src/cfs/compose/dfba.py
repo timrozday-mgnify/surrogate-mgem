@@ -532,3 +532,155 @@ def run(
     }
     (Path(out) / "community.json").write_text(json.dumps(report, indent=2))
     return report
+
+
+# --------------------------------------------------------------------------- #
+# Phase 7 §13.1 — forward simulation, batch or continuous, with no LP in it
+# --------------------------------------------------------------------------- #
+
+
+def with_chemostat(rhs, dilution: float, feed: np.ndarray):
+    """Wrap a batch right-hand side into a continuous culture at rate ``D``.
+
+        dc/dt = ... + D (c_feed - c)      dX/dt = X (mu - D)
+
+    This is §8.1's ``inflow(c)``, plus washout. It needs no change to
+    :func:`integrate`: the biomass update is already ``X exp(dt mu)``, so a net
+    growth rate of ``mu - D`` is the whole of washout, and ``D = 0`` is exactly
+    the batch culture.
+    """
+    feed = np.asarray(feed, dtype=np.float64)
+
+    def f(c, X):
+        dc, mu = rhs(c, X)
+        return dc + dilution * (feed - c), mu - dilution
+
+    return f
+
+
+def simulate(
+    value_dir: Path,
+    behaviour_dir: Path,
+    out: Path,
+    *,
+    organisms: list[str],
+    labels_dir: Path | None = None,
+    medium: Path | None = None,
+    abundances: np.ndarray | None = None,
+    biomass: float | None = None,
+    steps: int = 200,
+    hours: float | None = None,
+    doublings: float = 4.0,
+    dilution: float = 0.0,
+    feed: Path | None = None,
+    seed: int = 0,
+    scales: Path | None = None,
+) -> dict:
+    """Integrate one community forward from a medium. Surrogate only — no LP.
+
+    ``dilution > 0`` makes it a chemostat fed with ``feed`` (default: the initial
+    medium). The accuracy of what comes out is M5's business (§8.1); this is the
+    same map with the ground truth, and therefore the cost, removed.
+    """
+    sur = Surrogate(value_dir, behaviour_dir, organisms=organisms)
+    c0 = _medium_vector(sur, organisms, labels_dir, medium, seed, scales)
+    c_feed = c0 if feed is None else _read_medium(feed, sur.exchanges)
+    share = np.full(len(organisms), 1.0 / len(organisms))
+    if abundances is not None:
+        share = np.asarray(abundances, float) / np.sum(abundances)
+
+    rhs = lambda c, X: rhs_surrogate(sur, c, X)  # noqa: E731
+    if dilution > 0:
+        rhs = with_chemostat(rhs, dilution, c_feed)
+
+    # §8.1's two clocks: the members double, and the pool empties (or, in a
+    # chemostat, the vessel turns over). A horizon set by one alone measures
+    # nothing -- an arbitrary inoculum kills a batch culture at 3% of its horizon.
+    # `dc/dt` is linear in X, so one probe at unit biomass fixes the inoculum that
+    # empties the pool at the end. Same solve as `run`, surrogate instead of LP.
+    dc1, mu0 = rhs(c0, share)
+    if mu0.max() <= 0:
+        raise ValueError("nobody grows on this medium at t=0")
+    if hours is None:
+        hours = doublings * np.log(2.0) / mu0.max()
+        if dilution > 0:
+            hours = max(hours, 5.0 / dilution)
+    drain = (c0 > 0) & (dc1 < 0)
+    if biomass is None:
+        biomass = float((c0[drain] / -dc1[drain]).min()) / hours if drain.any() else 1e-3
+    x0 = biomass * share
+
+    traj = integrate(rhs, c0, x0, hours / steps, steps)
+    Path(out).mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        Path(out) / "trajectory.npz",
+        t=traj.t,
+        c=traj.c,
+        x=traj.x,
+        mu=traj.mu,
+        dc=traj.dc,
+        exchanges=np.array(sur.exchanges),
+        genome_ids=np.array(organisms),
+    )
+    report = {
+        "genome_ids": organisms,
+        "mode": "chemostat" if dilution > 0 else "batch",
+        "dilution": dilution,
+        "t_end": hours,
+        "steps": steps,
+        "mu_initial": traj.mu[0].tolist(),
+        "mu_final": traj.mu[-1].tolist(),
+        "x_initial": traj.x[0].tolist(),
+        "x_final": traj.x[-1].tolist(),
+        "biomass": biomass,
+        # Coexistence, and only meaningful in a chemostat: in a batch culture every
+        # mu is 0 at the end because the pool is empty, not because anyone lost.
+        "washed_out": (
+            [g for g, m in zip(organisms, traj.mu[-1], strict=True) if m <= 0]
+            if dilution > 0
+            else None
+        ),
+        "t_exhausted": _exhausted(traj),
+        "first_empty": _first_empty(traj, sur.exchanges),
+        "cross_feeding": _cross_feeding_surrogate(sur, traj),
+    }
+    (Path(out) / "simulation.json").write_text(json.dumps(report, indent=2))
+    return report
+
+
+def _cross_feeding_surrogate(sur: Surrogate, traj: Trajectory) -> list[str]:
+    """Metabolites one member secretes and another consumes, mid-trajectory.
+
+    The surrogate's own view of :func:`_cross_feeding` — no LP, so no recall, just
+    the links. This is the community structure the run is usually for.
+    """
+    c = traj.c[len(traj.mu) // 2]
+    _, z = sur.mu_and_z(c, np.ones(len(sur.genome_ids), dtype=np.float32))
+    z = z[sur.members]
+    tol = 1e-6
+    both = (z > tol).any(0) & (z < -tol).any(0)
+    return [sur.exchanges[j] for j in np.flatnonzero(both)]
+
+
+def _read_medium(path: Path, exchanges: list[str]) -> np.ndarray:
+    """``{exchange_id: mM}`` JSON onto the frozen index. Absent = 0."""
+    spec = json.loads(Path(path).read_text())
+    col = {ex: j for j, ex in enumerate(exchanges)}
+    unknown = sorted(set(spec) - set(col))
+    if unknown:
+        LOGGER.warning(
+            "%d medium entries are not in the index, ignored: %s", len(unknown), unknown[:5]
+        )
+    c = np.zeros(len(exchanges))
+    for ex, v in spec.items():
+        if ex in col:
+            c[col[ex]] = float(v)
+    return c
+
+
+def _medium_vector(sur, gids, labels_dir, medium, seed, scales) -> np.ndarray:
+    if medium is not None:
+        return _read_medium(medium, sur.exchanges)
+    if labels_dir is None:
+        raise ValueError("give either --medium or --labels (to draw a §4.3 medium)")
+    return community_medium(labels_dir, gids, sur.exchanges, seed, scales)
