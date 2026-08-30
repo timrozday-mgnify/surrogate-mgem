@@ -96,7 +96,7 @@ def generate_organism(
     sampled = subspace.active or subspace.background
     probe = (
         demand_probe(
-            model, sampled, km_cfg, lo=cfg.log10_lo, hi=cfg.log10_hi, steps=cfg.probe_steps
+            model, sampled, km_cfg, lo=cfg.probe_lo, hi=cfg.log10_hi, steps=cfg.probe_steps
         )
         if cfg.probe
         else {}

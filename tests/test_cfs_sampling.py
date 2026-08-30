@@ -227,3 +227,51 @@ def test_background_is_perturbed_over_a_random_share():
     n_off = np.array([sum(m[ex] < rich for ex in bg) for m in media])
     assert n_off.max() > 30  # the "whole roster" end is still reachable
     assert ((n_off > 3) & (n_off < 30)).mean() > 0.5  # and so is everything between
+
+
+def test_low_mu_stratum_starves_a_few_metabolites_below_their_own_anchor():
+    """Deliberately slow media, co-limited and anchor-relative.
+
+    The focus strata straddle each metabolite's onset and the unfocused ones sit
+    near Km, which puts 76% of held-out media on the growth plateau — the band
+    Head A fits well and §8.1's slow members are not in. This stratum is the only
+    part of the design aimed below it, and it has to be *relative* to each
+    metabolite's own anchor: an absolute band leaves a metabolite whose onset is
+    at ``c/Km = 1e-6`` replete at ``1e-3``.
+    """
+    import numpy as np
+
+    ex = [f"EX_a{i}_e" for i in range(8)]
+    sub = ActiveSubspace("g", ex, [], dict.fromkeys(ex, 1.0), 10.0)
+    scales = dict.fromkeys(ex, 1e-6)  # onset 6 decades below Km
+    # The unfocused "below Km" stratum also goes under Km, so it is switched off:
+    # what is under test is the anchor-relative window, not that stratum.
+    cfg = SamplingConfig(n_media=600, seed=5, frac_low_mu=0.3, frac_focus=0.0, frac_below_km=0.0)
+    media = sample_media(sub, load_km_defaults(), cfg, scales)
+
+    rich = max(m[ex[0]] for m in media)
+    # Scarce == within the stratum's window around the anchor, not merely below Km.
+    n_scarce = np.array([sum(m[e] < rich * 1e-4 for e in ex) for m in media])
+    lo, hi = cfg.low_mu_subset
+    assert ((n_scarce >= lo) & (n_scarce <= hi)).sum() > 0.15 * len(media)
+    assert n_scarce.max() <= hi  # never the whole medium: that starves on everything
+
+
+def test_probe_floor_is_separate_from_the_unfocused_band():
+    """A focus stratum must reach its metabolite's onset however low that is.
+
+    Clamping it at ``log10_lo`` is what left 100 of 496 roster bands anchored at
+    the default and sampled replete in every medium — the M11 blocker.
+    """
+    sub = ActiveSubspace("g", ["EX_a_e"], [], {"EX_a_e": 1.0}, 10.0)
+    cfg = SamplingConfig(n_media=200, seed=1, frac_low_mu=0.0, frac_focus=1.0)
+    media = sample_media(sub, load_km_defaults(), cfg, {"EX_a_e": 1e-7})
+
+    km = load_km_defaults_km("EX_a_e")
+    assert min(m["EX_a_e"] for m in media) < km * 10 ** (cfg.log10_lo - 1)
+
+
+def load_km_defaults_km(ex):
+    from cfs.groundtruth.solve import km_for_exchange
+
+    return km_for_exchange(ex, load_km_defaults())
