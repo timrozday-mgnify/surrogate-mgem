@@ -29,7 +29,7 @@
 > | M5 dFBA composition | **built and measured over replicates; the 1% gate is not met, sizes 2/3 are within 2x.** 10 communities of size 2-21 against per-organism FBA on the same integrator: median log-X error ~5% at every size once Head A is trained at `--gm-temp 0.01` (was 4-32%), then **1.4% / 1.6% at sizes 10 / 21** with the output calibration (`cfs.surrogate.calibrate`); size 3 regressed to 7.2%. Specific-flux Head B + §3.3's uptake clamp + a community-regime label round, scored over **n=5 replicates** (3 Head A seeds x 3 medium draws): median log-X **0.9% / 1.8% / 7.6% / 2.7% / 2.7%** at sizes 2/3/5/10/21. Nothing passes 1%; sizes 2/3 are within 2x. A single run has ~6x sampling error on a small community — larger than any model change measured — so no single-draw M5 cell is quotable. **Error does not grow with community size** | `src/cfs/compose/dfba.py`, `src/cfs/surrogate/calibrate.py` |
 > | M3b HPC sweep | **two runs. 2026-08-25** (350 tasks, 324 cpu-h) refuted its own "scale closes the gap": width/depth inert. **2026-08-27** (442/442 tasks, 21 cells x 21 organisms) is the source of the roster numbers below. The rows arm has now failed to run three times | `examples/hpc_run/`, `--stage sweep` |
 >
-> | M9-M14 Phase 7 applications | **spec written; M9 done** — `cfs simulate` integrates a community forward, batch or chemostat (`--dilution`), surrogate only, no LP. The rest of the applications layer (convex growth maximisation, minimal medium, steady state, interaction maximisation, the inverse-problem posterior) is specced in **§13** with a per-use-case accuracy table: most need less than M3's and M5's unmet gates | `src/cfs/compose/dfba.py` (`simulate`, `with_chemostat`) |
+> | M9-M14 Phase 7 applications | **spec written; M9 and M10 done** — `cfs simulate` integrates a community forward, batch or chemostat (`--dilution`), surrogate only, no LP; `cfs maximise-growth` is §13.2's convex medium design, 19/20 V5 round-trips at the default trust region, median true gain +2.2%, median optimism 0.3%. The rest (minimal medium, steady state, interaction maximisation, the inverse-problem posterior) is specced in **§13** with a per-use-case accuracy table: most need less than M3's and M5's unmet gates | `src/cfs/compose/dfba.py` (`simulate`, `with_chemostat`), `src/cfs/science/growth.py` |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
@@ -958,6 +958,50 @@ Pooling both axes, n=5 replicates per community, `value_r1` + `behaviour_r1`:
 **What this means for the M5 gate:** it has to be stated over replicates. A single
 `cfs community` invocation has a 6x sampling error on a small community, which is
 larger than every model change measured today.
+
+### M10: the medium designer walks out of the design unless it is stopped — 2026-08-30
+
+`cfs maximise-growth` (`src/cfs/science/growth.py`) is §13.2: projected gradient
+ascent on `mu_k(c)` under `cost . c <= B` and a box, with the head's own analytic
+gradient chained through `dx/du . du/dc`, then every optimum round-tripped through
+the true LP (V5). Head B is not needed, so `compose.dfba.Surrogate` now accepts
+`behaviour_dir=None`.
+
+**The result is P21, and it is severe.** Left with the budget and a box, the
+designer pays for carbon by zeroing ~50 cheap metabolites at once, and the LP at
+its "optimum" does not grow at all — `mu_true` 12.1 -> 0.0 on one case, 38.8 -> 0.0
+on another, while the head reports an improvement. It is always the same
+mechanism: one zeroed essential trace metabolite takes `mu` to 0 however good the
+rest of the medium is.
+
+The trust region is in `x`, the head's own input coordinate and the one §6.3's
+nearest-training-medium distance is measured in, centred on the §4.3 start draw,
+and **multiplicative** (`--trust-decades`, default 0.5) — an *additive* radius 0.2
+still lets a metabolite at `x ~ 0.1` reach exactly zero and still loses 3 of 20
+cases. 20 cases, one per roster organism, `value_r1`:
+
+| trust region | improved | median gain | max gain | worst | median abs optimism |
+| --- | --- | --- | --- | --- | --- |
+| additive, radius 0.2 | 15/20 | — | — | **-100%** (x3) | — |
+| 0.25 decades | 17/20 | +2.2% | 1.2x | -0.0% | 0.30% |
+| **0.5 (default)** | 17/20 | +2.2% | 3.6x | **-14.8%** | 0.30% |
+| 1.0 decades | 18/20 | +2.2% | **106x** | -0.0% | 0.28% |
+
+1. **The gradient is good enough for this use case, as §13.7 said it would be.**
+   Median optimism `mu_hat(c*) - mu_true(c*)` is **0.3%** of the LP's own value,
+   and 17-18 of 20 ascents improve the *true* growth rate. The unimproved cases are
+   start media already at the plateau.
+2. **Median gain is 2.2% at every radius; the tail is what widens** (1.2x -> 3.6x
+   -> 106x), and the big gains are near-starving start media rescued by
+   reallocating the same total budget.
+3. **The one loss is a `mu = 2.0` start medium** and it is not monotone in the
+   radius (0.25 and 1.0 both pass) — one optimistic point in Head A's known weak
+   low-`mu` band, not a trust-region trend. Do not tune the radius on it.
+4. The region designs by *reallocation*: a metabolite the start medium has none of
+   stays at zero. Seed the start medium to ask "should I add X".
+
+Not done: non-uniform cost vectors, the selective-medium DC program (§13.2's
+sign-flipped version), and the community version, which needs M12's steady state.
 
 ### The conditioning bill is not §8's — measured, 2026-08-26
 >

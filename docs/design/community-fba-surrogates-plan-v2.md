@@ -1479,7 +1479,50 @@ the right-hand side on every measure (§8.1, the MM-clamp result). Report rates 
 structure; treat a batch endpoint as an estimate with a wide error bar, and prefer
 a chemostat steady state (§13.4) when a number has to be quoted.
 
-### 13.2 Maximise a member's growth rate over the medium — convex
+### 13.2 Maximise a member's growth rate over the medium — convex — **built 2026-08-30**
+
+`cfs maximise-growth` (`src/cfs/science/growth.py`). Projected gradient ascent in
+`c`: the head's own analytic gradient chained through `dx/du . du/dc`, and one
+bisection on the budget multiplier for the projection onto
+`{c_lo <= c <= c_hi, cost . c <= B}`. The output calibration is an increasing
+scalar map, so it cannot move the argmax and is applied only when a `mu` is
+reported. Head B is not needed, so `compose.dfba.Surrogate` now takes
+`behaviour_dir=None`.
+
+**P21 is not a footnote here, it is the result.** With the box alone the designer
+pays for carbon by zeroing ~50 cheap metabolites at once, and the LP at its
+"optimum" does not grow at all — `mu_true` 12.1 -> 0.0 while the head reports an
+improvement. That is 2 of the first 4 cases with no trust region, and still 3 of
+20 under an additive one; every one of those had zeroed something. The fix is a
+trust region in `x`, the head's own coordinate and the one §6.3's
+nearest-training-medium distance is measured in, centred on the §4.3 start draw,
+and **multiplicative** (`--trust-decades`, default 0.5) because §4.3's bands are:
+an additive radius still lets a trace metabolite at `x ~ 0.1` reach exactly zero,
+and one missing essential takes `mu` to 0 however good the rest of the medium is.
+
+| trust region | improved | median gain | max gain | worst | median abs optimism |
+| --- | --- | --- | --- | --- | --- |
+| additive, radius 0.2 | 15/20 | — | — | **-100%** (x3) | — |
+| 0.25 decades | 17/20 | +2.2% | 1.2x | -0.0% | 0.30% |
+| **0.5 (default)** | 17/20 | +2.2% | **3.6x** | **-14.8%** | 0.30% |
+| 1.0 decades | 18/20 | +2.2% | **106x** | -0.0% | 0.28% |
+
+1. **The gradient direction is good enough, as §13.7 predicted.** Median optimism —
+   `mu_hat(c*) - mu_true(c*)` relative to the LP — is **0.3%**, and the ascent
+   improves the *true* LP on 17-18 of 20 cases. The rest are start media already at
+   the plateau, where the correct answer is that there is nothing to buy.
+2. **The tail is where the value is.** Median gain is 2.2% at every radius, but the
+   best case goes 1.2x -> 3.6x -> 106x as the region widens: the large gains are
+   near-starving start media rescued by reallocating the same total budget.
+3. **The single loss is a low-`mu` start** (`CP001726.1`, `mu = 2.0` -> 1.71 at 0.5
+   decades), the band Head A is documented worst in (§7), and it is *not* monotone
+   in the radius — 0.25 and 1.0 both pass. Read it as one point where the head is
+   optimistic, not as a trust-region trend.
+4. The region is a reallocation: a metabolite the start medium has none of stays at
+   zero. Seeding the start medium is how "should I add X" gets asked.
+
+Not done: cost vectors other than uniform, the selective-medium DC program, and
+the community version at a steady state (that is M12).
 
 ```
 maximise    mu_k(c)        subject to    sum_m cost_m c_m <= B,   0 <= c <= c_max
@@ -1638,7 +1681,7 @@ the hardest downstream use, and most uses need less.
 | M | Deliverable | Gate |
 |---|---|---|
 | M9 | `cfs simulate`, batch + chemostat | **done 2026-08-30**; agrees with `cfs community`'s surrogate path on `D = 0` |
-| M10 | §13.2 growth maximisation, convex solver | Optimum survives V5 round-trip on 20 cases |
+| M10 | §13.2 growth maximisation, convex solver | Optimum survives V5 round-trip on 20 cases — **built 2026-08-30; 19/20 at the default trust region, 20/20 at 0.25 and at 1.0 decades.** Median true gain +2.2%, median optimism 0.3%. The one failure is a `mu = 2.0` start medium, the head's known weak band; it is not monotone in the trust radius. **Under an additive trust region 3/20 collapse to `mu_true = 0`, and under none at all 2 of the first 4** — P21, and the mechanism is zeroing an essential trace metabolite |
 | M11 | §13.3 static minimal medium | V6: agrees with the exact MILP on the true community |
 | M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% |
 | M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |

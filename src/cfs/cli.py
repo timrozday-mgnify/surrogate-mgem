@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--seed", type=int, default=0)
 
     tu = sub.add_parser(
-        "topup", help="§4.6: held-out diagnostics -> focus weights for the " "next generate round."
+        "topup", help="§4.6: held-out diagnostics -> focus weights for the next generate round."
     )
     tu.add_argument(
         "--diagnostics", type=Path, required=True, help="diagnostics.json from train-value."
@@ -259,6 +259,34 @@ def build_parser() -> argparse.ArgumentParser:
     cm.add_argument("--eps", type=float, default=1e-3, help="Elastic-net level for the LP truth.")
     cm.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the medium.")
     cm.add_argument("--seed", type=int, default=0)
+
+    gx = sub.add_parser(
+        "maximise-growth",
+        help="§13.2/M10: convex medium design — maximise one organism's mu, then V5 it.",
+    )
+    gx.add_argument("--roster", type=Path, required=True, help="Roster YAML (for the V5 LP).")
+    gx.add_argument("--labels", type=Path, required=True, help="Label root: start media (§4.3).")
+    gx.add_argument("--value", type=Path, required=True, help="Head A checkpoint dir.")
+    gx.add_argument("--out", type=Path, required=True, help="Report dir.")
+    gx.add_argument("--organisms", required=True, help="Comma-separated genome_ids to design for.")
+    gx.add_argument("--cases", type=int, default=20, help="(organism, medium draw) pairs.")
+    gx.add_argument(
+        "--budget-mult",
+        type=float,
+        default=1.0,
+        help="Budget as a multiple of the start medium's own cost (default: reallocate it).",
+    )
+    gx.add_argument(
+        "--trust-decades",
+        type=float,
+        default=0.5,
+        help="P21 trust region: how far each metabolite may move from the start "
+        "medium, in decades of the head's own input coordinate x. Unconstrained, "
+        "the designer leaves the design and the true LP stops growing.",
+    )
+    gx.add_argument("--iters", type=int, default=300)
+    gx.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the draw.")
+    gx.add_argument("--seed", type=int, default=0)
 
     sim = sub.add_parser(
         "simulate", help="§13.1: integrate one community forward — batch or chemostat, no LP."
@@ -475,6 +503,25 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(report, indent=2))
         return 0
+
+    if args.command == "maximise-growth":
+        from cfs.science.growth import run as run_growth
+
+        report = run_growth(
+            args.roster,
+            args.labels,
+            args.value,
+            args.out,
+            organisms=[g for g in args.organisms.split(",") if g],
+            cases=args.cases,
+            trust_decades=args.trust_decades,
+            budget_mult=args.budget_mult,
+            iters=args.iters,
+            seed=args.seed,
+            scales=args.scales,
+        )
+        print(json.dumps({k: v for k, v in report.items() if k != "cases"}, indent=2))
+        return 0 if report["passed"] else 1
 
     if args.command == "baseline-rf":
         # A measurement, not a gate: it always exits 0, however it scores.

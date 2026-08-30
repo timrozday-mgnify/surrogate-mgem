@@ -69,20 +69,26 @@ class Trajectory:
 class Surrogate:
     """Both frozen heads, evaluated together on the shared metabolite index."""
 
-    def __init__(self, value_dir: Path, behaviour_dir: Path, organisms: list[str] | None = None):
+    def __init__(
+        self,
+        value_dir: Path,
+        behaviour_dir: Path | None = None,
+        organisms: list[str] | None = None,
+    ):
         import jax.numpy as jnp
 
         from cfs.surrogate import behaviour as B
         from cfs.surrogate import train as T
 
         vheads, vmeta = T.load(Path(value_dir))
-        bheads, bmeta = B.load(Path(behaviour_dir))
+        # §13.2 needs mu alone, so Head B is optional; `mu_and_z` then refuses.
+        bheads, bmeta = (None, {}) if behaviour_dir is None else B.load(Path(behaviour_dir))
         for k in ("index_hash", "genome_ids", "exchanges"):
-            if vmeta[k] != bmeta[k]:
+            if bheads is not None and vmeta[k] != bmeta[k]:
                 raise ValueError(f"the two heads disagree on {k} (P13)")
         # x_scale is read off the labels, so two checkpoints trained on different
         # label roots compose into a silently wrong medium coordinate.
-        if not np.allclose(vmeta["x_scale"], bmeta["x_scale"]):
+        if bheads is not None and not np.allclose(vmeta["x_scale"], bmeta["x_scale"]):
             raise ValueError("the two heads were trained on different x_scale (P14)")
 
         self.genome_ids = list(vmeta["genome_ids"])
@@ -100,7 +106,7 @@ class Surrogate:
         self.value_cal = np.asarray(
             vmeta.get("value_cal") or T._identity_cal(len(self.genome_ids)), dtype=np.float64
         )
-        self.z_scale = np.asarray(bmeta["z_scale"], dtype=np.float32)
+        self.z_scale = None if bheads is None else np.asarray(bmeta["z_scale"], dtype=np.float32)
         # Head B emits flux *per unit growth*; the magnitude comes from Head A,
         # which is the accurate half. A pre-2026-08-30 checkpoint has no
         # `mu_floor` and emits flux directly.
@@ -122,6 +128,8 @@ class Surrogate:
 
     def mu_and_z(self, c: np.ndarray, alpha: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """``(mu, z)`` for every organism in the stack at medium ``c``."""
+        if self._bheads is None:
+            raise ValueError("this Surrogate was built without a behaviour checkpoint")
         jnp = self._jnp
         x = jnp.asarray(self._x(c))
         a = jnp.asarray(alpha[:, None], dtype=jnp.float32)
