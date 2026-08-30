@@ -79,10 +79,18 @@ class BehaviourDataset:
     x_val: np.ndarray
     a_val: np.ndarray
     z_val: np.ndarray
+    mu_train: np.ndarray  # (G, N*A) the *floored* mu_max of each row's medium
+    mu_val: np.ndarray
+    mu_floor: np.ndarray  # (G,) the floor itself, so the head can be composed
     z_scale: np.ndarray  # (G, M) per-metabolite flux scale; loss is dimensionless
     x_scale: np.ndarray  # (G, M) the Head A kink scale, so the heads compose
     index_hash: str
     rounds_present: list[int]
+
+
+# Head B divides its target by the medium's `mu_max`; below this fraction of the
+# organism's mean the division amplifies noise instead of removing a scale.
+_MU_FLOOR_FRAC = 0.05
 
 
 def _saturation(c: np.ndarray, km: np.ndarray) -> np.ndarray:
@@ -425,23 +433,43 @@ def load_behaviour_dataset(
     x, z = d["x"], d["z"]  # (G, N, M), (G, A, N, M)
     g, n_a, _, m = z.shape
 
+    # Exchange flux is very nearly proportional to how fast the organism is
+    # growing, and Head A already predicts that accurately. Measured on these
+    # labels: one constant per (metabolite, alpha) times `mu_max` explains a
+    # median 0.807 of the held-out z variance (0.63-0.86 over the 21 organisms),
+    # against the trained head's 0.921 -- i.e. most of what Head B currently
+    # learns is a magnitude Head A knows. Leaving it in the net is what produced
+    # M5's failing cells: at a scarce community medium the head predicted a
+    # replete organism's fluxes (|z| 2780 against a true 1040, cosine 0.40, on an
+    # organism whose held-out p05 is 0.93). So the head predicts *specific* flux
+    # z / mu_max and the magnitude is put back at composition time.
+    #
+    # Floored, because 1% of media have mu_max below 1% of the organism's median
+    # and dividing by those turns the target into noise -- the same trade
+    # `calibrate._W_FLOOR` makes.
+    mu_floor = _MU_FLOOR_FRAC * d["mu"].mean(axis=1)
+    mus = np.maximum(d["mu"], mu_floor[:, None])  # (G, N)
+
     def flat(idx):
-        # (G, A, |idx|, M) -> (G, A*|idx|, M); alpha broadcast to match.
+        # (G, A, |idx|, M) -> (G, A*|idx|, M); alpha and mu broadcast to match.
         xa = np.broadcast_to(x[:, None, idx, :], (g, n_a, len(idx), m))
         aa = np.broadcast_to(a[None, :, None], (g, n_a, len(idx)))
+        mm = np.broadcast_to(mus[:, None, idx], (g, n_a, len(idx)))
         return (
             xa.reshape(g, -1, m),
             aa.reshape(g, -1).astype(np.float32),
             z[:, :, idx, :].reshape(g, -1, m),
+            mm.reshape(g, -1).astype(np.float32),
         )
 
-    xt, at, zt = flat(ti)
-    xv, av, zv = flat(vi)
+    xt, at, zt, mt = flat(ti)
+    xv, av, zv, mv = flat(vi)
     # Per-(organism, metabolite) scale so the loss is dimensionless and one
     # high-flux exchange (usually O2 or CO2, O(10) against an ion's O(1e-3)) does
     # not own the objective. Robust to the ~63% exact zeros: std over the rows
-    # where the organism can exchange it at all, floored.
-    z_scale = zt.std(axis=1)
+    # where the organism can exchange it at all, floored. Taken on the *specific*
+    # flux, which is what the head emits.
+    z_scale = (zt / mt[:, :, None]).std(axis=1)
     z_scale[z_scale <= 0] = 1.0
     LOGGER.info(
         "Head B: %d alphas %s, %d train / %d held-out rows per organism",
@@ -461,6 +489,9 @@ def load_behaviour_dataset(
         x_val=xv,
         a_val=av,
         z_val=zv,
+        mu_train=mt,
+        mu_val=mv,
+        mu_floor=mu_floor.astype(np.float32),
         z_scale=z_scale.astype(np.float32),
         x_scale=d["x_scale"],
         index_hash=d["index_hash"],

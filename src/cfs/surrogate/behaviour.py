@@ -12,6 +12,14 @@ makes it convex, monotone or even continuous in general — D4's elastic net is 
 makes it continuous, which is the whole reason §5.4 exists. So this is a plain
 softplus MLP over ``(x, alpha)``, masked to ``M_i`` on both ends.
 
+**The head predicts specific flux ``z / mu_max``, not flux.** Exchange flux is
+nearly proportional to growth rate, Head A predicts growth rate accurately, and
+leaving that factor inside Head B is what broke M5's small communities: at a
+scarce community medium the head produced a replete organism's fluxes (|z| 2780
+against a true 1040) while Head A had ``mu`` right to 1%. Measured on the labels,
+one constant per (metabolite, alpha) times ``mu_max`` already explains a median
+0.807 of the held-out ``z`` variance. See :func:`cfs.surrogate.data.load_behaviour_dataset`.
+
 Two deliberate simplifications:
 
 * §6.3 suggests predicting non-negative uptake and secretion heads and returning
@@ -64,14 +72,17 @@ class BehaviourHead(eqx.Module):
         self.mask = jnp.asarray(mask, dtype=bool)
 
     def __call__(self, x: Array, alpha: Array) -> Array:
-        """Returns ``z / z_scale`` -- **normalised** flux, not mmol/gDW/h.
+        """Returns ``z / (mu_max * z_scale)`` -- **specific** flux, not mmol/gDW/h.
 
         The head works in units of each metabolite's own flux std. Raw ``z`` runs
         to O(400) on the gas exchanges and O(1e-3) on the ions, and a net
         initialised at ``sqrt(2/n_in)`` starts ~400x short on the ones that carry
         the variance; it then spends the run walking biases, which is the same
-        failure `picnn_u`'s scale-aware init exists to avoid. Multiply by
-        ``z_scale`` (stored in the checkpoint) to get fluxes -- :func:`flux`.
+        failure `picnn_u`'s scale-aware init exists to avoid. And it is *per unit
+        growth*: exchange flux is nearly proportional to ``mu_max``, which Head A
+        already predicts, so leaving that factor in the net makes it guess the
+        medium's richness -- see :func:`cfs.surrogate.data.load_behaviour_dataset`.
+        Multiply by ``mu_max * z_scale`` to get fluxes -- :func:`flux`.
         """
         h = jnp.concatenate([x * self.mask, jnp.atleast_1d(alpha)])
         for w, b in zip(self.w[:-1], self.b[:-1], strict=True):
@@ -90,9 +101,14 @@ def batched_z(heads: BehaviourHead, x: Array, alpha: Array) -> Array:
     return jax.vmap(heads)(x, alpha)
 
 
-def flux(heads, x: Array, alpha: Array, z_scale: Array) -> Array:
-    """``z`` in mmol/gDW/h: the head's normalised output times the label scale."""
-    return batched_z(heads, x, alpha) * z_scale[:, None, :]
+def flux(heads, x: Array, alpha: Array, z_scale: Array, mu: Array | None = None) -> Array:
+    """``z`` in mmol/gDW/h: specific flux times ``mu_max`` times the label scale.
+
+    ``mu`` is ``(G, B)``, already floored at ``mu_floor``. ``None`` reads a
+    pre-2026-08-30 checkpoint, whose head emits flux directly.
+    """
+    z = batched_z(heads, x, alpha) * z_scale[:, None, :]
+    return z if mu is None else z * mu[:, :, None]
 
 
 def organism(heads: BehaviourHead, i: int) -> BehaviourHead:
@@ -131,7 +147,7 @@ def train_behaviour_heads(
 ) -> eqx.Module:
     x = jnp.asarray(ds.x_train)
     a = jnp.asarray(ds.a_train)
-    zn = jnp.asarray(ds.z_train / ds.z_scale[:, None, :])
+    zn = jnp.asarray(ds.z_train / ds.mu_train[:, :, None] / ds.z_scale[:, None, :])
     heads = stack_heads(
         jax.random.PRNGKey(seed), len(ds.genome_ids), x.shape[-1], ds.mask, width, depth
     )
@@ -158,12 +174,21 @@ def train_behaviour_heads(
 # --------------------------------------------------------------------------- #
 
 
-def _predict(heads, x, a, z_scale, size: int = 512) -> np.ndarray:
-    """Held-out fluxes in label units, in slices (the val set is A x media rows)."""
+def _predict(heads, x, a, z_scale, mu, size: int = 512) -> np.ndarray:
+    """Held-out fluxes in label units, in slices (the val set is A x media rows).
+
+    ``mu`` is the label's own ``mu_max``: this scores Head B alone, not the pair.
+    """
     sc = jnp.asarray(z_scale)
     out = [
         np.asarray(
-            flux(heads, jnp.asarray(x[:, i : i + size]), jnp.asarray(a[:, i : i + size]), sc)
+            flux(
+                heads,
+                jnp.asarray(x[:, i : i + size]),
+                jnp.asarray(a[:, i : i + size]),
+                sc,
+                jnp.asarray(mu[:, i : i + size]),
+            )
         )
         for i in range(0, x.shape[1], size)
     ]
@@ -183,7 +208,7 @@ def evaluate(heads, ds: BehaviourDataset) -> dict:
       error is a cross-feeding link pointing backwards, which §8's Newton will
       happily converge to.
     """
-    z_hat = _predict(heads, ds.x_val, ds.a_val, ds.z_scale)
+    z_hat = _predict(heads, ds.x_val, ds.a_val, ds.z_scale, ds.mu_val)
     z = ds.z_val
     out = {"genome_ids": ds.genome_ids, "per_organism": {}}
     for i, gid in enumerate(ds.genome_ids):
@@ -235,11 +260,15 @@ def save(heads, ds: BehaviourDataset, outdir: Path, arch: dict, diagnostics: dic
                 "mask": ds.mask.astype(int).tolist(),
                 "x_scale": ds.x_scale.tolist(),
                 "z_scale": ds.z_scale.tolist(),
+                "mu_floor": ds.mu_floor.tolist(),
                 "alphas": ds.alphas.tolist(),
                 "input_transform": (
                     "u = c / (Km + c), x = u / (u + x_scale); Km from km_defaults.yaml"
                 ),
-                "output_units": "mmol / gDW / h per unit biomass; negative = uptake",
+                "output_units": (
+                    "specific flux: multiply by z_scale and by max(mu_max, mu_floor) "
+                    "for mmol / gDW / h per unit biomass; negative = uptake"
+                ),
                 "arch": arch,
             },
             indent=2,

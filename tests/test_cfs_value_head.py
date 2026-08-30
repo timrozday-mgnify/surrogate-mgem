@@ -519,3 +519,68 @@ def test_reanchor_revives_dead_planes_and_fixes_the_rows_they_left_behind():
     # Still a valid concave head: every seeded slope is non-negative.
     assert (np.asarray(jax.nn.softplus(h.wx[0])) >= 0).all()
     assert to_diag(jnp.asarray(ds.x_val)).shape == ds.x_val.shape
+
+
+def test_w_rel_cuts_the_low_mu_bias_the_plain_mse_leaves():
+    """The absolute MSE ignores the small-mu rows; ``--w-rel`` is what sees them.
+
+    On the real labels the plain loss over-predicts *every* held-out medium below
+    75% of max mu (median +98% below 5%), which is what the §8 composition
+    integrates. Here the same signature has to show on the synthetic target: the
+    bottom-quartile rows are fit relatively better with the term than without,
+    with no collapse of the plateau.
+    """
+    ds = _synthetic()
+    kw = dict(arch="icnn", width=64, depth=2, epochs=400, batch=64, lr=3e-2)
+
+    def low_mu_bias(w_rel):
+        heads = train_value_heads(ds, w_rel=w_rel, **kw)
+        mu = ds.mu_val / ds.mu_scale[:, None]
+        mu_hat = np.asarray(batched_value(heads, jnp.asarray(ds.x_val)))
+        low = mu < np.quantile(mu, 0.25, axis=1, keepdims=True)
+        return float(np.median(np.abs((mu_hat - mu)[low] / mu[low])))
+
+    assert low_mu_bias(1.0) < low_mu_bias(0.0)
+
+
+def test_temperature_anneal_reaches_its_final_value():
+    """`temp` is static, so annealing has to rebuild the treedef of the head *and*
+    of Adam's moments; a mismatch there is a pytree error mid-run, not a bad fit."""
+    ds = _synthetic()
+    heads = train_value_heads(
+        ds,
+        arch="groupmax-u",
+        width=1,
+        depth=1,
+        gm_group=16,
+        gm_temp=0.1,
+        gm_temp_final=0.01,
+        epochs=40,
+        batch=64,
+        lr=3e-2,
+    )
+    assert heads.temp == pytest.approx(0.01)
+    assert evaluate(heads, ds, arch="groupmax-u")["per_organism"]["g0"][
+        "concavity_violation_rate"
+    ] == 0.0
+
+
+def test_calibration_is_increasing_concave_and_identity_at_zero():
+    """`g(m) = m - d0*exp(-m/beta)` is what keeps `mu_hat` concave in `u` after the
+    low-mu bias is removed -- if it stopped being increasing and concave the head's
+    concavity guarantee and §8.4's PSD tag would go with it."""
+    from cfs.surrogate import calibrate
+
+    m = np.linspace(-0.2, 4.0, 500)[None, :]
+    assert np.allclose(calibrate.apply(m, np.array([[0.0, 1.0]])), m)
+    for cal in ([[0.09, 2.7]], [[0.4, 0.3]]):
+        g = calibrate.apply(m, np.array(cal))[0]
+        d = np.diff(g)
+        assert (d > 0).all()
+        assert (np.diff(d) <= 1e-12).all()
+
+    # And the fit recovers a planted bias of exactly that shape.
+    y = np.random.default_rng(0).uniform(0.0, 3.0, (2, 4000))
+    cal = calibrate.fit(y + 0.1 * np.exp(-y / 0.5), y)
+    resid = calibrate.apply(y + 0.1 * np.exp(-y / 0.5), cal) - y
+    assert abs(np.median(resid[y < 0.3])) < 0.01

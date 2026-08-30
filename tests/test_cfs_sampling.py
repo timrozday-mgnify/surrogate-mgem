@@ -205,3 +205,25 @@ def test_topup_round_appends_a_shard_and_both_rounds_load(tmp_path):
     both = pd.concat([pd.read_parquet(p) for p in base.paths + topup.paths])
     # Media ids stay disjoint: the train/val split is by medium_id.
     assert both["medium_id"].nunique() == len(both)
+
+
+def test_background_is_perturbed_over_a_random_share():
+    """The background regime must be a spectrum, not all-or-nothing.
+
+    A community pool takes an organism's *background* metabolites off their rich
+    level in whatever share the other members happen to consume — 20% of it for a
+    pair, most of it for the whole roster. Perturbing every held metabolite at once
+    (the pre-2026-08-30 behaviour) left the design bimodal, with no medium anywhere
+    between, and that hole is where every failing M5 community medium sits.
+    """
+    import numpy as np
+
+    bg = [f"EX_b{i}_e" for i in range(40)]
+    sub = ActiveSubspace("g", ["EX_a_e"], bg, {"EX_a_e": 1.0}, 10.0)
+    cfg = SamplingConfig(n_media=400, seed=3, frac_bg_perturb=1.0)
+    media = sample_media(sub, load_km_defaults(), cfg)
+
+    rich = max(m["EX_b0_e"] for m in media)
+    n_off = np.array([sum(m[ex] < rich for ex in bg) for m in media])
+    assert n_off.max() > 30  # the "whole roster" end is still reachable
+    assert ((n_off > 3) & (n_off < 30)).mean() > 0.5  # and so is everything between

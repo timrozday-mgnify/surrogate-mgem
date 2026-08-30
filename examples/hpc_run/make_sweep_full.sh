@@ -170,8 +170,27 @@ $GEN --labels "m20k=$L20" --arch groupmax-u --width 1 --depth 1 \
 # organism against 0.007 between Arm G's top three cells, a *single-seed* cell
 # ranking is noise. Three seeds per cell is the minimum that says so.
 $GEN --labels "m20k=$L20" --arch groupmax-u --width 1 --depth 1 \
-     --w-grad 10 --epochs 1500 --gm-group 1000 --gm-temp 0.03 \
+     --w-grad 10 --epochs 1500 --gm-group 1000 --gm-temp 0.01 \
      --gm-init labels --gm-reanchor 0,3 --seed 0,1,2 | emit
+
+# T is 0.01, not the 0.03 this arm was written at. Measured 2026-08-29 on 21
+# organisms: the smoothing sits ~T*ln(K_active) *below* the hard min, an absolute
+# offset, so at 0.03 the head over-predicts every medium below 75% of max mu
+# (median +98% below 5%) while scoring R2 0.986 and gradient cosine 1.000 there.
+# 0.03 -> 0.01 halves that bias and takes the §8.1 composition's worst community
+# from 0.322 to 0.051 log-X error, for worst cosine 0.958 -> 0.928 on one seed --
+# which is exactly what this arm's three seeds are for. 0.003 is worse than both.
+#
+# --w-rel adds the value error measured *relatively*; it removes the low-mu bias
+# outright at no cosine cost but sells plateau accuracy, and a large community
+# integrates the plateau. Measured on 3 organisms and on the roster at seed 0
+# only, so it gets the same seed treatment before it is believed.
+# Swept 0,0.3 rather than passed as a constant so the cell ids carry `wr` -- the
+# `wr0` trio repeats the `ra3` trio above under a second name, which is a free
+# determinism check and cheaper than an ambiguous id.
+$GEN --labels "m20k=$L20" --arch groupmax-u --width 1 --depth 1 \
+     --w-grad 10 --epochs 1500 --gm-group 1000 --gm-temp 0.01 --w-rel 0,0.3 \
+     --gm-init labels --gm-reanchor 3 --seed 0,1,2 | emit
 
 # --- Arm E: the rows axis, for real this time. 4000 vs 20000 media on the two heads
 # that bracket the question plus the forest. Prediction on file, so this is a real

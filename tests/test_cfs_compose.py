@@ -125,3 +125,59 @@ def test_behaviour_dataset_alpha_and_medium_alignment(tmp_path):
     # Each held-out medium appears once per alpha and no more.
     assert len(ds.z_val[0]) == len(val_mids) * len(alphas)
     assert np.allclose(ds.x_scale, va.x_scale)
+
+
+def test_behaviour_target_is_specific_flux(tmp_path):
+    """``mu_train`` is the floored ``mu_max``, and ``z_scale`` is taken on ``z/mu``.
+
+    Head B emits flux per unit growth and :mod:`cfs.compose.dfba` multiplies Head
+    A's ``mu`` back in. If the loader's divisor drifts from that floor the two
+    halves disagree by a factor that looks like a mediocre fit, not like a bug.
+    """
+    import json
+
+    import pandas as pd
+    import pytest
+
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("yaml")
+
+    from cfs.groundtruth.index import derive_index, write_index
+    from cfs.surrogate.data import _MU_FLOOR_FRAC, load_behaviour_dataset
+
+    ex = ["EX_glc__D_e", "EX_o2_e"]
+    index_path = tmp_path / "metabolite_index.json"
+    digest = write_index(derive_index(["g0"], [set(ex)]), index_path)
+    root = tmp_path / "labels"
+    shard = root / "g0" / "eps_0.001"
+    shard.mkdir(parents=True)
+    (root / "g0.exchanges.json").write_text(json.dumps({"exchanges": ex}))
+    # One medium is starving (mu_max = 0), which is what the floor exists for.
+    mus = {int(m): (0.0 if m == 3 else 1.0 + m) for m in range(10)}
+    pd.DataFrame(
+        [
+            {
+                "genome_id": "g0",
+                "index_hash": digest,
+                "medium_id": int(m),
+                "alpha": 1.0,
+                "eps": 1e-3,
+                "mu_max": mus[int(m)],
+                "status": "optimal",
+                "medium": [0.02, 0.01],
+                "z": [2.0 * mus[int(m)], -3.0],
+                "shadow": [-0.5, 0.0],
+            }
+            for m in range(10)
+        ]
+    ).to_parquet(shard / "part.parquet", index=False)
+
+    ds = load_behaviour_dataset(root, index_path, eps=1e-3, seed=0)
+    floor = _MU_FLOOR_FRAC * np.mean(list(mus.values()))
+    assert np.isclose(ds.mu_floor[0], floor)
+    assert ds.mu_train.min() == pytest.approx(floor)
+    # Glucose flux is exactly 2 * mu_max, so the specific flux is constant at 2
+    # everywhere the floor does not bite -- i.e. a zero scale, floored to 1.
+    spec = ds.z_train[0] / ds.mu_train[0][:, None]
+    assert np.allclose(spec[ds.mu_train[0] > 1.001 * floor, 0], 2.0)
+    assert np.allclose(ds.z_scale[0], spec.std(axis=0))

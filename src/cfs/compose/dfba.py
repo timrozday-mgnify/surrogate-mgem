@@ -43,12 +43,18 @@ from pathlib import Path
 
 import numpy as np
 
+from cfs.surrogate import calibrate
+
 LOGGER = logging.getLogger("cfs.compose.dfba")
 
 # A community medium is one draw from the §4.3 design over the *union* of the
 # members' active subspaces, so every metabolite sits in the band its own labels
 # were generated in. Sampling outside that is a fair test of nothing.
 _MEDIUM_SEED_STRIDE = 7919
+
+# Every exchange of every CarveMe GEM on the roster has |lower_bound| = 1000, which
+# is what §3.3 scales by saturation to make the uptake bound.
+_VMAX = 1000.0
 
 
 @dataclass
@@ -88,7 +94,19 @@ class Surrogate:
         self.mask = np.array(vmeta["mask"], dtype=bool)
         self.x_scale = np.asarray(vmeta["x_scale"], dtype=np.float32)
         self.mu_scale = np.asarray(vmeta["mu_scale"], dtype=np.float32)
+        # Head A over-predicts slow media, and `d(log X)/dt = mu` integrates exactly
+        # that relative error. Applied here, beside `mu_scale`, because it is a
+        # property of the checkpoint and not of the head (`cfs.surrogate.calibrate`).
+        self.value_cal = np.asarray(
+            vmeta.get("value_cal") or T._identity_cal(len(self.genome_ids)), dtype=np.float64
+        )
         self.z_scale = np.asarray(bmeta["z_scale"], dtype=np.float32)
+        # Head B emits flux *per unit growth*; the magnitude comes from Head A,
+        # which is the accurate half. A pre-2026-08-30 checkpoint has no
+        # `mu_floor` and emits flux directly.
+        self.mu_floor = (
+            np.asarray(bmeta["mu_floor"], dtype=np.float64) if "mu_floor" in bmeta else None
+        )
         self.km = _km_vector(self.exchanges)
         self._jnp = jnp
         self.members = (
@@ -107,10 +125,24 @@ class Surrogate:
         jnp = self._jnp
         x = jnp.asarray(self._x(c))
         a = jnp.asarray(alpha[:, None], dtype=jnp.float32)
-        mu = np.asarray(self.mod.batched_value(self._vheads, x))[:, 0] * self.mu_scale
-        z = np.asarray(self._B.flux(self._bheads, x, a, jnp.asarray(self.z_scale)))[:, 0]
-        # P2: an infeasible medium has mu_max = 0, and a head is free to dip below.
-        return np.maximum(mu, 0.0), z * self.mask
+        mu = np.asarray(self.mod.batched_value(self._vheads, x))[:, 0]
+        mu = calibrate.apply(mu[:, None], self.value_cal)[:, 0] * self.mu_scale
+        mu = np.maximum(mu, 0.0)  # P2: an infeasible medium has mu_max = 0.
+        zmu = (
+            None
+            if self.mu_floor is None
+            else jnp.asarray(np.maximum(mu, self.mu_floor)[:, None], dtype=jnp.float32)
+        )
+        z = np.asarray(self._B.flux(self._bheads, x, a, jnp.asarray(self.z_scale), zmu))[:, 0]
+        # §3.3's uptake bound, which the LP that made the labels could not violate
+        # and Head B can: `z_m >= -Vmax_m * u_m`. Vmax is 1000 on every exchange of
+        # every roster GEM (`solve.set_medium_bounds`'s fallback is the same 1000),
+        # so this is a constant, not a fit. It is a projection onto a convex set the
+        # true `z` is already inside, so it cannot increase the error -- and it is
+        # exactly where the composition went wrong: at the worst M5 community the
+        # head predicted `EX_glyc3p_e` uptake of -329 against a physical floor of
+        # -14, on 28 of one member's 213 exchanges at once.
+        return mu, np.maximum(z, -_VMAX * (c / (self.km + c))) * self.mask
 
 
 def _km_vector(exchanges: list[str]) -> np.ndarray:

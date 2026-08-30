@@ -54,6 +54,19 @@ min's accuracy *and* buys the curvature §8 needs; 0.1 is already past the knee 
 0.3 collapses. A trained head's pre-activations need not sit on the label scale, so
 treat this as a prior on the axis rather than a transferred optimum.
 
+**Within that window ``T`` is set by the low-``mu`` bias, and 0.01 wins — measured
+2026-08-29, which is why ``DEFAULT_TEMP`` moved from 0.03.** The smoothing sits
+``~T*ln(K_active)`` *below* the hard min: an absolute offset, so it is ~4% of a
+plateau ``mu`` and >100% of a starving one, and the absolute value MSE (74% of rows
+are plateau) then lifts the bottom past the target rather than fixing it. On 21
+organisms, 0.03 -> 0.01 takes the median bias below 5% of max ``mu`` from **+0.978
+to +0.442** and the §8.1 composition's worst community from 0.322 to 0.051 log-X
+error, ~5% at every community size, for worst gradient cosine 0.958 -> 0.928 (one
+seed). Outside the window it reverses: **T=0.003 is worse than both on every
+axis** (bias +1.305, worst cosine 0.880) — an optimisation failure, not a
+representation one, and annealing into it (``--gm-temp-final``) does not rescue it
+at roster scale either.
+
 The design **nests max-affine exactly**: ``width=1, depth=1, group=K`` is
 ``min_k(a_k . w + c_k)`` and nothing else. Wider and deeper generalises it.
 
@@ -74,7 +87,7 @@ from cfs.surrogate.picnn import _softplus_inv
 from cfs.surrogate.picnn_u import INPUT_TRANSFORM, W_CAP, to_diag  # noqa: F401
 
 DEFAULT_GROUP = 8
-DEFAULT_TEMP = 0.03
+DEFAULT_TEMP = 0.01
 
 
 class GroupMaxHead(eqx.Module):
@@ -189,6 +202,32 @@ def batched_value(heads: GroupMaxHead, x: Array) -> Array:
 def batched_value_diag(heads: GroupMaxHead, w: Array) -> Array:
     """``batched_value`` in the concavity coordinate — takes ``w``, not ``x``."""
     return jax.vmap(head_in_diag(heads))(w)
+
+
+def with_temp(heads: GroupMaxHead, temp: float) -> GroupMaxHead:
+    """Same head, different temperature.
+
+    ``temp`` is a static field, so it lives in the treedef: ``dataclasses.replace``
+    re-enters the custom ``__init__`` (which rebuilds the weights from a key),
+    ``eqx.tree_at`` only reaches leaves, and ``copy.copy`` re-runs the vmapped
+    constructor. Rebuilding the treedef and re-hanging this head's leaves on it is
+    the one route that touches neither. Retraces the step, so call it a few times
+    per run, not every epoch."""
+    # `None` is a leaf here: Adam's moments are the *filtered* head, whose static
+    # leaves are None, and dropping them would shift every remaining leaf.
+    leaves = jax.tree_util.tree_flatten(heads, is_leaf=lambda z: z is None)[0]
+    # A treedef carries the static fields but no shapes, so a one-input head of the
+    # same depth donates a structurally identical one with the new temperature.
+    like = GroupMaxHead(
+        jax.random.PRNGKey(0),
+        1,
+        jnp.ones((1,), bool),
+        width=1,
+        depth=len(heads.wx),
+        group=heads.group,
+        temp=temp,
+    )
+    return jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(like), leaves)
 
 
 @eqx.filter_vmap(in_axes=(0, 0))

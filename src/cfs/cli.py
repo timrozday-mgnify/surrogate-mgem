@@ -59,6 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--outdir", type=Path, required=True, help="Parquet shard root.")
     gen.add_argument("--n-media", type=int, help="Override media per organism (default 20000).")
     gen.add_argument(
+        "--bg-perturb",
+        type=float,
+        help="Fraction of media whose background is perturbed off its rich level, "
+        "over a random share of it (default 0.10). This is the community regime — "
+        "raise it for a round meant to cover §8.1 media.",
+    )
+    gen.add_argument(
         "--scales",
         type=Path,
         help="JSON {genome_id: {exchange: scale}} from "
@@ -143,8 +150,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--gm-temp",
         type=float,
         default=None,
-        help="groupmax-u only: softmax temperature. Curvature scales as 1/T, so "
-        "this is the Newton conditioning knob (§8). Default 0.1.",
+        help="groupmax-u only: softmax temperature. Sets how much the head "
+        "over-predicts a slow-growing medium (the smoothing sits ~T*ln(K) below "
+        "the hard min, an absolute offset). Default 0.01, measured; 0.03 and "
+        "0.003 are both worse.",
     )
     tv.add_argument(
         "--gm-init",
@@ -177,6 +186,23 @@ def build_parser() -> argparse.ArgumentParser:
     tv.add_argument("--batch", type=int, default=512)
     tv.add_argument("--lr", type=float, default=3e-3)
     tv.add_argument("--w-grad", type=float, default=1.0, help="Sobolev term weight (§7.1).")
+    tv.add_argument(
+        "--w-rel",
+        type=float,
+        default=0.0,
+        help="Weight on the *relative* value error, on top of the absolute MSE. "
+        "The MSE alone leaves the head over-predicting every medium below 75%% of "
+        "max mu (median +98%% below 5%%), which is what a slow member costs the §8 "
+        "composition. 0.3 removes the bias at no cost in grad_cosine or R2.",
+    )
+    tv.add_argument(
+        "--gm-temp-final",
+        type=float,
+        default=None,
+        help="groupmax-u only: anneal the temperature from --gm-temp to this over "
+        "the run, in 3 geometric steps. Low T is what stops the head over-predicting "
+        "slow media; a low *fixed* T trains worse, so this separates the two.",
+    )
     tv.add_argument("--seed", type=int, default=0)
     tv.add_argument(
         "--organisms",
@@ -323,12 +349,14 @@ def main(argv: list[str] | None = None) -> int:
             batch=args.batch,
             lr=args.lr,
             w_grad=args.w_grad,
+            w_rel=args.w_rel,
             emb_dim=args.emb_dim,
             phi_hidden=args.phi_hidden,
             gm_group=args.gm_group,
             gm_temp=args.gm_temp,
             gm_init=args.gm_init,
             gm_reanchor=args.gm_reanchor,
+            gm_temp_final=args.gm_temp_final,
             k_code=args.k_code,
             seed=args.seed,
             organisms=organisms,
@@ -508,6 +536,8 @@ def main(argv: list[str] | None = None) -> int:
         from cfs.sampling.generate import generate_roster
 
         cfg = SamplingConfig(seed=args.seed, probe=not args.no_probe)
+        if args.bg_perturb is not None:
+            cfg = replace(cfg, frac_bg_perturb=args.bg_perturb)
         if args.n_media is not None:
             cfg = replace(cfg, n_media=args.n_media)
         scales = json.loads(args.scales.read_text()) if args.scales else None

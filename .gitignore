@@ -39,3 +39,4 @@ rendered_reports/
 # Local run outputs / tooling
 results/
 .serena/
+runinfo.csv

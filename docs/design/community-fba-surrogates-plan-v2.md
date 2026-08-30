@@ -271,6 +271,31 @@ steepest and where feasibility flips.
   single-limitation facets of the value function.
 - Sobol sequences within each stratum, not uniform random.
 
+> **Correction (2026-08-30, measured) — the design must cover the *community*
+> regime, and it did not.** §4.2 fixes each organism's background at one rich
+> level and varies only `A_i`. In a community the shared pool is drawn over the
+> **union** of the members' active subspaces, so a member routinely sees a large
+> share of its own background metabolites off replete at once — ~20% of it for a
+> pair, most of it for the whole roster. `SamplingConfig.frac_bg_perturb` was
+> already the knob for this and was degenerate: it perturbed the background
+> all-or-nothing, 10% of media with *every* held metabolite redrawn and 90% with
+> none. The design was therefore bimodal in exactly the axis the composition moves
+> along, with nothing in between.
+>
+> That hole is where §8.1's failing communities sat. Head B's held-out flux cosine
+> tracks distance to the nearest training medium on **all 21 organisms** (Spearman
+> 0.33–0.84, median 0.65), the worst community medium is **2.92** from its nearest
+> neighbour against a held-out median of 0.10 — and it is a *joint* gap, not a
+> marginal one: every coordinate of it is inside that organism's own training
+> range and its count of scarce dimensions is typical.
+>
+> `sample_media` now draws a random **share** of the background per medium, which
+> spans every community size in one design; `cfs generate --bg-perturb` exposes the
+> fraction. An 800-media round at `--bg-perturb 0.9` on 21 organisms leaves 98.9%
+> of media growing, so the "titrate everything at once" collapse (which is real —
+> see the legacy pipeline's `n_limiting`) does not happen with a random share.
+> Test: `tests/test_cfs_sampling.py::test_background_is_perturbed_over_a_random_share`.
+
 ### 4.4 Growth-rate grid
 
 `alpha ∈ {0, 0.25, 0.5, 0.7, 0.85, 0.93, 0.97, 1.0}` — K=8, densified near 1
@@ -622,6 +647,40 @@ composition time.
 > on the dimensions carrying the variance and Adam spends the run walking biases.
 > Same failure as §7's input-side scale problem, in the output layer.
 
+> **Update (2026-08-30) — the head predicts *specific* flux `z / mu_max`, and the
+> magnitude comes from Head A.** Exchange flux is very nearly proportional to how
+> fast the organism is growing. Measured on these labels, a model with no inputs at
+> all — one constant per (metabolite, alpha) times `mu_max` — explains a median
+> **0.807** of the held-out `z` variance (0.63–0.86 over the 21 organisms) against
+> the trained net's 0.921. So most of what Head B was learning was a magnitude
+> Head A predicts directly and accurately (`mu_rel` <= 3% on every §8.1 community).
+>
+> Leaving it inside Head B is what broke §8.1's small communities: at a scarce
+> community medium the head produced a replete organism's fluxes (|z| 2780 against
+> a true 1040, flux cosine 0.40, on an organism whose held-out p05 is 0.93) while
+> Head A had `mu` right to 1%. The divisor is floored at
+> `data._MU_FLOOR_FRAC` = 5% of the organism's mean `mu` — 1% of media have
+> `mu_max` below 1% of the median and dividing by those turns the target into
+> noise, the same trade `calibrate._W_FLOOR` makes. The floor is in the checkpoint
+> as `mu_floor`; a checkpoint without it reads as flux directly.
+>
+> **A second, free constraint: §3.3's own uptake bound.** The LP that made the
+> labels cannot take up faster than `-Vmax_m * u_m`, and every exchange of every
+> roster GEM has `|lower_bound| = 1000`, so the bound is a constant times the
+> head's own input saturation — no fit, nothing stored. Head B has no such
+> constraint and broke it badly: at the worst community, **28 of one member's 213
+> exchanges** were below the floor at once, by up to 186x, and those were the same
+> entries leading the `dc` error. `compose.dfba.Surrogate.mu_and_z` clamps. It is a
+> projection onto a convex set the true `z` is already inside, so the right-hand-side
+> error cannot rise — and does not: `dc_rel` fell on 10/10 communities. **A strictly
+> better right-hand side is not a monotonically better trajectory**, though: the
+> clamp changes which metabolite empties first, and a batch culture's endpoint turns
+> on that, so two of ten trajectories got worse while all ten right-hand sides
+> improved.
+>
+> After both changes plus the §4.3 community-regime round, held out on the same 800
+> media: worst **R² 0.907**, median 0.952, worst sign agreement 0.957.
+
 ---
 
 ## 7. Phase 4 — training
@@ -874,6 +933,23 @@ A separate head is not constrained to be the derivative and breaks concavity.
 The gradient term is the one that matters. Both the master problem and HMC
 follow slopes and never look at values.
 
+**`w_v` alone is measured to be the wrong value term (2026-08-29).** It is
+absolute, and 74% of held-out rows sit on the plateau, so the media below a
+quarter of max `mu` carry no weight and the head over-predicts *every one of
+them*. `cfs train-value --w-rel` adds the same error measured relatively,
+
+```
++ w_rel * ((mu_hat - mu) / (mu + 0.1 * mean_media(mu)))^2
+```
+
+with the denominator floored at 0.1 of the organism's mean `mu` — without the
+floor the plateau goes unweighted and value R² collapses to −1.66. It removes
+the low-`mu` bias outright at **no cost in gradient cosine**, but it buys the
+bottom by selling the plateau, and a large community's log-X error is mostly
+plateau. Default 0; see the low-`mu` status block below for when to raise it — and
+prefer the output calibration (`cfs.surrogate.calibrate`, recorded in the same
+section), which makes the same correction *after* training at no cost to the gate.
+
 ### 7.2 Schedule
 
 1. Head A alone, value + gradient loss, until gradient cosine plateaus.
@@ -891,6 +967,153 @@ Head A's output, so a moving Head A makes Head B's targets non-stationary.
   Newton failure in Phase 5.
 - Per-metabolite gradient error — expect the worst errors on metabolites in
   `A_i` near their limitation boundary, and check that is where they are.
+- **Relative value error and bias below 25% of max `mu`** (`value_rel_err_low_mu`,
+  `value_bias_low_mu`). Nothing else here can see it: value R² and the MSE are
+  absolute, so a head reads R² 0.99 while over-predicting a starving medium by
+  +98%, and its *gradient* cosine on those same rows is 1.000. §8 integrates
+  `d(log X)/dt = mu`, so this is the number a slow community member feels.
+
+> **Head A over-predicts at low `mu` — measured 2026-08-29, and the temperature
+> is the lever.** This is §8.1's "the next Head A signal is accuracy at low `mu`",
+> carried out. Held-out media binned by each organism's own `mu / max(mu)`,
+> `value_ra3` (seeded `groupmax-u`, K=1000, T=0.03, `--gm-reanchor 3`, `w_grad`
+> 10), 21 organisms:
+>
+> | band | rows | median rel err | median bias | grad cosine |
+> |---|---|---|---|---|
+> | < 5% of max `mu` | 52 | 0.978 | **+0.978** | 1.000 |
+> | 5–10% | 26 | 0.427 | +0.427 | 1.000 |
+> | 10–25% | 29 | 0.188 | +0.188 | 1.000 |
+> | 25–50% | 42 | 0.117 | +0.117 | 0.994 |
+> | 50–75% | 33 | 0.065 | +0.065 | 0.943 |
+> | > 75% | 586 | 0.012 | −0.012 | 0.959 |
+>
+> **100% of held-out rows below 75% of max `mu` are over-predicted**, and the
+> error is pure bias — median |rel| equals median signed rel in every low band. It
+> is invisible to every diagnostic that existed before this: value R² is 0.986 and
+> the *gradient* cosine in those bands is 1.000, better than on the plateau. §7.3
+> now reports it.
+>
+> **It is not labels, coverage, or the plane budget.** The parameter-free
+> cutting-plane model over the same organism's training tangents has bias
+> **−0.000 in every band including <5%**, and so does the K=1000 subset picked by
+> `rank_by_active_set` — that is, the head's own *initialisation*. Training
+> creates the bias. Two absolute offsets do it:
+>
+> 1. the smoothed group max sits `~T*ln(K_active)` **below** the hard min — ~0.2 in
+>    `mu_scale` units at T=0.03, which is 4% of a plateau `mu` and >100% of a
+>    starving one. The 1-epoch seeded head reads −1.207 at <5% and −0.040 at the
+>    plateau, exactly that shape;
+> 2. §7.1's value term is an absolute MSE with 74% of rows on the plateau, so Adam
+>    removes the offset where the rows are and lifts the bottom straight past the
+>    target.
+>
+> **`--gm-temp 0.01` fixes more of it than anything in the loss, and it is what §8
+> feels.** Roster (21 organisms) plus the same 10 communities as the §8.1 block,
+> per-organism FBA truth, seed 0, everything else identical:
+>
+> | run | low-`mu` bias | plateau rel | worst cos | med R² | log-X err, sizes 2/3/5/10/21 |
+> |---|---|---|---|---|---|
+> | T=0.03 (`value_ra3`) | +0.978 | 0.012 | **0.958** | 0.986 | 0.055 / 0.122 / **0.322** / 0.041 / 0.044 |
+> | **T=0.01 (`value_T01`)** | +0.442 | **0.005** | 0.928 | **0.990** | **0.034 / 0.050 / 0.051 / 0.048 / 0.047** |
+> | T=0.01, `--w-rel 0.3` | +0.100 | 0.014 | 0.924 | 0.989 | 0.058 / 0.082 / 0.060 / 0.065 / 0.064 |
+> | T=0.01, `--w-rel 1` | −0.002 | 0.031 | 0.944 | 0.986 | 0.095 / 0.101 / 0.085 / 0.140 / 0.138 |
+> | T=0.003 | +1.305 | 0.018 | 0.880 | 0.979 | 0.150 / 0.555 / 0.293 / 0.394 / 0.352 |
+> | anneal 0.03 → 0.01 | −0.101 | 0.026 | 0.928 | 0.989 | 0.089 / 0.146 / 0.137 / 0.098 / 0.099 |
+> | anneal 0.03 → 0.003 | +0.315 | 0.022 | 0.899 | 0.986 | 0.094 / 0.198 / 0.166 / 0.095 / 0.102 |
+>
+> 1. **T=0.01 is a sweet spot, not a direction.** It cuts §8.1's worst community
+>    from 0.322 to 0.051 log-X error and flattens M5 to ~5% at *every* size;
+>    T=0.003 is worse than either neighbour on every axis, so "sharper is better"
+>    is refuted. The price is worst gradient cosine 0.958 → 0.928 — about 2x the
+>    seed sd, on one seed, unrepeated. **This supersedes T=0.03 as the operating
+>    point**; the earlier reading that `T` is an accuracy-only knob stands, but its
+>    accuracy is the low-`mu` half, which nothing was measuring.
+> 2. **`--w-rel` trades the bottom against the plateau.** It removes the bias with
+>    no cosine cost (0.928 → 0.924 → 0.944 across 0 / 0.3 / 1), but composition gets
+>    monotonically worse on the large communities, which is where the plateau is.
+>    Raise it only when slow members dominate the question being asked.
+> 3. **Two obvious fixes that do not work.** *More low-`mu` labels*: the
+>    information is already in the labels — the cutting-plane model over the
+>    existing tangents is unbiased — so extra rows change only the low-`mu` row
+>    *share*, i.e. a reweighting, which `--w-rel` does directly instead of ~1 h per
+>    organism of solves. *A harder softmax reached by annealing* (`--gm-temp-final`,
+>    3 geometric stages): decisive on 3 organisms (0.03 → 0.003 took the bias
+>    +1.845 → **−0.009** with the plateau intact) and **beaten by fixed T=0.01 on
+>    all 21**, on every axis. Kept, off by default, with the refutation on file.
+>    That is the third one-organism/three-organism frontier not to survive the
+>    roster — the `icnn-u` `w_grad` sweep and the seeded-head cosine were the
+>    others. **Do not promote a sub-roster frontier again.**
+> 4. **The temperature cannot be made per-row.** `T*logsumexp(a/T)` is concave in
+>    `a` only for constant `T`, and exact concavity in `u` is what the head is for;
+>    per-epoch is free, per-prediction is not. `--w-rel` *is* the per-row
+>    growth-rate weighting — `1/(mu + 0.1*mean mu)^2` — and its scalar plus that
+>    0.1 floor are its shape knobs.
+>
+> Not done: multi-seed confirmation of the 0.958 → 0.928 cosine cost, Head B
+> retrained at T=0.01 (`behaviour_b1` is reused above, which is fair since only
+> Head A changed), and `--w-rel` / `--gm-temp` on the HPC sweep.
+
+> **Implementation status (2026-08-30) — the low-`mu` bias is an output
+> calibration, and calibrating for the *plateau* is what buys M5.**
+> `src/cfs/surrogate/calibrate.py`. The bias is a function of the **predicted value
+> alone**: an isotonic map fit on the train rows and applied to held-out media
+> drives every band's median bias to ≤ 0.005 and *raises* R² (0.9898 → 0.9901). That
+> is a second, independent refutation of "more low-`mu` media would help" — nothing
+> is missing from `mu_hat`.
+>
+> `g(m) = a*m − d0*exp(−m/beta)` is increasing (`a, d0 ≥ 0`) and concave
+> (`g'' < 0`), so `g(head(u))` stays exactly concave and non-decreasing in `u` —
+> §8.4's PSD Hessian tag and `concavity_violation_rate` both survive — and the
+> gradient is scaled by a positive per-row scalar, so **`grad_cosine` is
+> bit-identical**. Unlike `--w-rel`, nothing is traded on the gate. It is fit at the
+> end of `train.run` on the training rows, stored in the checkpoint JSON beside
+> `mu_scale`, and applied where `mu_scale` is (`train.evaluate`,
+> `compose.dfba.Surrogate.mu_and_z`), so every existing checkpoint deserialises
+> unchanged and reads the identity. Bound `beta ≥ 0.05 ×` the prediction range: a few
+> organisms predict slightly negative `mu`, where an unbounded fit explodes
+> (worst R² −7).
+>
+> **The fit weight is the result.** Residuals are divided by
+> `max(|mu|, _W_FLOOR * max|mu|)`. Same 10 communities and media as the §8.1 block,
+> `value_T01` throughout, per-organism FBA truth:
+>
+> | median log-X error | n=2 | n=3 | n=5 | n=10 | n=21 | low-`mu` bias | plateau |
+> |---|---|---|---|---|---|---|---|
+> | uncalibrated | 0.034 | **0.050** | 0.051 | 0.048 | 0.047 | +0.446 | −0.005 |
+> | `--w-rel 0.3` | 0.058 | 0.082 | 0.060 | 0.065 | 0.064 | +0.100 | +0.014 |
+> | `_W_FLOOR` = 0 (pure relative) | 0.046 | 0.074 | 0.061 | 0.098 | 0.098 | **−0.033** | −0.009 |
+> | **`_W_FLOOR` = 0.3 (default)** | **0.024** | 0.072 | **0.044** | **0.014** | **0.016** | −0.250 | **−0.002** |
+>
+> `median_mu_rel` at size 21 goes 0.009 → 0.005; R² and cosine do not move.
+> **Sizes 10 and 21 are 1.4% / 1.6% against M5's 1% gate**, from 4.7%. Size 3 is the
+> one regression (0.050 → 0.072).
+>
+> The `_W_FLOOR` = 0 row is the trap: it removes the bias on *every* band and
+> doubles the composition error. The map is downward-only, the plateau was already
+> at −0.005, and `d(log X)/dt = mu` integrates the plateau, not the bottom — the same
+> trade `--w-rel` makes, moved after training. **Tune this by the composition, never
+> by `value_bias_low_mu`.**
+>
+> **This retracts the softmin-offset mechanism above (point 1 of the block).**
+> Re-evaluating the *same trained head* at `T → 1e−6` (`groupmax.with_temp`) makes
+> the bias **worse** — +0.860 against +0.446 below 5% of max `mu`. The smoothing gap
+> is a *downward* offset that partially cancels the bias; what is left is plane
+> placement, which is what the class predicts: a min of tangents to a concave
+> function is an upper bound everywhere, so positive bias is the only bias a
+> max-affine head can have unless a plane sits tangent at that row. The smoothing is
+> still what *creates* it during training (point 2 stands, and T=0.01 still beats
+> 0.03), but it is not what the checkpoint carries.
+>
+> **Also dead:** running `--gm-temp 0.03` plus calibration to recover worst cosine
+> 0.928 → 0.947. `community_ra3_cal` loses to uncalibrated `value_T01` on every
+> axis (log-X 0.081 at size 21). T=0.01 stays.
+>
+> **Not the lever:** re-anchoring on relative error. `reanchor` ranks rows by
+> gradient cosine and the low-`mu` rows score **1.000**, so they are never picked.
+> Re-ranked by relative over-prediction, one post-hoc pass moves +0.446 → 0.313 at
+> 30% of the planes and costs worst cosine 0.928 → 0.901. Untested *inside*
+> training, where a re-anchored plane still has epochs to settle.
 
 ---
 
@@ -967,9 +1190,81 @@ gradients are badly conditioned; a one-shot root-find is not.
 > a plain L2 over the pool reads 0.7% on a trajectory where the limiting ion is
 > gone in the truth and untouched in the surrogate.
 >
+> **Update 2026-08-29 — points 2 and 3 are now acted on, and the numbers above
+> are superseded.** Re-running the identical 10 communities against a Head A
+> trained at `--gm-temp 0.01` (§7.3's low-`mu` block) gives median log-X error
+> 0.034 / 0.050 / 0.051 / 0.048 / 0.047 at sizes 2 / 3 / 5 / 10 / 21: the 0.322
+> cell collapses and **the error is ~5% at every community size**. Point 1 (size is
+> not the error axis) is unchanged and now holds without exception; point 2 (a slow
+> member is the axis) is confirmed by its fix — the slow-member cells were Head A's
+> relative error at low `mu`, not composition. Point 3 stands: the residual ~5% is
+> still `mu`, and the 1% gate still needs a better value head.
+>
+> **Update 2026-08-30 — the output calibration takes the large communities to
+> ~1.5%.** The same 10 communities and media, `value_T01` plus the plateau-weighted
+> calibration of §7.3: median log-X error **0.024 / 0.072 / 0.044 / 0.014 / 0.016**
+> at sizes 2 / 3 / 5 / 10 / 21, against 0.034 / 0.050 / 0.051 / 0.048 / 0.047
+> uncalibrated. `median_mu_rel` at size 21 is 0.005. Point 3 above is now only
+> partly true: sizes 10 and 21 are within 1.6x of the 1% gate and the residual there
+> is no longer dominated by the `mu` *bias*. Size 3 regressed (0.050 → 0.072) and is
+> the open cell. Head A's held-out gradient cosine and R² are unchanged by the
+> calibration, by construction.
+>
+> **Update 2026-08-30 (b) — the residual was Head B's, and it was label coverage.**
+> Every number above is `dc_rel`-limited, not `mu`-limited: across the 10
+> communities the final log-X error tracks Head B's pool-derivative error and not
+> `mu_rel`, which is <= 3% everywhere (`dc_rel` 0.19–0.79 -> log-X 0.003–0.024;
+> `dc_rel` 1.1–2.2 -> log-X 0.044–0.589). Point 3 above, "the shortfall is
+> Head A's", was true when written and stopped being true once `--gm-temp 0.01`
+> and the calibration landed.
+>
+> Three changes, in the order they were found: Head B predicts specific flux
+> (§6.3), `mu_and_z` clamps at §3.3's uptake bound (§6.3), and the §4.3 design now
+> covers the community background regime, spent as an 800-media round-1 top-up on
+> all 21 organisms. Both heads had to be retrained for the round: `x_scale` is the
+> kink scale over the *training* rows, so a round changes it and
+> `Surrogate.__init__`'s P14 check fires if only one head is rebuilt — which is
+> exactly what it is for. Held out on the identical 800 media, Head A's worst
+> gradient cosine went 0.928 -> **0.956** and Head B's worst R² 0.856 -> **0.907**.
+>
+> **Update 2026-08-30 (c) — and every M5 number, above and elsewhere, is n=1 on
+> two axes.** Both were then measured over the same 10 communities: 3 Head A seeds
+> at a fixed medium, and 3 medium draws at fixed heads. Median max/min per cell is
+> **1.8x** for the seed and **6.1x** for the medium, whose worst cell spans
+> **448x** (0.002 -> 0.739). The medium dominates.
+>
+> A trap that caused a wrong attribution here before it was caught: `run` draws
+> each community's medium from `seed + n` with `n` its *index in the list*, so
+> cutting `--communities` down to a subset silently re-draws every medium. **Two
+> `cfs community` runs are comparable only if the community list is identical and
+> in the same order** — and a single draw is not worth quoting whatever the order.
+>
+> Pooling both axes, n=5 replicates per community, median log-X error:
+>
+> | size | median | p25 | p75 | max | n |
+> |---|---|---|---|---|---|
+> | 2 | **0.009** | 0.005 | 0.018 | 0.739 | 25 |
+> | 3 | **0.018** | 0.007 | 0.064 | 0.110 | 10 |
+> | 5 | 0.076 | 0.028 | 0.085 | 0.107 | 5 |
+> | 10 | 0.027 | 0.022 | 0.029 | 0.125 | 5 |
+> | 21 | **0.027** | 0.027 | 0.029 | 0.029 | 5 |
+>
+> Sizes 2 and 3 are within 2x of the 1% gate on the median; nothing passes it.
+> **Point 1 gains a second, stronger form:** the 21-member community is the most
+> *reproducible* cell in the set — 1.7x across seeds and 1.1x across media, against
+> 12x and 448x for 2-member ones. The independence that lets per-organism errors
+> cancel in `sum_i X_i z_i` also averages away the medium draw. Cross-feeding recall
+> is 1.00 at sizes 3, 5, 10 and 21, and `overgrowth` <= 0.038, so V5/P4 still do not
+> bite.
+>
+> **The gate has to be stated over replicates.** A single `cfs community`
+> invocation carries ~6x sampling error on a small community, which is larger than
+> every model change measured on 2026-08-30.
+>
 > **Not measured:** the `--steps` refinement check, abundances other than equal
-> split, and the Newton form of the equilibrium (M6) — this is the integrated
-> trajectory only.
+> split, the Newton form of the equilibrium (M6) — this is the integrated
+> trajectory only — a Head B seed axis (only Head A's was varied), and re-scoring
+> the three 2026-08-30 changes over replicates now that the error bar is known.
 
 ### 8.2 SteadyCom
 
@@ -1044,6 +1339,8 @@ prices tell you the structure.
 | P15 | Km values are invented | Overconfident quantitative claims | §3.3. State the limitation; report topology-dependent results only |
 | P16 | One sampling band for every metabolite | Training loss and mean accuracy look fine; the gradient is wrong on whichever metabolites the band missed, and no amount of extra data or rescaling fixes it | §4.7. Anchor each band on that metabolite's own limiting regime; check per-metabolite coverage, not row count |
 | P17 | LP solver cycling on a degenerate medium | One shard hangs at 100% CPU with no output; looks like a slow organism | Wall-clock limit on the FBA as well as the QP; a non-optimal row is dropped downstream (P2) |
+| P18 | Per-organism design never shows the community regime | Both heads look fine held out and fail *only* at composition, on media whose every coordinate is individually in range | §4.3's `frac_bg_perturb` over a random **share** of the background. Check distance to the nearest training medium, not per-coordinate bounds |
+| P19 | A single composition run read as a measurement | ~6x sampling error on a small community swamps the model change you are attributing it to; and cutting `--communities` to a subset silently re-draws every medium (`seed + n`) | Replicates over both Head A seed and medium draw. Never compare two `cfs community` runs with different community lists |
 
 ### The four that will cost you time
 
@@ -1079,8 +1376,8 @@ mixes beautifully while sampling the wrong thing.
 | M1 | Degeneracy survey, D4 decided | V1 complete, choice documented |
 | M2 | Ground truth pipeline | V2 passes |
 | M3 | Head A trained, all 20, vmapped | Gradient cosine > 0.99 held-out |
-| M4 | Head B trained, alpha sweep validated | V3 passes — **built 2026-08-28**, worst held-out R² 0.856 / median 0.921 (§6.3) |
-| M5 | dFBA composition | Trajectory matches COBRApy dFBA to 1% — **built and measured 2026-08-28; gate not met at ~4-5%, and the error is Head A's `mu`, not the integrator** (§8.1) |
+| M4 | Head B trained, alpha sweep validated | V3 passes — **built 2026-08-28**, worst held-out R² 0.856 / median 0.921; **specific-flux target + §3.3 uptake clamp + the §4.3 community-regime round (2026-08-30) take it to 0.907 / 0.952** on the same held-out media (§6.3) |
+| M5 | dFBA composition | Trajectory matches COBRApy dFBA to 1% — **built 2026-08-28; gate not met. Now scored over n=5 replicates (3 Head A seeds x 3 medium draws): median log-X 0.9% / 1.8% / 7.6% / 2.7% / 2.7% at sizes 2/3/5/10/21, sizes 2-3 within 2x. A single run carries ~6x sampling error on a small community — larger than any model change measured — so state this gate over replicates only** (§8.1) |
 | M6 | Newton equilibrium + implicit gradients | V4 passes |
 | M7 | Minimal medium, surrogate vs exact MILP | V5, V6 pass |
 | M8 | SteadyCom / MICOM framings | Agreement with reference implementations |
@@ -1126,6 +1423,7 @@ community-fba-surrogates/
 │   │   └── generate.py            # parallel driver -> parquet
 │   ├── surrogate/
 │   │   ├── picnn.py               # Head A
+│   │   ├── calibrate.py           # §7.3 concave output calibration
 │   │   ├── behaviour.py           # Head B
 │   │   ├── stacked.py             # §6.1 vmap harness
 │   │   └── train.py

@@ -44,12 +44,15 @@ import optax
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
-from cfs.surrogate import deepset, deepset_u, groupmax, mlp, picnn, picnn_u
+from cfs.surrogate import calibrate, deepset, deepset_u, groupmax, mlp, picnn, picnn_u
 from cfs.surrogate.data import ValueDataset, load_value_dataset
 
 LOGGER = logging.getLogger("cfs.surrogate.train")
 
 GRAD_COSINE_GATE = 0.99
+
+# Temperature-anneal stages. Each one retraces the step, so this is not a sweep axis.
+_ANNEAL_STAGES = 3
 
 # Architecture registry. The coupling surface is four names — `stack_heads`,
 # `batched_value`, `batched_value_and_grad`, `organism` — so a variant is a module,
@@ -123,9 +126,20 @@ def _du(x, x_scale):
     return (1.0 - x) ** 2 / x_scale[:, None, :]
 
 
-def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, bvg):
+def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, bvg):
     mu_hat, g_hat = bvg(heads, x)
     value = jnp.mean((mu_hat - mu) ** 2)
+    # `w_rel` adds the same error measured *relatively*. The plain MSE is absolute
+    # and 74% of rows sit on the plateau, so the 15% below a quarter of max mu carry
+    # no weight and the head over-predicts every one of them -- median +98% at
+    # mu < 5% of max, and 100% of rows below 75% of max over-predicted (seeded
+    # `groupmax-u`, `20hm_bands`, 21 organisms). Composition integrates the relative
+    # error (`d(log X)/dt = mu`), so that is what a slow member costs in §8.
+    # The floor in the denominator caps the reweighting at 10x the organism's mean
+    # mu; without it the plateau goes unweighted and R2 collapses to -1.66.
+    if w_rel:
+        den = mu + 0.1 * jnp.abs(mu).mean(axis=1, keepdims=True)
+        value = value + w_rel * jnp.mean(((mu_hat - mu) / den) ** 2)
     # (G, B, 1) row mask * the head's own (G, 1, M) exchange mask.
     w = gvalid[..., None] * heads.mask[:, None, :]
     # Per-row *relative* Sobolev error, not the raw ||grad - pi||^2 of §7.1. The
@@ -154,10 +168,10 @@ def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, bvg):
 
 
 @eqx.filter_jit
-def _step(heads, opt_state, x, mu, g, gvalid, x_scale, gfloor, w_grad, optimiser, bvg):
+def _step(heads, opt_state, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, optimiser, bvg):
     # `bvg` and `optimiser` are non-arrays, so `filter_jit` holds them static.
     (total, parts), grads = eqx.filter_value_and_grad(_loss, has_aux=True)(
-        heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, bvg
+        heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, bvg
     )
     updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(heads, eqx.is_inexact_array))
     return eqx.apply_updates(heads, updates), opt_state, total, parts
@@ -216,6 +230,7 @@ def train_value_heads(
     batch: int = 512,
     lr: float = 3e-3,
     w_grad: float = 1.0,
+    w_rel: float = 0.0,
     emb_dim: int = 8,
     phi_hidden: int | None = None,
     k_code: int | None = None,
@@ -223,6 +238,7 @@ def train_value_heads(
     gm_temp: float | None = None,
     gm_init: str | None = None,
     gm_reanchor: int = 0,
+    gm_temp_final: float | None = None,
     seed: int = 0,
 ) -> eqx.Module:
     """Fit the stacked Head A. Labels are scaled by ``ds.mu_scale`` (§7.1)."""
@@ -271,6 +287,28 @@ def train_value_heads(
     # Evenly spaced over the run, none at the very end: a re-anchored plane needs
     # epochs left to settle.
     reanchor_at = {round(epochs * (k + 1) / (gm_reanchor + 1)) for k in range(gm_reanchor)}
+    # Temperature homotopy (§5.4's pattern, applied to `T` instead of `eps`). The
+    # smoothing sits ~T*ln(K_active) *below* the hard min, an absolute offset that
+    # is 4% of a plateau mu and >100% of a starving one, so a low `T` is what stops
+    # the head over-predicting slow media, and `T` = 0.003 *fixed* is worse than
+    # 0.01 on every axis -- an optimisation failure, not a representation one.
+    #
+    # **Measured and it does not pay off, 2026-08-29.** On 3 organisms annealing
+    # looked decisive (0.03 -> 0.003 took the low-mu bias +1.845 -> -0.009 with the
+    # plateau intact). On all 21 it does not: bias +0.315, worst cosine 0.899, and
+    # every §8.1 community worse than fixed T=0.01 (log-X 0.102 vs 0.047 at size
+    # 21). Kept, off by default, so the next person measures something else --
+    # the same 3-vs-21 trap the `icnn-u` `w_grad` frontier fell into.
+    # `temp` is a static field, so each step retraces -- keep the stage count small.
+    anneal_at = {}
+    if gm_temp_final:
+        t_hi = groupmax.DEFAULT_TEMP if gm_temp is None else gm_temp
+        anneal_at = {
+            round(epochs * (k + 1) / (_ANNEAL_STAGES + 1)): float(
+                t_hi * (gm_temp_final / t_hi) ** ((k + 1) / _ANNEAL_STAGES)
+            )
+            for k in range(_ANNEAL_STAGES)
+        }
     rng = np.random.default_rng(seed)
     t0 = time.time()
     for epoch in range(epochs):
@@ -289,9 +327,23 @@ def train_value_heads(
                 x_scale,
                 gfloor,
                 w_grad,
+                w_rel,
                 optimiser,
                 bvg,
             )
+        if epoch + 1 in anneal_at:
+            t_new = anneal_at[epoch + 1]
+            heads = groupmax.with_temp(heads, t_new)
+            # Adam's moments are themselves head-shaped pytrees, so they carry the
+            # old temperature in their metadata and stop matching `heads`.
+            opt_state = jax.tree.map(
+                lambda z, t=t_new: groupmax.with_temp(z, t)
+                if isinstance(z, groupmax.GroupMaxHead)
+                else z,
+                opt_state,
+                is_leaf=lambda z: isinstance(z, groupmax.GroupMaxHead),
+            )
+            LOGGER.info("epoch %4d  temperature -> %.4g", epoch, heads.temp)
         if epoch + 1 in reanchor_at:
             # Adam's moments for an overwritten plane describe the plane that used
             # to be there and would walk it straight back, so clear them.
@@ -448,6 +500,15 @@ def score(
     okv = np.asarray(gvalid & (jnp.linalg.norm(g * m, axis=-1) > 0))
     cos_np = np.asarray(cos)
 
+    # Value error at *low* mu, which nothing else here can see: `value_r2` and the
+    # MSE are absolute and 74% of held-out rows sit on the plateau, so a head can
+    # score R2 0.99 while over-predicting a starving medium by +98% (measured,
+    # `value_ra3`). §8 integrates `d(log X)/dt = mu`, so it is the relative error on
+    # the slow members that sets the composition's log-X error -- the M5 runs whose
+    # log-X error was 0.12-0.32 are exactly the ones containing a slow organism.
+    low = np.asarray(mu) < 0.25 * np.asarray(mu).max(axis=1, keepdims=True)
+    relerr = np.asarray((mu_hat - mu) / jnp.maximum(mu, 1e-9))
+
     per = {}
     for i, gid in enumerate(ds.genome_ids):
         worst = np.argsort(-np.asarray(err[i].mean(axis=0)))[:5]
@@ -463,6 +524,8 @@ def score(
             "grad_cosine_p05": float(jnp.nanpercentile(cos[i], 5)),
             "grad_top1_share": float(jnp.nanmean(share[i])),
             "value_r2": float(r2[i]),
+            "value_rel_err_low_mu": float(np.median(np.abs(relerr[i][low[i]]))),
+            "value_bias_low_mu": float(np.median(relerr[i][low[i]])),
             **extra.get(gid, {}),
             "worst_grad_metabolites": [ds.exchanges[j] for j in worst],
             "per_limiting_metabolite": by_met,
@@ -483,11 +546,17 @@ def score(
     }
 
 
-def evaluate(heads: eqx.Module, ds: ValueDataset, seed: int = 0, arch: str = "icnn") -> dict:
+def evaluate(
+    heads: eqx.Module, ds: ValueDataset, seed: int = 0, arch: str = "icnn", cal=None
+) -> dict:
     """Held-out diagnostics per organism (§7.3). The gate is ``grad_cosine``."""
     mod = _ARCH[arch]
     x = jnp.asarray(ds.x_val)
     mu_hat, g_hat = _over_media(lambda xx: mod.batched_value_and_grad(heads, xx), x)
+    if cal is not None:
+        # A positive per-row scalar on the gradient, so `grad_cosine` is untouched
+        # and only the value diagnostics move (`cfs.surrogate.calibrate`).
+        mu_hat = jnp.asarray(calibrate.apply(mu_hat, cal))
     # In u space (see `_du`), so the gate means the same thing across runs.
     g_hat = g_hat * _du(x, jnp.asarray(ds.x_scale))
     # Concavity and conditioning are only meaningful in the coordinate the head is
@@ -513,7 +582,20 @@ def evaluate(heads: eqx.Module, ds: ValueDataset, seed: int = 0, arch: str = "ic
 # --------------------------------------------------------------------------- #
 
 
-def save(heads: eqx.Module, ds: ValueDataset, outdir: Path, arch: dict, diagnostics: dict) -> None:
+def _identity_cal(n: int) -> np.ndarray:
+    c = np.zeros((n, 3))
+    c[:, 2] = 1.0
+    return c
+
+
+def save(
+    heads: eqx.Module,
+    ds: ValueDataset,
+    outdir: Path,
+    arch: dict,
+    diagnostics: dict,
+    cal=None,
+) -> None:
     """Serialise the stacked heads plus everything needed to use them again.
 
     The metadata is not optional: the input transform, ``Vmax``, the label scale
@@ -531,6 +613,7 @@ def save(heads: eqx.Module, ds: ValueDataset, outdir: Path, arch: dict, diagnost
                 "exchanges": ds.exchanges,
                 "mask": ds.mask.astype(int).tolist(),
                 "mu_scale": ds.mu_scale.tolist(),
+                "value_cal": (_identity_cal(len(ds.genome_ids)) if cal is None else cal).tolist(),
                 "x_scale": ds.x_scale.tolist(),
                 "input_transform": getattr(
                     _ARCH.get(arch.get("arch", "icnn")),
@@ -584,6 +667,7 @@ def run(
     batch: int = 512,
     lr: float = 3e-3,
     w_grad: float = 1.0,
+    w_rel: float = 0.0,
     emb_dim: int = 8,
     phi_hidden: int | None = None,
     k_code: int | None = None,
@@ -591,6 +675,7 @@ def run(
     gm_temp: float | None = None,
     gm_init: str | None = None,
     gm_reanchor: int = 0,
+    gm_temp_final: float | None = None,
     seed: int = 0,
     organisms: list[str] | None = None,
 ) -> dict:
@@ -609,6 +694,7 @@ def run(
         batch=batch,
         lr=lr,
         w_grad=w_grad,
+        w_rel=w_rel,
         emb_dim=emb_dim,
         phi_hidden=phi_hidden,
         k_code=k_code,
@@ -616,9 +702,12 @@ def run(
         gm_temp=gm_temp,
         gm_init=gm_init,
         gm_reanchor=gm_reanchor,
+        gm_temp_final=gm_temp_final,
         seed=seed,
     )
-    diagnostics = evaluate(heads, ds, seed=seed, arch=arch)
+    mu_tr = _over_media(lambda xx: _ARCH[arch].batched_value(heads, xx), jnp.asarray(ds.x_train))
+    cal = calibrate.fit(np.asarray(mu_tr), ds.mu_train / ds.mu_scale[:, None])
+    diagnostics = evaluate(heads, ds, seed=seed, arch=arch, cal=cal)
     meta = {
         "arch": arch,
         "width": width,
@@ -626,6 +715,7 @@ def run(
         "epochs": epochs,
         "lr": lr,
         "w_grad": w_grad,
+        "w_rel": w_rel,
         "eps": eps,
         "seed": seed,
     }
@@ -634,6 +724,8 @@ def run(
         meta["gm_temp"] = groupmax.DEFAULT_TEMP if gm_temp is None else gm_temp
         meta["gm_init"] = gm_init or "random"
         meta["gm_reanchor"] = gm_reanchor
+        if gm_temp_final:
+            meta["gm_temp_final"] = gm_temp_final
     if arch.startswith("deepset"):
         # Only when set: an absent key is what makes `load` fall back to the
         # width-derived default, so a checkpoint written before these flags existed
@@ -643,5 +735,5 @@ def run(
             meta["phi_hidden"] = phi_hidden
         if k_code is not None:
             meta["k_code"] = k_code
-    save(heads, ds, outdir, meta, diagnostics)
+    save(heads, ds, outdir, meta, diagnostics, cal=cal)
     return diagnostics

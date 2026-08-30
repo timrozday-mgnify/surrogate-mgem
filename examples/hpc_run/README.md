@@ -32,7 +32,7 @@ run_labels.sh       stage 1 launcher   -> labels_out/labels/
 make_sweep.py       writes a sweep samplesheet from axis flags
 make_sweep_full.sh  regenerates sweep_full.csv as five named arms
 sweep_smoke.csv     4 cells against labels_stub — -stub only (no real data)
-sweep_full.csv      24 cells: the real sweep
+sweep_full.csv      36 cells: the real sweep
 sweep.config        stage 2 params: xla_devices, per-process resources
 run_sweep.sh        stage 2 launcher   -> sweep_out/sweep_leaderboard.csv
 site.config         EXAMPLE slurm + singularity config, shared by both stages
@@ -102,7 +102,7 @@ delete the partial shard first.
 SWEEP=sweep_full.csv NF_PROFILE=singularity ./run_sweep.sh -c site.config
 ```
 
-One task per samplesheet row. `sweep_full.csv` is 24 cells in six arms, written by
+One task per samplesheet row. `sweep_full.csv` is 36 cells in seven arms, written by
 `make_sweep_full.sh` (which carries the measurement behind each arm in its comments):
 
 | arm | cells | what it tests |
@@ -112,6 +112,8 @@ One task per samplesheet row. `sweep_full.csv` is 24 cells in six arms, written 
 | C `icnn`, `mlp`, `rf` at the same `w_grad` | 3 | the x-space head being replaced, plus an unconstrained ceiling and a non-parametric floor |
 | F `groupmax-u` seeded, width 128 × depth 3, T {0.01,0.03,0.1} | 3 | does depth buy anything **once the pieces are seeded**? Arm G is width 1 / depth 1, so nothing else asks |
 | G `groupmax-u` seeded from label tangents, K {100,1000} × T {0.01,0.03,0.1} | 6 | **initialisation, not architecture.** Both inits at matched K and T |
+| H `groupmax-u` seeded, K=1000 T=0.01, `--gm-reanchor` {0,3} × seed {0,1,2} | 6 | **the re-anchor pass against the seed noise it exposed.** Per-organism cosine sd is 0.015 across seeds, against 0.007 between Arm G's top three cells, so a single-seed cell ranking is noise |
+| H' the same at `--gm-reanchor 3`, `--w-rel` {0,0.3} × seed {0,1,2} | 6 | the low-`mu` bias fix: `--w-rel` removes it at no cosine cost but sells plateau accuracy, and only seed 0 has been measured. `wr0` repeats Arm H's `ra3` trio under a second id — a free determinism check |
 | E the 4000-media set: `icnn-u`, `icnn`, `rf` | 3 | the rows axis |
 
 **Both label roots must exist.** Arm E reads `labels_out_4k/labels`; generate it by

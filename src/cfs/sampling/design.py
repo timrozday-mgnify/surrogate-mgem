@@ -35,7 +35,9 @@ class SamplingConfig:
     log10_lo: float = -4.0  # log10(c/Km) lower end
     log10_hi: float = 1.0  # log10(c/Km) upper end (also the "rich" level)
     frac_below_km: float = 0.40  # fraction of bulk media with c < Km (§4.3)
-    frac_bg_perturb: float = 0.10  # fraction of media that perturb the background
+    # Fraction of media that perturb the background, each over a random share of
+    # it -- the community regime. Raise it for a §4.6 round aimed at composition.
+    frac_bg_perturb: float = 0.10
     # Share of the bulk budget given to the per-metabolite focus strata below.
     # This is the single biggest lever on M3 — see `sample_media`.
     frac_focus: float = 0.50
@@ -214,8 +216,23 @@ def sample_media(
         for row in kmv * 10.0 ** (lo + u * (hi - lo)):
             m = {**held_rich, **{ex: float(c) for ex, c in zip(sampled, row, strict=True)}}
             if held and rng.random() < cfg.frac_bg_perturb:
+                # A *subset* of the background, not all of it. In a community the
+                # background metabolites that stop being replete are the other
+                # members' active sets, which is 20% of the background for a pair
+                # and most of it for the whole roster -- so the share is itself
+                # drawn, spanning every community size in one design.
+                #
+                # Perturbing all-or-nothing left this bimodal: 90% of media with
+                # every background dim rich and 10% with essentially none, and
+                # nothing in between. Every failing M5 community medium sits in
+                # that hole -- 2.92 from the nearest training medium against a
+                # held-out median of 0.10, with each coordinate individually in
+                # range. Head B's flux cosine tracks that distance on all 21
+                # organisms (Spearman 0.33-0.84).
+                share = rng.random()
                 for ex in held:
-                    m[ex] = km[ex] * 10.0 ** rng.uniform(cfg.log10_lo, cfg.log10_hi)
+                    if rng.random() < share:
+                        m[ex] = km[ex] * 10.0 ** rng.uniform(cfg.log10_lo, cfg.log10_hi)
             media.append(m)
 
     # Per-metabolite focus strata: an equal share of the budget for each sampled
