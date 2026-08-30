@@ -1030,11 +1030,32 @@ the true LP growing **none** of the three members. That is P21 in a use case whe
 `growth.trust_box` cannot help: the region there is *multiplicative* precisely so
 nothing reaches zero, and reaching zero is this program's job.
 
-**It is not a coverage gap that more media fix.** §4.3 emits an all-but-one-depleted
-corner per active metabolite, so these exact points *are* in the labels — ~23 rows
-in 32 000, under an absolute MSE. And restricting the design to the union of the
-members' active subspaces (the default; `--all-metabolites` lifts it) does not help,
-because the misses are active metabolites.
+**The cause is `SamplingConfig.log10_lo = -4.0`, and the sidecar already names the
+victims.** Measured by sweeping one metabolite with the rest held at the draw
+(CP070062.1): `EX_cobalt2_e`'s true ramp lives between `c/Km` **1e-9 and 1e-6** —
+`mu_true` is 0 at zero, 0.039 at `c/Km = 4e-9` and fully recovered by `4e-7`. The
+probe brackets `log10(c/Km)` in `[lo, hi] = [-4, 1]`, sees `mu_lo == mu_hi`, and
+by its own contract omits the metabolite ("never limits inside the band"); the
+fallback chain then hands it scale **1.0**. The band's lower end is the *same*
+parameter (`design.sample_media`, and the focus stratum is clamped at
+`max(log10_lo, a - 1.5)`), so no sampled medium is ever cobalt-limited either.
+
+Three consequences, in order:
+
+1. **The dual is exactly 0 on every training row**, so `_kink_scale` takes its
+   documented "never limits — nothing to resolve" fallback, `x_scale = 1.0`.
+2. **The head's input then has no resolution there.** Across the entire design
+   `w = u/x_scale` for cobalt spans `[0, 3.9e-3]`; separating `mu = 0` from
+   `mu = 1.386` inside that needs a plane of slope ~350, and the only evidence for
+   one is the single all-but-one-depleted corner row (23 such rows in 32 000).
+3. **The four missed essentials are exactly the four with `"source": "default"` in
+   `<id>.subspace.json`.** `EX_ca2_e`/`EX_cl_e` got `"probe"` at 1.1e-4 — itself
+   the bracket floor — and the head *does* respond to them (1.91 -> 0.79 at zero).
+   §4.7's promise that "a band anchored at the default is a known blind spot, not a
+   silent one" held; nothing was reading it.
+
+So this is a *label* defect, not a loss or architecture one, and restricting the
+design to the active subspaces cannot help — the misses are active metabolites.
 
 **So the support is pinned from the models** (`--keep-essential`, default off with
 `--no-keep-essential`): one FBA per free metabolite per member, a static property of
@@ -1061,10 +1082,15 @@ the GEM that no medium search has to discover. 3 draws, 3-member community, floo
    restricted to the active subspace with essentials pinned, and it is per organism,
    so the union is an upper bound on the joint optimum and `max_i` a lower one.
 
-**What unblocks it:** a head that reads `mu = 0` at a zeroed essential. The labels
-already contain the points; nothing weights them. That is the same shape as the
-low-`mu` bias — a handful of rows the absolute MSE ignores — and `--w-rel` is the
-existing knob most likely to touch it, unmeasured here.
+**What unblocks it:** `log10_lo`, not the loss. Reweighting the corner rows would
+teach a step at exactly zero and still leave the ramp unsampled and unresolvable in
+the input coordinate — `--w-rel` is the wrong knob here. Drop `log10_lo` to ~-10
+(it is one field on `SamplingConfig`, and it widens the probe bracket and the
+sampling band together), re-probe, and relabel. Check the fix by counting
+`"source": "default"` bands in the sidecars before and after: on CP070062.1 that is
+4 of 23 today, and they are precisely the metabolites M11 fails on. Cost is a
+relabel round (~1 h/organism at 10-way), and every downstream head has to be
+retrained because `x_scale` moves (P14).
 
 ### The conditioning bill is not §8's — measured, 2026-08-26
 >
