@@ -288,6 +288,44 @@ def build_parser() -> argparse.ArgumentParser:
     gx.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the draw.")
     gx.add_argument("--seed", type=int, default=0)
 
+    mm = sub.add_parser(
+        "minimal-medium",
+        help="§13.3/M11: the smallest medium every member grows on, then V6 it.",
+    )
+    mm.add_argument("--roster", type=Path, required=True, help="Roster YAML (for the V6 LPs).")
+    mm.add_argument(
+        "--labels", type=Path, required=True, help="Label root: rich start media (§4.3)."
+    )
+    mm.add_argument("--value", type=Path, required=True, help="Head A checkpoint dir.")
+    mm.add_argument("--out", type=Path, required=True, help="Report dir.")
+    mm.add_argument("--organisms", required=True, help="Comma-separated genome_ids: the community.")
+    mm.add_argument("--cases", type=int, default=5, help="Rich medium draws.")
+    mm.add_argument(
+        "--target-frac",
+        type=float,
+        default=0.5,
+        help="Growth floor, as a fraction of each member's mu on the rich medium.",
+    )
+    mm.add_argument(
+        "--no-milp",
+        action="store_true",
+        help="Skip the per-organism exact MILP reference (cobra minimal_medium).",
+    )
+    mm.add_argument(
+        "--all-metabolites",
+        action="store_true",
+        help="Design over every exchange, not just the members' active subspaces. "
+        "P21: the answer then leaves the design and the true LP stops growing.",
+    )
+    mm.add_argument(
+        "--no-keep-essential",
+        action="store_true",
+        help="Let the design zero a metabolite the true LP calls essential. Head A "
+        "cannot represent essentiality, so this reproduces the V6 failure.",
+    )
+    mm.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the draw.")
+    mm.add_argument("--seed", type=int, default=0)
+
     sim = sub.add_parser(
         "simulate", help="§13.1: integrate one community forward — batch or chemostat, no LP."
     )
@@ -521,6 +559,27 @@ def main(argv: list[str] | None = None) -> int:
             scales=args.scales,
         )
         print(json.dumps({k: v for k, v in report.items() if k != "cases"}, indent=2))
+        return 0 if report["passed"] else 1
+
+    if args.command == "minimal-medium":
+        from cfs.science.minimal import run as run_minimal
+
+        report = run_minimal(
+            args.roster,
+            args.labels,
+            args.value,
+            args.out,
+            organisms=[g for g in args.organisms.split(",") if g],
+            cases=args.cases,
+            target_frac=args.target_frac,
+            seed=args.seed,
+            scales=args.scales,
+            milp=not args.no_milp,
+            all_metabolites=args.all_metabolites,
+            keep_essential=not args.no_keep_essential,
+        )
+        skip = ("cases", "knockout_audit")
+        print(json.dumps({k: v for k, v in report.items() if k not in skip}, indent=2))
         return 0 if report["passed"] else 1
 
     if args.command == "baseline-rf":

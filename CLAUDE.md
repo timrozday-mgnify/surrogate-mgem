@@ -29,7 +29,7 @@
 > | M5 dFBA composition | **built and measured over replicates; the 1% gate is not met, sizes 2/3 are within 2x.** 10 communities of size 2-21 against per-organism FBA on the same integrator: median log-X error ~5% at every size once Head A is trained at `--gm-temp 0.01` (was 4-32%), then **1.4% / 1.6% at sizes 10 / 21** with the output calibration (`cfs.surrogate.calibrate`); size 3 regressed to 7.2%. Specific-flux Head B + §3.3's uptake clamp + a community-regime label round, scored over **n=5 replicates** (3 Head A seeds x 3 medium draws): median log-X **0.9% / 1.8% / 7.6% / 2.7% / 2.7%** at sizes 2/3/5/10/21. Nothing passes 1%; sizes 2/3 are within 2x. A single run has ~6x sampling error on a small community — larger than any model change measured — so no single-draw M5 cell is quotable. **Error does not grow with community size** | `src/cfs/compose/dfba.py`, `src/cfs/surrogate/calibrate.py` |
 > | M3b HPC sweep | **two runs. 2026-08-25** (350 tasks, 324 cpu-h) refuted its own "scale closes the gap": width/depth inert. **2026-08-27** (442/442 tasks, 21 cells x 21 organisms) is the source of the roster numbers below. The rows arm has now failed to run three times | `examples/hpc_run/`, `--stage sweep` |
 >
-> | M9-M14 Phase 7 applications | **spec written; M9 and M10 done** — `cfs simulate` integrates a community forward, batch or chemostat (`--dilution`), surrogate only, no LP; `cfs maximise-growth` is §13.2's convex medium design, 19/20 V5 round-trips at the default trust region, median true gain +2.2%, median optimism 0.3%. The rest (minimal medium, steady state, interaction maximisation, the inverse-problem posterior) is specced in **§13** with a per-use-case accuracy table: most need less than M3's and M5's unmet gates | `src/cfs/compose/dfba.py` (`simulate`, `with_chemostat`), `src/cfs/science/growth.py` |
+> | M9-M14 Phase 7 applications | **spec written; M9, M10 and M11 done** — `cfs simulate` integrates a community forward, batch or chemostat (`--dilution`), surrogate only, no LP; `cfs maximise-growth` is §13.2's convex medium design, 19/20 V5 round-trips at the default trust region, median true gain +2.2%, median optimism 0.3%. `cfs minimal-medium` is §13.3's convex program, and V6 does not pass: Head A cannot represent essentiality (below). The rest (steady state, interaction maximisation, the inverse-problem posterior) is specced in **§13** with a per-use-case accuracy table: most need less than M3's and M5's unmet gates | `src/cfs/compose/dfba.py` (`simulate`, `with_chemostat`), `src/cfs/science/growth.py` |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
@@ -1002,6 +1002,69 @@ cases. 20 cases, one per roster organism, `value_r1`:
 
 Not done: non-uniform cost vectors, the selective-medium DC program (§13.2's
 sign-flipped version), and the community version, which needs M12's steady state.
+
+### M11: the minimal medium is blocked on essentiality, not on the program — 2026-08-30
+
+`cfs minimal-medium` (`src/cfs/science/minimal.py`) is §13.3: minimise `cost . c`
+subject to `mu_i(c) >= target_i` for every member and a box. Each floor is a
+concave function >= a constant, so the feasible set is convex and the objective is
+linear. Solved as a smooth quadratic penalty with `rho` continuation, a feasibility
+restoration step, then a greedy **cardinality prune** — the convex program
+minimises `cost . c` and V6 counts *components*, and a metabolite already pushed to
+1% of its rich level still costs nothing to keep. The prune is what makes the count
+mean anything.
+
+**Head A does not know that removing an essential metabolite stops growth, and the
+optimiser finds that immediately.** Single knockouts from a §4.3 rich medium,
+3-member community, 37 free metabolites (`knockout_audit`, in the report):
+
+| KO | `mu_hat` | `mu_true` |
+| --- | --- | --- |
+| `EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e` | 54.5 / 69.2 / 38.2 (rich: 54.5 / 69.2 / 38.2) | **0 / 0 / 0** |
+| `EX_abg4_e`, `EX_bz_e` | unchanged | 55.1 / 70.2 / **0** |
+| `EX_ca2_e`, `EX_cl_e` (one organism) | 1.33, 1.08 (rich 1.91) | **0**, **0** |
+
+6 of 37 are lethal knockouts the head misses outright. Left free, the program plus
+the prune takes 273 components to **41** with every surrogate floor satisfied and
+the true LP growing **none** of the three members. That is P21 in a use case where
+`growth.trust_box` cannot help: the region there is *multiplicative* precisely so
+nothing reaches zero, and reaching zero is this program's job.
+
+**It is not a coverage gap that more media fix.** §4.3 emits an all-but-one-depleted
+corner per active metabolite, so these exact points *are* in the labels — ~23 rows
+in 32 000, under an absolute MSE. And restricting the design to the union of the
+members' active subspaces (the default; `--all-metabolites` lifts it) does not help,
+because the misses are active metabolites.
+
+**So the support is pinned from the models** (`--keep-essential`, default off with
+`--no-keep-essential`): one FBA per free metabolite per member, a static property of
+the GEM that no medium search has to discover. 3 draws, 3-member community, floor at
+0.5 of each member's `mu` on the rich medium, `value_r1`:
+
+| | components | free / pinned / dropped | members clearing the floor under the LP | worst |
+| --- | --- | --- | --- | --- |
+| all metabolites free | 273 -> **41** | 273 / 0 / 232 | **0/3** | 0.000 |
+| active subspace only | 273 -> 244 | 37 / 0 / 29 | 0/3 | 0.000 |
+| **+ essentials pinned** | 273 -> **251** | 37 / 13 / 22 | **2/3** | 0.489 / 0.485 / **0.334** |
+
+1. **V6 does not pass, and two of the three misses are ~2%** (0.489 and 0.485
+   against 0.5). The real failure is the third, at 0.334, on the draw where a member
+   starts at `mu_true` **3.5** against the others' 55 and 70 — the slow-member axis
+   M5 found, in a new use case.
+2. **The calibration belongs in the constraint.** §13.2 evaluates the head raw
+   because an increasing map cannot move an argmax; here the constraint is on the
+   *level*, so `calibrate.apply` and its derivative `g' = a + (d0/beta)e^{-m/beta}`
+   are in both the value and the chain rule. Adding them moved the worst case
+   0.190 -> **0.334** and dropped 7 more components.
+3. **The MILP reference is not comparable and is off by default in spirit.**
+   `cobra.medium.minimal_medium` is free over every exchange while the design is
+   restricted to the active subspace with essentials pinned, and it is per organism,
+   so the union is an upper bound on the joint optimum and `max_i` a lower one.
+
+**What unblocks it:** a head that reads `mu = 0` at a zeroed essential. The labels
+already contain the points; nothing weights them. That is the same shape as the
+low-`mu` bias — a handful of rows the absolute MSE ignores — and `--w-rel` is the
+existing knob most likely to touch it, unmeasured here.
 
 ### The conditioning bill is not §8's — measured, 2026-08-26
 >
