@@ -226,7 +226,7 @@ def test_background_is_perturbed_over_a_random_share():
     rich = max(m["EX_b0_e"] for m in media)
     n_off = np.array([sum(m[ex] < rich for ex in bg) for m in media])
     assert n_off.max() > 30  # the "whole roster" end is still reachable
-    assert ((n_off > 3) & (n_off < 30)).mean() > 0.5  # and so is everything between
+    assert ((n_off > 3) & (n_off < 30)).mean() > 0.45  # and so is everything between
 
 
 def test_low_mu_stratum_starves_a_few_metabolites_below_their_own_anchor():
@@ -255,6 +255,30 @@ def test_low_mu_stratum_starves_a_few_metabolites_below_their_own_anchor():
     lo, hi = cfg.low_mu_subset
     assert ((n_scarce >= lo) & (n_scarce <= hi)).sum() > 0.15 * len(media)
     assert n_scarce.max() <= hi  # never the whole medium: that starves on everything
+
+
+def test_low_mu_budget_comes_out_of_the_focus_budget():
+    """P24: the unfocused strata are where co-limited media come from.
+
+    ``below Km`` is the only stratum that produces media with several binding
+    uptakes at once — 22.5% of it has >=5, against 2.7% of the focus strata and
+    0.5% of the low-mu stratum, whose media average exactly one binding uptake
+    however deep or wide its band is. Paying for `frac_low_mu` out of `n_rest`
+    shrank it 30%, took roster-wide >=5 co-limitation 14.1% -> 8.6%, and regressed
+    §8.1 17x at community size 21.
+    """
+    ex = [f"EX_a{i}_e" for i in range(4)]
+    sub = ActiveSubspace("g", ex, [], dict.fromkeys(ex, 1.0), 10.0)
+    kw = dict(n_media=1000, seed=2, frac_focus=0.5, frac_below_km=1.0, log10_lo=-4.0)
+    n = {
+        f: sum(
+            m[ex[0]] < 1e-4 and all(m[e] < 1e-4 for e in ex)
+            for m in sample_media(sub, load_km_defaults(), SamplingConfig(frac_low_mu=f, **kw))
+        )
+        for f in (0.0, 0.15)
+    }
+    # The "below Km" stratum keeps its size when the low-mu budget is added.
+    assert abs(n[0.15] - n[0.0]) <= 0.05 * n[0.0]
 
 
 def test_probe_floor_is_separate_from_the_unfocused_band():

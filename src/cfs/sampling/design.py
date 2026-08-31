@@ -55,7 +55,8 @@ class SamplingConfig:
     # it -- the community regime. Raise it for a §4.6 round aimed at composition.
     frac_bg_perturb: float = 0.10
     # Share of the bulk budget given to the per-metabolite focus strata below.
-    # This is the single biggest lever on M3 — see `sample_media`.
+    # This is the single biggest lever on M3 — see `sample_media`. `frac_low_mu`
+    # is taken *out of* it, so the two together are the focus budget.
     frac_focus: float = 0.50
     # Share of the bulk budget spent on deliberately slow media: a small random
     # subset of `A_i` drawn *below* its own limiting onset, the rest replete.
@@ -280,7 +281,27 @@ def sample_media(
     # metabolite to *exactly* zero, which for an essential one means no growth,
     # and a zero-growth row is dropped from the Sobolev term (`gvalid`). Scarce
     # but non-zero is what yields a usable dual.
-    n_focus = int(round(cfg.frac_focus * n_bulk))
+    # Both focus-like strata are paid for out of `frac_focus`. Taking the low-mu
+    # budget from `n_rest` instead is P24: the unfocused "below Km" stratum is
+    # where co-limited media come from, and it is *only* stratum that produces
+    # them. Measured on CP070062.1's own duals, media with >=5 co-limiting
+    # metabolites, by stratum:
+    #
+    #   stratum   pre-relabel      post-relabel
+    #   focus     2.7% of 1988     0.9% of 1988
+    #   low-mu    --               0.5% of  597
+    #   below Km  22.5% of  796   22.8% of  557
+    #   above Km  3.4% of 1193     1.2% of  835
+    #
+    # The rate in `below` did not move; its *size* fell 30%, which is exactly
+    # `frac_low_mu`, and roster-wide >=5 went 14.1% -> 8.6% and >=10 5.1% -> 1.7%.
+    # §8.1 then regressed 17x at community size 21, where the pool medium is the
+    # maximally co-limited case. Scarcity does not compose: driving many
+    # metabolites far below their own onset at once yields *one* binding uptake,
+    # not many -- the low-mu stratum averages 1.0 limiting metabolites whatever
+    # band or subset size it is given (measured over four bands and two budgets).
+    n_low = int(round(cfg.frac_low_mu * n_bulk)) if d else 0
+    n_focus = max(0, int(round(cfg.frac_focus * n_bulk)) - n_low)
     # Equal shares by default; `focus_weights` (from `topup_weights`) skews them
     # toward the metabolites a previous run got measurably wrong.
     w = np.array([(focus_weights or {}).get(ex, 1.0 / d) for ex in sampled], dtype=float)
@@ -306,7 +327,6 @@ def sample_media(
     # everything else replete. Anchor-relative on purpose -- an absolute band is
     # what left the plateau over-represented, because `c/Km = -3` is still replete
     # for a metabolite whose onset is at -6.
-    n_low = int(round(cfg.frac_low_mu * n_bulk)) if d else 0
     k_lo, k_hi = cfg.low_mu_subset
     d_lo, d_hi = cfg.low_mu_decades
     for _ in range(n_low):
