@@ -1500,15 +1500,77 @@ Then, conditional on E1:
   (never tested in combination); `reanchor` ranked by relative over-prediction
   *inside* training and on community media (the post-hoc version hurt cosine).
 
-**If the labels are insufficient (cutting-plane also over-predicts):**
+**The labels ARE insufficient — E1 ran and the cutting-plane over-predicts by
++153%. This is the live branch.** The stages below are ordered cheapest-first and
+each one is *gated on the previous one's A1 score*, because the whole reason this
+loop stalled is that design changes were chosen from proxies and scored 5 h later
+on a ruler that moved with them.
 
-- **B1** — make community-regime media a first-class stratum, 30-50% of the
-  budget, not an 800-media round-1 afterthought.
-- **B2** — oversample `mu / mu_max` in [0.3, 0.8]; AAXE02 sits at 45% of its
-  plateau at the failing medium, squarely in Head A's known weak band.
-- **B3** — active learning with `ensemble.gradient_disagreement` evaluated **at
-  sampled community media**. That function exists for exactly this and has never
-  been used.
+#### The progression for improving the training rows
+
+**Stage 0 — a fixed ruler (A1). Done.** `cfs community-holdout`. Nothing below
+means anything without it: three relabels improved every held-out metric while
+§8.1 regressed 17x. It ranks `r1` above `p2`/`p4`, which is the §8.1 order and the
+inverse of the held-out order. **Every stage below is scored here before anything
+downstream is retrained.** Cost: 45 min once, seconds per checkpoint after.
+
+**Stage 1 — a non-adaptive stratum (B2). Built, running.** `--mid-mu` (default
+0.15): a community-sized share of `A_i` between each metabolite's own onset and
+its 50%-recovery point, bounded by a second `demand_probe` bisection (~2 s per
+organism, no labels needed). This is the cheapest thing that puts tangents in the
+regime E1 found empty, and it is *not* adaptive — no model in the loop, so it
+cannot chase its own errors. **Gate: A1 median abs and worst p90 at or below
+`value_r1`'s 0.0022 / 0.163.** If it clears, stop: the remaining stages buy
+nothing a fixed design already has.
+
+**Stage 2 — retune the stratum, not the mechanism.** `mid_target_frac` (0.5),
+`mid_mu_share` (0.2-1.0) and `frac_mid_mu` (0.15) are three scalars, and the
+resulting `mu/mu_max` histogram is measurable on the labels **without training
+anything**. If Stage 1 misses, check that histogram first: if the stratum is not
+landing in [0.3, 0.8], this is a parameter miss, not a mechanism one, and a
+re-generate is ~1 h with no retrain. Only if the histogram is right and A1 is
+still bad does the mechanism need replacing.
+
+**Stage 3 — B1, community media as a first-class stratum.** 30-50% of the budget
+drawn over *unions* of active subspaces (what A1's own media are), rather than
+the current 800-media round-1 afterthought at `--bg-perturb 0.9`. More expensive
+than Stage 1 and it changes the design's centre of mass, so it is worth it only
+if the mid-`mu` band turns out to be necessary but not sufficient.
+
+**Stage 4 — adaptive search (B3), and only here.** "Add rows where the model is
+inaccurate, until the space is explored" is the natural idea and it is also
+`cfs topup`, which already exists and already failed twice — once because top-up
+media leaked into the validation split (fixed, never re-run) and once, more
+fundamentally, because **the acquisition signal was computed on held-out media
+from the design being changed**, which is exactly what cannot see this failure.
+So the adaptive version is admissible only with:
+
+- **the pool drawn from the community regime**, not the training design — i.e.
+  candidates sampled the way A1's media are;
+- **an acquisition function that exploits the head's one-sidedness.** Head A is
+  max-affine, so `mu_hat` is a *min of tangents to a concave function* and can
+  only over-predict. The looseness of that bound is therefore computable at a
+  candidate medium with **no ensemble, no training and no solve**: take the
+  binding tangent and compare the `mu` of the row it is anchored at with the
+  predicted value. Tight at the failing medium under `r1` (anchor 17.9, truth
+  17.63); loose under `p4` (anchor 50.6, prediction 44.6, truth 17.63). Score a
+  large candidate pool in milliseconds, solve only the top tail, and each solve
+  installs a tangent exactly where the bound was loosest;
+- **a stopping rule from the same quantity**: stop when the *max* bound-looseness
+  over a fresh community-regime pool stops falling. That is the "sufficiently
+  explored" criterion, and it is measured on candidates rather than on the model's
+  own held-out error.
+
+`ensemble.gradient_disagreement` is the alternative acquisition signal and is
+worse here: it needs N trained heads, and it measures *variance* where the failure
+is a *bias* that `d(log X)/dt = mu` compounds along the trajectory. Keep it as a
+fallback for a failure the bound-looseness score cannot rank.
+
+**Stage 5 — accept a label ceiling and change the head.** Only if a community-
+regime pool that has been actively covered still leaves A1's tail high. Then the
+deficit is genuinely representational and C1b (a Liebig lower bound) or E2 (a
+predictive quantile rather than a point estimate) apply. Nothing before Stage 4
+distinguishes that case from an unlabelled region, which is why they come last.
 
 **Sampling rather than optimising** (E2 above is the main one). Also open:
 **E3**, turn the value call into an argmin — sample the head along each active

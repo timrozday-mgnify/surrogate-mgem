@@ -1158,7 +1158,18 @@ change there *before* retraining anything. `cfs community` now reports
 `mu_rel_per_member` / `mu_rel_worst_member` (A2). B2 is `cfs generate --mid-mu`
 (default 0.15): a community-sized share of `A_i` between each metabolite's own
 onset and its 50%-recovery point, from a second `demand_probe` bisection.
-C4 (min over the trained Head A seeds) is still free and untried. A different optimiser is **not** worth spending on —
+C4 (min over the trained Head A seeds) is still free and untried.
+
+**The staged plan for improving the training rows is §8.5's "The progression for
+improving the training rows"** — Stage 0 A1 (done) -> 1 B2 non-adaptive stratum
+(running) -> 2 retune it from the labels' own `mu/mu_max` histogram, no retrain
+-> 3 B1 community media as a first-class stratum -> 4 adaptive search, and only
+with a community-regime candidate pool and the *bound-looseness* acquisition
+function (max-affine can only over-predict, so the binding tangent's anchor `mu`
+scores a candidate with no ensemble, no training and no solve) -> 5 accept a
+label ceiling and change the head. Each stage is gated on the previous one's A1
+score. `cfs topup` is the naive version of stage 4 and has already failed twice;
+do not re-run it against held-out media from the design being changed. A different optimiser is **not** worth spending on —
 the train/held-out gap is 0.005 cosine.
 
 **Caveat that affects all of it:** `x = u/(u+s)` takes `s` from the training
