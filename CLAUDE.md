@@ -1135,13 +1135,23 @@ before touching the sampling design again. Summary:
    point. At a medium with no nearby anchor the min of the rest sits high. Any
    fix must put a plane in the community regime or bound the head from below.
 
-**The plan (§8.5), in order:** E1 cutting-plane check at the failing medium
-(minutes, decides labels-vs-head, everything else is conditional on it); A1 a
-community-regime **held-out label set** so design changes are scored in minutes
-instead of 5 h; A2 report per-member worst |rel| in `cfs community`; C4 take the
-min over the three Head A seeds already trained (free, and correct for an
-upper-bound family). Then C1/C1b/E2/C2/D1 if the labels are sufficient, or
-B1/B2/B3 if they are not. A different optimiser is **not** worth spending on —
+**E1 has run, and it decided the branch: the labels are insufficient.** The
+parameter-free cutting-plane model over `p4`'s *own* 3985 training tangents
+over-predicts AAXE02 at the failing medium by **+153%** — slightly worse than the
+trained head's +148% — while `r1`'s tangent set is **exact there (-0.000)**. So
+the head is at its label ceiling and every architecture branch (C1/C1b/C2/E2/D1)
+is refuted for this failure; the B branch is live. The mechanism is the mid-`mu`
+band: `p4`'s binding plane is anchored at a `mu = 50.6` plateau row where `r1`'s
+is at `mu = 17.9` against a truth of 17.63, and rows with `mu/mu_max` in 0.3-0.6
+fell **261 -> 90** (AAXE02) across the relabel. Nearest-row distance in `w` is
+*worse* for `r1`, so it is the growth regime, not proximity — a sixth refuted
+proxy. Numbers and the script (`20hm_bands/e1_cutting_plane.py`): **design spec
+§8.5 / "E1: the labels are insufficient"**.
+
+**Next:** B2 (a `mu/mu_max in [0.3, 0.8]` stratum) with A1 (a community-regime
+held-out label set) built alongside it, so the change is scorable in minutes.
+A2 is **done** — `cfs community` reports `mu_rel_per_member` and
+`mu_rel_worst_member`. C4 (min over the trained Head A seeds) is still free. A different optimiser is **not** worth spending on —
 the train/held-out gap is 0.005 cosine.
 
 **Caveat that affects all of it:** `x = u/(u+s)` takes `s` from the training

@@ -308,12 +308,21 @@ def compare(
     mu0, dc0 = np.linalg.norm(true.mu[0]), np.linalg.norm(true.dc[0])
     alive = [k for k in range(steps) if true.mu[k].max() > 1e-3 * true.mu[0].max()]
     dc_cos, dc_rel, mu_rel = [], [], []
+    # Per *member* relative error, not just the pooled norm. The §8.1 failures are
+    # a tail -- one member at +147% inside a 21-member pool whose median |rel| is
+    # 0.068 -- and reporting medians alone hid that for three label roots (§8.5 A2).
+    mu_member = []
     for k in alive:
         dc, mu = rhs_surrogate(sur, true.c[k], true.x[k])
         if np.linalg.norm(dc) > 0 and np.linalg.norm(true.dc[k]) > 0:
             dc_cos.append(_cos(dc, true.dc[k]))
         dc_rel.append(float(np.linalg.norm(dc - true.dc[k]) / dc0) if dc0 > 0 else np.nan)
         mu_rel.append(float(np.linalg.norm(mu - true.mu[k]) / mu0) if mu0 > 0 else np.nan)
+        mu_member.append((mu - true.mu[k]) / np.maximum(true.mu[k], 1e-9 + 1e-3 * true.mu[0].max()))
+    per_member = (
+        np.median(np.array(mu_member), axis=0) if mu_member else np.full(len(sur.members), np.nan)
+    )
+    worst = int(np.argmax(np.abs(per_member))) if mu_member else 0
 
     # Trajectory error, at every step and at the end. Biomass is compared in log
     # space: X grows exponentially, so a relative error on X is dominated by the
@@ -346,6 +355,8 @@ def compare(
                 "dc_rel_median": float(np.median(dc_rel)),
                 "mu_rel_median": float(np.median(mu_rel)),
                 "mu_rel_max": float(np.max(mu_rel)),
+                "mu_rel_per_member": per_member.tolist(),
+                "mu_rel_worst_member": [sur.genome_ids[sur.members[worst]], float(per_member[worst])],
             },
             "trajectory": {
                 "x_log_err_final": float(x_log[-1].max()),

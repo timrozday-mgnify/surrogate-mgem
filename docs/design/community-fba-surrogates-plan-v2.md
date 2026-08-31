@@ -1528,6 +1528,42 @@ fixed coordinate (clipped `log u`) would make this class of question answerable;
 it is a prerequisite if the distribution-shift hypothesis is to be tested
 rigorously rather than by proxy.
 
+
+### E1: the labels are insufficient — the cutting-plane check, 2026-08-31
+
+§8.5's step 1, run (`20hm_bands/e1_cutting_plane.py`, minutes, no training). The
+parameter-free `min_j [mu_j + pi_j.(w - w_j)]` model over each root's **own full
+training tangent set**, at `community_p4_s0`'s failing 21-member medium:
+
+| member | true `mu` | `p4` head | `p4` cut-plane | `r1` head | `r1` cut-plane |
+| --- | --- | --- | --- | --- | --- |
+| **AAXE02** | 17.63 | +148% | **+153%** | -4% | **-0.0%** |
+| GCA_000151225.1 | 4.91 | +74% | +91% | +20% | +30% |
+| CP002109.1 | 45.49 | +14% | +17% | +13% | +10% |
+
+1. **The trained head is at its label ceiling here, and slightly better than it.**
+   Every architecture branch of §8.5 (C1, C1b, C2, E2, D1/D2) is refuted for this
+   failure: no head in the max-affine class can do better on `p4`'s tangents than
+   the min over all 3985 of them, and that is +153%.
+2. **`r1`'s tangent set is exact at the same medium** (-0.000). So the medium is
+   not intrinsically hard, and the difference is entirely which media were
+   labelled. This is the **B branch: B1/B2/B3**.
+3. **The mechanism is the mid-`mu` band, and it is B2 verbatim.** The binding
+   plane at that medium is anchored at a row with `mu` **17.9** under `r1`
+   (the truth is 17.63) and at one with `mu` **50.6** under `p4` — a plateau row,
+   whose tangent sits high everywhere below it. Rows with `mu/mu_max` in 0.3-0.6:
+   AAXE02 **261 -> 90**, GCA_000151225.1 **231 -> 109**. The relabel moved mass
+   into `<0.2` (0.17 -> 0.65 of rows) and took it from *both* the plateau and the
+   middle; AAXE02 sits at 45% of its plateau at the failing medium.
+4. Nearest-training-row distance in `w` is **worse for `r1`** (222 vs 154) at the
+   same medium, so this is not proximity — it is having a tangent at the right
+   *growth regime*. A sixth refuted proxy for §8.1 (P25).
+
+**Next, in order:** B2 (a `mu/mu_max in [0.3, 0.8]` stratum) is now the specific,
+measured design change; A1 (a community-regime held-out label set) is what makes
+it scorable in minutes instead of 5 h and should be built with it. A2 is **done** —
+`cfs community` now reports `mu_rel_per_member` and `mu_rel_worst_member`.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)
