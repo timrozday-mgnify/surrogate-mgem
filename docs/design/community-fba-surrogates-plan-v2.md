@@ -296,6 +296,24 @@ steepest and where feasibility flips.
 > see the legacy pipeline's `n_limiting`) does not happen with a random share.
 > Test: `tests/test_cfs_sampling.py::test_background_is_perturbed_over_a_random_share`.
 
+> **Addition (2026-08-31, measured).** The design lands on the growth plateau:
+> **76%** of held-out media above 75% of the organism's max `mu`, 7% below 5%. That
+> is the band Head A over-predicts in (§7) and the band §8.1's slow members live
+> in, and no reweighting puts rows there. `SamplingConfig.frac_low_mu = 0.15` draws
+> **1–3 metabolites at once below their own anchors**, the rest replete —
+> anchor-relative, because an absolute band leaves a metabolite whose onset is
+> `1e-6` replete at `1e-3`. True-LP counts over 3 organisms × 400 media:
+> alive-but-slow rows 84 → 176, 116 → 193, 140 → 203, with dead media flat
+> (7 → 8, 5 → 8, 17 → 15).
+>
+> **It was paid for out of the wrong budget, and that is P24.** `frac_low_mu` comes
+> out of `n_rest`, and the unfocused strata are the *only* ones that vary many
+> metabolites at once — which is exactly what a community medium over the union of
+> members' active subspaces is. Composition damage scales with community size:
+> median log-X 0.009 → 0.014 at n=2 and **0.027 → 0.466 at n=21** (n=5 matched
+> replicates, identical media). Take a new stratum's budget from `frac_focus`, or
+> raise `n_media`; not yet re-run.
+
 ### 4.4 Growth-rate grid
 
 `alpha ∈ {0, 0.25, 0.5, 0.7, 0.85, 0.93, 0.97, 1.0}` — K=8, densified near 1
@@ -341,6 +359,24 @@ have sampled — this is the P4 failure mode and passive sampling cannot fix it.
 > coverage matches the `--scales` path metabolite for metabolite (roster median
 > `top_share` 0.463 vs 0.466, `A_med` 9.75 both), with **no previous labels**.
 > Provenance is in the sidecar: `probe` 12/16 and 25/30, the rest `default`.
+
+> **Correction (2026-08-31, measured).** The probe's bracket was
+> `log10(c/Km) ∈ [lo, hi]` with `lo = SamplingConfig.log10_lo = -4`, the *same*
+> field that floors the sampling band. A metabolite whose onset is below `c/Km =
+> 1e-4` therefore returns `mu_lo == mu_hi`, is omitted by the contract above, falls
+> through to scale 1.0 — and its band could not have reached the onset even with a
+> correct anchor. Roster-wide that was **100 of 496 active (organism, metabolite)
+> bands**, sampled replete in every medium: the trace metals (`EX_cobalt2_e`,
+> `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e`) whose ramps live at `c/Km ~ 1e-9…1e-6`.
+> Downstream, `_kink_scale` takes its "never limits" fallback (`x_scale = 1`) and
+> the head has ~4e-3 of its own input coordinate in which to separate `mu = 0` from
+> the plateau — which is why M11's designer could zero an essential for free.
+>
+> `probe_lo = -12` is now a separate field. `log10_lo` stays at -4 for the
+> *unfocused* strata, where widening it is the measured "everything starves
+> together" collapse. On CP070062.1 the probe then anchors **23/23** instead of
+> 16/23 for 0.5 s more probing, and anchors that already worked move ≤0.06 decades;
+> on the full relabel, band sources are **494 probe / 2 previous / 0 default**.
 
 **The bar is that it holds for any metabolite on any GEM without hand-tuning.**
 The mechanism that produced the second run —
@@ -1675,6 +1711,7 @@ the hardest downstream use, and most uses need less.
 | P21 | The designer walks out of the design | Spectacular objective, LP disagrees; medium far from any training medium | Trust region on the §6.3 nearest-training-medium distance — the same metric that diagnosed P18 — plus V5 at every reported optimum |
 | P22 | An objective on flux *magnitude* | Inherits Head B's weakest axis while the diagnostics (cosine, sign agreement) look fine | Prefer direction- and structure-valued objectives; label magnitude-valued results exploratory |
 | P23 | Optimising a batch-culture endpoint | The answer flips under changes that improve the right-hand side on every measure — the endpoint turns on which metabolite empties first | Optimise rates, or a chemostat steady state. Never a batch endpoint |
+| P24 | A new sampling stratum paid for out of the unfocused budget | Every label-level metric improves and the composition gets worse in proportion to community size | The focus strata vary one metabolite and the low-`mu` stratum 1-3; only the unfocused strata cover the joint regime a community medium is in. Take the budget from `frac_focus` or raise `n_media`, and score any design change on §8.1 at n=21, not on held-out cells |
 
 ### 13.9 Milestones
 
@@ -1682,7 +1719,7 @@ the hardest downstream use, and most uses need less.
 |---|---|---|
 | M9 | `cfs simulate`, batch + chemostat | **done 2026-08-30**; agrees with `cfs community`'s surrogate path on `D = 0` |
 | M10 | §13.2 growth maximisation, convex solver | Optimum survives V5 round-trip on 20 cases — **built 2026-08-30; 19/20 at the default trust region, 20/20 at 0.25 and at 1.0 decades.** Median true gain +2.2%, median optimism 0.3%. The one failure is a `mu = 2.0` start medium, the head's known weak band; it is not monotone in the trust radius. **Under an additive trust region 3/20 collapse to `mu_true = 0`, and under none at all 2 of the first 4** — P21, and the mechanism is zeroing an essential trace metabolite |
-| M11 | §13.3 static minimal medium | **built 2026-08-30; V6 does not pass, and the blocker is not the program.** `cfs minimal-medium`: convex penalty solve + a greedy cardinality prune, one case per medium draw. **Head A cannot represent essentiality** — knocking a trace metal (`EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e`) out of a rich medium takes the true LP to `mu = 0` and moves the head by <1%, 6 of 37 free metabolites on a 3-member community. Unrestricted, the program exploits exactly that: 273 -> **41** components with every surrogate floor satisfied and `mu_true` 55/70/38 -> **0/0/0**. With the lethal singles pinned from the models (`--keep-essential`, default; one FBA per free metabolite, a static property of the GEM), 273 -> 251 and 2 of 3 members clear a 0.5 floor under the LP, the misses being 0.489/0.485 — i.e. ~2% short — and one real failure at 0.334 on the community's slow member (`mu_true` 3.5 against 55 and 70), Head A's known weak low-`mu` band. **The cause is `SamplingConfig.log10_lo = -4`**: the trace metals' limiting regime is at `c/Km ~ 1e-9..1e-6`, outside the probe's bracket, so the probe omits them, `band_scales` defaults them to 1.0, the design never makes them scarce, `_kink_scale` defaults `x_scale` to 1.0 and the head has no resolution left in that coordinate. The four missed essentials are exactly the four `"source": "default"` bands in the sidecar |
+| M11 | §13.3 static minimal medium | **built 2026-08-30; the essentiality blocker is closed 2026-08-31, V6 still short.** `cfs minimal-medium`: convex penalty solve + a greedy cardinality prune, one case per medium draw. **Head A cannot represent essentiality** — knocking a trace metal (`EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e`) out of a rich medium takes the true LP to `mu = 0` and moves the head by <1%, 6 of 37 free metabolites on a 3-member community. Unrestricted, the program exploits exactly that: 273 -> **41** components with every surrogate floor satisfied and `mu_true` 55/70/38 -> **0/0/0**. With the lethal singles pinned from the models (`--keep-essential`, default; one FBA per free metabolite, a static property of the GEM), 273 -> 251 and 2 of 3 members clear a 0.5 floor under the LP, the misses being 0.489/0.485 — i.e. ~2% short — and one real failure at 0.334 on the community's slow member (`mu_true` 3.5 against 55 and 70), Head A's known weak low-`mu` band. **The cause is `SamplingConfig.log10_lo = -4`**: the trace metals' limiting regime is at `c/Km ~ 1e-9..1e-6`, outside the probe's bracket, so the probe omits them, `band_scales` defaults them to 1.0, the design never makes them scarce, `_kink_scale` defaults `x_scale` to 1.0 and the head has no resolution left in that coordinate. The four missed essentials are exactly the four `"source": "default"` bands in the sidecar. **Fixed by `probe_lo = -12` (§4.7) and a relabel: `n_missed_essential` 6 -> 0**, and unrestricted the design no longer collapses the LP (2/3, 0/3, 3/3 members clearing the floor, worst true fraction 0.436 against 0.000). V6 still does not pass at a 0.5 floor — 0.491 / 0.436 / 0.512 — so what remains is a few-percent accuracy question, not a structural one |
 | M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% |
 | M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |

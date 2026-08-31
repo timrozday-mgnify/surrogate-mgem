@@ -1178,15 +1178,13 @@ the GEM that no medium search has to discover. 3 draws, 3-member community, floo
    restricted to the active subspace with essentials pinned, and it is per organism,
    so the union is an upper bound on the joint optimum and `max_i` a lower one.
 
-**What unblocks it:** `log10_lo`, not the loss. Reweighting the corner rows would
-teach a step at exactly zero and still leave the ramp unsampled and unresolvable in
-the input coordinate — `--w-rel` is the wrong knob here. Drop `log10_lo` to ~-10
-(it is one field on `SamplingConfig`, and it widens the probe bracket and the
-sampling band together), re-probe, and relabel. Check the fix by counting
-`"source": "default"` bands in the sidecars before and after: on CP070062.1 that is
-4 of 23 today, and they are precisely the metabolites M11 fails on. Cost is a
-relabel round (~1 h/organism at 10-way), and every downstream head has to be
-retrained because `x_scale` moves (P14).
+**What unblocked it: `probe_lo`, not the loss — done 2026-08-31.** Reweighting the
+corner rows would teach a step at exactly zero and still leave the ramp unsampled
+and unresolvable in the input coordinate; `--w-rel` was the wrong knob. The band
+floor was the knob, and after the relabel `n_missed_essential` is **0** — see "The
+band floor was hiding a fifth of the design" below for the numbers and for the
+composition regression it cost. Count `"source": "default"` bands in the sidecars
+to check any future label root: 100 of 496 before, **0 of 496** after.
 
 ### The conditioning bill is not §8's — measured, 2026-08-26
 >
