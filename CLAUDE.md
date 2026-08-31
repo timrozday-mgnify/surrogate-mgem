@@ -1148,10 +1148,17 @@ fell **261 -> 90** (AAXE02) across the relabel. Nearest-row distance in `w` is
 proxy. Numbers and the script (`20hm_bands/e1_cutting_plane.py`): **design spec
 §8.5 / "E1: the labels are insufficient"**.
 
-**Next:** B2 (a `mu/mu_max in [0.3, 0.8]` stratum) with A1 (a community-regime
-held-out label set) built alongside it, so the change is scorable in minutes.
-A2 is **done** — `cfs community` reports `mu_rel_per_member` and
-`mu_rel_worst_member`. C4 (min over the trained Head A seeds) is still free. A different optimiser is **not** worth spending on —
+**A1 and A2 are done, and B2 is built.** `cfs community-holdout make|score`
+(A1) is 2000 media over the communities' member-union active subspaces, solved
+once for `mu_max`; scoring a checkpoint takes seconds. It ranks `value_r1`
+(median abs rel **0.0022**, worst p90 **0.163**) above `value_p4` (0.0052 /
+0.443) and `value_p2` (0.0052 / 0.405) — **the opposite of every held-out
+metric**, which is P24 made measurable. Score every future sampling-design
+change there *before* retraining anything. `cfs community` now reports
+`mu_rel_per_member` / `mu_rel_worst_member` (A2). B2 is `cfs generate --mid-mu`
+(default 0.15): a community-sized share of `A_i` between each metabolite's own
+onset and its 50%-recovery point, from a second `demand_probe` bisection.
+C4 (min over the trained Head A seeds) is still free and untried. A different optimiser is **not** worth spending on —
 the train/held-out gap is 0.005 cosine.
 
 **Caveat that affects all of it:** `x = u/(u+s)` takes `s` from the training

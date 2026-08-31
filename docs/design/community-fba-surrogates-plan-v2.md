@@ -1564,6 +1564,33 @@ measured design change; A1 (a community-regime held-out label set) is what makes
 it scorable in minutes instead of 5 h and should be built with it. A2 is **done** —
 `cfs community` now reports `mu_rel_per_member` and `mu_rel_worst_member`.
 
+
+### A1 works: the community-regime ruler ranks the label roots §8.1's way
+
+`cfs community-holdout make|score` (`src/cfs/validate/community_holdout.py`).
+2000 media over the 10 communities' member-union active subspaces, seed 7000,
+10 400 `mu_max` solves, ~45 min once. Scoring a checkpoint against it is seconds.
+
+| scored on A1 | median abs rel | worst organism | worst p90 |
+| --- | --- | --- | --- |
+| `value_r1` | **0.0022** | 0.011 | **0.163** |
+| `value_p4` | 0.0052 | 0.039 | 0.443 |
+| `value_p2` | 0.0052 | 0.075 | 0.405 |
+
+**It ranks `r1` above the relabels — which every held-out metric got backwards**
+(worst cosine 0.956 -> 0.963, R² 0.974 -> 0.989, Head B R² 0.907 -> 0.937 all
+favoured the relabel). That is P24 made measurable, and it turns a 5 h relabel +
+3-seed retrain + 5-replicate scoring loop into a seconds-long one. Every future
+sampling-design change is scored here **before** anything is retrained.
+
+Two properties to keep in mind when reading it. The medians are small (0.2-0.5%)
+because most community media are easy; the signal is in the **p90 and the max**
+(1.26 for AAXE02 under `p4`), which is the same one-member tail §8.1 integrates.
+And it scores `mu_max` only — one FBA per (organism, medium), no elastic-net QP,
+no alpha grid, no duals — because the failure it exists to catch is Head A's
+*level* at a multi-limited medium. Add duals to it only if a gradient question
+turns up that it cannot answer.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)
