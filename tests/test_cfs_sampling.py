@@ -257,6 +257,34 @@ def test_low_mu_stratum_starves_a_few_metabolites_below_their_own_anchor():
     assert n_scarce.max() <= hi  # never the whole medium: that starves on everything
 
 
+def test_focus_background_is_replete_relative_to_its_own_anchor():
+    """"Replete" must mean replete *for that metabolite*, not "above Km".
+
+    A community pool puts many of a member's metabolites near their own onsets at
+    once. With the focus strata's background band absolute and `probe_lo` having
+    moved onsets 2-6 decades below Km, the design stopped producing that regime at
+    all -- training media with a metabolite within +-0.5 decades of its anchor went
+    from a median of 15 (of 32) to 0, while the failing 21-member community medium
+    has 10. Neither the stratum budget nor the co-limitation count explains the
+    §8.1 size-21 regression; this does.
+    """
+    import numpy as np
+
+    ex = [f"EX_a{i}_e" for i in range(6)]
+    sub = ActiveSubspace("g", ex, [], dict.fromkeys(ex, 1.0), 10.0)
+    scales = dict.fromkeys(ex, 1e-6)  # onset 6 decades below Km
+    cfg = SamplingConfig(n_media=400, seed=7, frac_focus=1.0, frac_low_mu=0.0)
+    media = sample_media(sub, load_km_defaults(), cfg, scales)
+
+    km = load_km_defaults_km(ex[0])
+    off = np.array([[np.log10(m[e] / km) + 6.0 for e in ex] for m in media if all(m[e] > 0 for e in ex)])
+    near = ((off >= -0.5) & (off <= 0.5)).sum(1)
+    assert np.median(near) >= 1  # several metabolites sit near their own onsets
+    assert np.percentile(near, 90) >= 3  # and the many-at-once regime is reached
+    # The background never drops below its own anchor; only the focused one does.
+    assert (np.sort(off, axis=1)[:, 1] >= cfg.focus_bg_decades[0] - 1e-9).all()
+
+
 def test_probe_floor_is_separate_from_the_unfocused_band():
     """A focus stratum must reach its metabolite's onset however low that is.
 

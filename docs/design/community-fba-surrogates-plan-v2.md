@@ -363,12 +363,26 @@ steepest and where feasibility flips.
 > near their onset at once*, which is exactly what a pool over the union of 21
 > members' active subspaces looks like.
 >
-> **Next, and not yet run:** make the *background* of the focus strata
-> anchor-relative — draw the non-focused columns over `[a + 0.5, a + 1.5]` rather
-> than `[0, log10_hi]` — so "replete" means replete for *that* metabolite. This is
-> not the measured "everything starves together" collapse (§4.3), which came from
-> shifting whole bands so nothing was replete; here every column stays above its
-> own onset. The unfocused strata want the same treatment with a wider band.
+> **`SamplingConfig.focus_bg_decades = (0.0, 1.5)` is that fix**: the focus
+> strata's non-focused columns are drawn that many decades above each metabolite's
+> *own* anchor, capped at the rich level, instead of over an absolute `[0,
+> log10_hi]`. This is not the "everything starves together" collapse (§4.3), which
+> came from shifting whole bands so nothing was replete; here every background
+> column stays at or above its own onset and only the focused one goes below.
+> Probe, 2 organisms x 400 media, metabolites within ±0.5 decades of their anchor:
+>
+> | | near-onset median | p95 | dead media | colim ≥5 |
+> | --- | --- | --- | --- | --- |
+> | `r1` (pre-relabel target) | 11 / 15 | 15 / 20 | 0.3% | 6.8% / 63.5% |
+> | `p3`, absolute background | 0 / 0 | 4 / 7 | 0.3% | 5.0% / 49.2% |
+> | **`(0.0, 1.5)`** | **4 / 4** | **10 / 14** | 3.0% | 3.0% / 26.0% |
+> | `(0.5, 1.5)` | 0 / 0 | 4 / 7 | 3.0% | 3.0% / 26.3% |
+>
+> `(0.5, 1.5)` cannot reach the window by construction and is dropped. `(0.0, 1.5)`
+> covers the failing community medium's 3-10 near-onset metabolites at its p95 and
+> keeps 97% of media growing. Note co-limitation *falls* — which is consistent with
+> it not being the predictor. The unfocused strata want the same treatment; that is
+> a separate change and is not in this run.
 
 ### 4.4 Growth-rate grid
 

@@ -68,6 +68,23 @@ class SamplingConfig:
     # nor a reweighting puts rows there. Co-limitation rather than one scarce
     # metabolite because that is what a community medium looks like.
     frac_low_mu: float = 0.15
+    # Where the *non-focused* columns of a focus medium sit, in decades above each
+    # metabolite's own anchor. "Replete" has to be per-metabolite: with the band
+    # absolute (`[0, log10_hi]`, the pre-2026-08-31 behaviour) and `probe_lo`
+    # having moved onsets 2-6 decades below Km, a background metabolite stopped
+    # being near its own limit and became super-replete. The design then never
+    # shows the head several metabolites near onset at once, which is exactly what
+    # a community pool over the union of members' active subspaces is: at the
+    # 21-member medium that fails on every Head A seed, GCA_000151225.1 has 10 of
+    # 32 active metabolites within +-0.5 decades of their anchors against a
+    # training median of 0 (p95 7); pre-relabel it was 4 of 32 against a median
+    # of 15. That -- not the co-limitation count, and not the stratum budget,
+    # both of which were relabelled and refuted -- is the §8.1 size-21 regression.
+    #
+    # This is *not* the "everything starves together" collapse (see `sample_media`),
+    # which came from shifting whole bands so nothing was replete. Every column
+    # here stays above its own onset; only the focused one goes below.
+    focus_bg_decades: tuple[float, float] = (0.0, 1.5)
     low_mu_subset: tuple[int, int] = (1, 3)  # how many metabolites go scarce at once
     low_mu_decades: tuple[float, float] = (-1.0, 0.5)  # drawn relative to the anchor
     # Growth-rate grid, K=8, densified near 1 where dFBA lives and z moves fastest.
@@ -221,6 +238,7 @@ def sample_media(
     # 27 to 7 — `EX_k_e` and `EX_acnam_e` took 85% of media between them and
     # `EX_o2_e` never limited at all.
     anchor = {ex: np.log10(float(scales.get(ex, 1.0))) for ex in sampled}
+    anchor_v = np.array([anchor[ex] for ex in sampled])
     held_rich = {ex: km[ex] * 10.0**cfg.log10_hi for ex in held}
     sampled_rich = {ex: km[ex] * 10.0**cfg.log10_hi for ex in sampled}
 
@@ -297,13 +315,15 @@ def sample_media(
     for j in range(d):
         if quota[j] <= 0:
             continue
-        # Everything else stays genuinely replete, at or above its literature Km;
-        # only the focused metabolite is driven down, and only as far as its *own*
-        # limiting regime (`anchor`), which for the ions is ~3.8 decades below Km
-        # and for EX_o2_e is ~0.1 decades above it. A single shared [-4, 0) band
-        # is what left `EX_mg2_e` limiting in 2% of media and `EX_k_e` in 14%.
-        lo = np.full(d, 0.0)
-        hi = np.full(d, cfg.log10_hi)
+        # Everything else stays replete *for itself* — `focus_bg_decades` above its
+        # own anchor, capped at the rich level — and only the focused metabolite is
+        # driven below, and only as far as its own limiting regime (`anchor`),
+        # which for the ions is ~3.8 decades below Km and for EX_o2_e is ~0.1
+        # decades above it. A single shared [-4, 0) band is what left `EX_mg2_e`
+        # limiting in 2% of media and `EX_k_e` in 14%.
+        bg_lo, bg_hi = cfg.focus_bg_decades
+        lo = np.minimum(anchor_v + bg_lo, cfg.log10_hi)
+        hi = np.minimum(anchor_v + bg_hi, cfg.log10_hi)
         a = anchor[sampled[j]]
         lo[j], hi[j] = max(cfg.probe_lo, a - 1.5), min(cfg.log10_hi, a + 0.5)
         _emit(_sobol(int(quota[j])), lo, hi)
