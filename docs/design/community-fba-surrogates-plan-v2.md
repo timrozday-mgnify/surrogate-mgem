@@ -341,11 +341,21 @@ steepest and where feasibility flips.
 >    metabolites scarce *in proportion to their demands*, which is what an
 >    independent draw over a wide absolute band gives and a deliberately-starved
 >    subset does not.
-> 3. **The anchors are exonerated.** `below Km` scores 22.5% vs 22.8% across the
->    relabel, so `probe_lo = -12` did not cost co-limitation. A design-level proxy
->    (metabolites drawn at or below their own anchor, median 13 → 1) says the
->    opposite and is **wrong**: being below an anchor is not the same as binding.
->    Trust the duals.
+> 3. **The anchors are exonerated *for that stratum only*, and the budget fix
+>    therefore recovers only ~40% of the loss.** `below Km` scores 22.5% vs 22.8%
+>    across the relabel, but `focus` fell 2.7% → 0.9% and `above Km` 3.4% → 1.2%,
+>    and those rates are ~60% of the roster-level drop. Relabelled with the budget
+>    fixed (`labels_p3`, 21 organisms, 63/63, one `index_hash`): ≥5 co-limitation
+>    **8.6% → 9.9%**, ≥10 1.7% → 2.0%, against the pre-relabel 14.1% / 5.1%. The
+>    restored `below Km` media are worth exactly their measured rate and no more.
+>    A design-level proxy (metabolites drawn at or below their own anchor, median
+>    13 → 1) reads the loss as ~10x and is **wrong**: below an anchor is not
+>    binding. Trust the duals.
+>
+>    So if `p3` still regresses at n=21, the residual is that deeper anchors make a
+>    *focused* medium single-limited — the focus stratum holds everything but one
+>    metabolite replete, and "replete" is now 2-6 decades above onset rather than
+>    1-2. That is a `log10_hi`/focus-band question, not a budget one.
 >
 > The focus strata lose 30% of their media to this, which is the price. M3's gate
 > is met at 0.963 worst cosine, and `below Km` is worth ~8x a focus medium per unit
