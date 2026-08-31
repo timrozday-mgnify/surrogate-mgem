@@ -306,60 +306,69 @@ steepest and where feasibility flips.
 > alive-but-slow rows 84 → 176, 116 → 193, 140 → 203, with dead media flat
 > (7 → 8, 5 → 8, 17 → 15).
 >
-> **It cost the design its co-limited media, and that is P24.** Composition damage
-> scales with community size: median log-X 0.009 → 0.014 at n=2 and **0.027 →
-> 0.466 at n=21** (n=5 matched replicates, identical media).
+> **P24, and the budget was not it — the whole loop is measured, 2026-08-31.**
+> Composition damage scales with community size: median log-X 0.009 → 0.014 at
+> n=2 and **0.027 → 0.466 at n=21** (n=5 matched replicates, identical media).
 >
-> **Measured on the labels' own duals, 2026-08-31.** Counting metabolites with a
-> non-dust negative dual per medium (`alpha=1`, `eps=1e-3`, 21 organisms, 84 000
-> base media each):
+> Co-limitation *did* collapse. Counting metabolites with a non-dust negative dual
+> per medium (`alpha=1`, `eps=1e-3`, 21 organisms, 84 000 base media each):
 >
-> | media with ≥N co-limiting metabolites | mean | ≥3 | ≥5 | ≥10 |
+> | | mean | ≥3 | ≥5 | ≥10 |
 > | --- | --- | --- | --- | --- |
 > | pre-relabel (`labels`) | 2.46 | 27.8% | 14.1% | 5.1% |
-> | post-relabel (`labels_p2`) | 1.88 | 20.2% | **8.6%** | **1.7%** |
+> | post-relabel (`labels_p2`) | 1.88 | 20.2% | 8.6% | 1.7% |
+> | `labels_p3`, `frac_low_mu` paid out of `frac_focus` | 1.92 | 21.6% | 9.9% | 2.0% |
 >
-> Split by stratum (CP070062.1, media in design order), the cause is unambiguous:
+> By stratum (CP070062.1), `below Km` is the only source of co-limited media —
+> 22.5% of it has ≥5, against 2.7% of `focus`, 3.4% of `above Km` and 0.5% of the
+> low-mu stratum — and `frac_low_mu` takes 30% of it. So the obvious fix is to pay
+> for the low-mu stratum out of `frac_focus`. **That was relabelled, retrained over
+> 3 Head A seeds and scored over 5 replicates, and it does nothing:**
 >
-> | ≥5 co-limiting | focus | low-mu | below Km | above Km |
-> | --- | --- | --- | --- | --- |
-> | pre-relabel | 2.7% of 1988 | — | **22.5% of 796** | 3.4% of 1193 |
-> | post-relabel | 0.9% of 1988 | 0.5% of 597 | **22.8% of 557** | 1.2% of 835 |
+> | median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | `r1` (pre-relabel) | 0.009 | 0.018 | 0.076 | 0.027 | **0.027** | 0.017 |
+> | `p2` | 0.014 | 0.067 | 0.029 | 0.093 | 0.466 | 0.031 |
+> | `p3` (budget fixed) | 0.024 | 0.049 | 0.022 | 0.082 | **0.783** | 0.030 |
 >
-> 1. **`below Km` is the only stratum that makes co-limited media**, and its *rate*
->    did not move. Its **size** fell 30% — exactly `frac_low_mu`, taken out of
->    `n_rest`. That is the whole regression, and the fix is one line: pay for
->    `frac_low_mu` out of `frac_focus` instead.
-> 2. **Scarcity does not compose.** Driving many metabolites far below their own
->    onset yields *one* binding uptake, not many: the low-mu stratum averages 1.0
->    limiting metabolites per medium and is flat across four bands
->    (`low_mu_decades` (-1, 0.5) / (-0.25, 1.5) / (0, 2.5) / (-1, 3)) and two
->    budgets (0.15 / 0.30) — >=5 co-limitation 3.0% / 3.0% / 3.0% / 2.2% roster
->    position unchanged, dead media 3.0% throughout. Widening its subset from 1-3
->    to a drawn share of `A_i` (the `frac_bg_perturb` correction, one stratum over)
->    was tried and does nothing: **rejected, on file.** Co-limitation needs several
->    metabolites scarce *in proportion to their demands*, which is what an
->    independent draw over a wide absolute band gives and a deliberately-starved
->    subset does not.
-> 3. **The anchors are exonerated *for that stratum only*, and the budget fix
->    therefore recovers only ~40% of the loss.** `below Km` scores 22.5% vs 22.8%
->    across the relabel, but `focus` fell 2.7% → 0.9% and `above Km` 3.4% → 1.2%,
->    and those rates are ~60% of the roster-level drop. Relabelled with the budget
->    fixed (`labels_p3`, 21 organisms, 63/63, one `index_hash`): ≥5 co-limitation
->    **8.6% → 9.9%**, ≥10 1.7% → 2.0%, against the pre-relabel 14.1% / 5.1%. The
->    restored `below Km` media are worth exactly their measured rate and no more.
->    A design-level proxy (metabolites drawn at or below their own anchor, median
->    13 → 1) reads the loss as ~10x and is **wrong**: below an anchor is not
->    binding. Trust the duals.
+> It costs Head A's worst organism (0.9633/0.9645/0.9662 over seeds → 0.9591/
+> 0.9536/0.9350) and is **reverted in code**, with the measurement kept here.
 >
->    So if `p3` still regresses at n=21, the residual is that deeper anchors make a
->    *focused* medium single-limited — the focus stratum holds everything but one
->    metabolite replete, and "replete" is now 2-6 decades above onset rather than
->    1-2. That is a `log10_hi`/focus-band question, not a budget one.
+> **Three things this refutes, so nobody re-runs them.** (a) The budget split is
+> not the cause. (b) **Co-limitation count is not the predictor** — it moved the
+> right way and the composition did not follow. (c) Scarcity does not compose:
+> the low-mu stratum averages 1.0 binding uptakes per medium whatever band or
+> subset size it gets (four bands, two budgets), so widening its subset to a drawn
+> share of `A_i` — the `frac_bg_perturb` correction, one stratum over — is also
+> rejected.
 >
-> The focus strata lose 30% of their media to this, which is the price. M3's gate
-> is met at 0.963 worst cosine, and `below Km` is worth ~8x a focus medium per unit
-> of co-limitation, so it is the right side to pay from.
+> **What it actually is: "replete" is now 2–6 decades above onset, and the strata
+> that set it are still absolute.** The focus strata hold the non-focused columns
+> at `log10(c/Km) ∈ [0, 1]` and the unfocused ones at `[-4, 1]` — neither is
+> anchor-relative. Once `probe_lo` moved the onsets down, a background metabolite
+> stopped being *near* its limit and became super-replete. Counting active
+> metabolites within ±0.5 decades of their own anchor, at the 21-member community
+> medium that fails on every Head A seed:
+>
+> | | community medium | training median | training p95 |
+> | --- | --- | --- | --- |
+> | `AAXE02`, pre-relabel | 1 of 16 | 7 | 11 |
+> | `AAXE02`, post-relabel | 3 of 16 | **0** | 3 |
+> | `GCA_000151225.1`, pre-relabel | 4 of 32 | 15 | 20 |
+> | `GCA_000151225.1`, post-relabel | **10 of 32** | **0** | 7 |
+>
+> The community medium is inside the old design's distribution and outside the new
+> one's, in the one coordinate that matters. It is not out of range per dimension
+> (that was checked and is clean) — it is out of range in *how many dimensions sit
+> near their onset at once*, which is exactly what a pool over the union of 21
+> members' active subspaces looks like.
+>
+> **Next, and not yet run:** make the *background* of the focus strata
+> anchor-relative — draw the non-focused columns over `[a + 0.5, a + 1.5]` rather
+> than `[0, log10_hi]` — so "replete" means replete for *that* metabolite. This is
+> not the measured "everything starves together" collapse (§4.3), which came from
+> shifting whole bands so nothing was replete; here every column stays above its
+> own onset. The unfocused strata want the same treatment with a wider band.
 
 ### 4.4 Growth-rate grid
 
