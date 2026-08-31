@@ -1069,14 +1069,29 @@ on the `r1` label root reproduce `p2` on `p2` bit for bit. Same ruler.
    21 members is 0.055 (r1) vs 0.071 (p2); what changed is the worst member —
    p2 over-predicts AAXE02 by **+153%** (44.6 against a true 17.6) and
    GCA_000151225.1 by +79%, where r1's worst is -28%.
-3. **The working hypothesis is effective dimensionality against a fixed plane
-   budget.** In `r1` the trace metals had `x_scale = 1`, so no plane depended on
-   them; `p2` resolves ~20 more dimensions per organism, and a max-affine head is
-   an *upper* bound wherever no plane sits tangent — which is exactly a
-   many-metabolites-scarce-at-once point like a 21-member community medium.
-   `frac_low_mu` caps the scarce subset at 3 (`low_mu_subset`), so that regime is
-   still not in the design. Two cheap tests: raise `--gm-group` (retrain only), and
-   widen `low_mu_subset` (a relabel).
+3. **Two hypotheses tested and refuted.** *Plane budget* — `--gm-group 2000` on
+   the same labels changes nothing at all: n=21 log-X 0.482 -> 0.482, `mu_rel`
+   0.1044 -> 0.1056, `dc_cos` 0.9133 -> 0.9134 (and held-out worst cosine 0.9633 ->
+   0.9596). K is not the lever above 1000, as it was not for width or depth.
+   *Out-of-distribution in `x`* — the §6.3 nearest-training-medium distance for the
+   failing members is **unchanged or slightly better** under the new coordinate
+   (AAXE02 4.218 -> 3.961, GCA_000151225.1 3.635 -> 3.471, CP002109.1 4.590 ->
+   4.614). The community medium is not further from the design than it was.
+4. **The limiter is a carbon source whose band did not move.** At that medium
+   AAXE02's true `mu` is set by `EX_g3pg_e` (10x it, `mu` +23.8 to 41.4; every
+   other active metabolite gives 0.000), and its band is `probe` in both runs at
+   7.43e-3 -> 7.34e-3. The surrogate's 44.6 is roughly the `mu` of a medium with
+   **10x** the limiting carbon — it is not resolving how scarce that one
+   metabolite is, at a point where ~30 others are also in bands.
+5. **So the suspect is the budget reallocation, not the new anchors.**
+   `frac_low_mu = 0.15` is taken out of `n_rest`, and the unfocused strata are the
+   *only* ones that vary many metabolites at once — which is exactly what a
+   21-member community medium is, and why the damage scales with community size
+   (n=2 0.009 -> 0.014, n=21 0.027 -> 0.466). The focus strata hold one metabolite
+   scarce with the rest replete; the low-mu stratum holds 1-3 scarce. Neither
+   covers the joint regime, and the stratum that did just lost 30% of its rows.
+   **Next test:** pay for `frac_low_mu` out of `frac_focus` instead of `n_rest`, or
+   raise `n_media`, and relabel. Not yet run.
 
 **The verdict is not "revert".** The label fix is a clean, reproducible win on
 every label-level metric and it is what closes M11's essentiality blocker; the
