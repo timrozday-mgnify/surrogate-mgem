@@ -1003,6 +1003,87 @@ cases. 20 cases, one per roster organism, `value_r1`:
 Not done: non-uniform cost vectors, the selective-medium DC program (§13.2's
 sign-flipped version), and the community version, which needs M12's steady state.
 
+### The band floor was hiding a fifth of the design — measured, 2026-08-31
+
+`SamplingConfig.log10_lo = -4` bounded `demand_probe`'s bracket *and* the focus
+stratum's floor together, so a metabolite whose limiting onset is below
+`c/Km = 1e-4` was invisible to the probe (`mu_lo == mu_hi` -> omitted by contract)
+and unreachable by its own band. Roster-wide, **100 of 496 active (organism,
+metabolite) bands were anchored at `"default"`** and therefore replete in every
+medium. `probe_lo = -12` separates the two knobs; `log10_lo` stays at -4 for the
+*unfocused* strata, where widening it is the measured "everything starves
+together" collapse.
+
+A second stratum, `frac_low_mu = 0.15`, draws 1-3 metabolites at once below their
+**own** anchors with the rest replete. The design otherwise lands on the plateau
+(76% of held-out media above 75% of max `mu`), which is where Head A is accurate
+and M5's slow members are not.
+
+`labels_p2` (4000 media + the round-1 community pass, 21/21, 63/63 shards):
+band sources **494 probe / 2 previous / 0 default**, from 377/100/16/3.
+
+| held out | `value_r1` worst / median | `value_p2` worst / median |
+| --- | --- | --- |
+| grad cosine | 0.9558 / 0.9674 | **0.9633 / 0.9813** |
+| grad cosine p05 | 0.711 / 0.797 | **0.756 / 0.917** |
+| top-1 share | 0.749 / 0.894 | **0.826 / 0.938** |
+| value R2 | 0.974 / 0.9905 | **0.989 / 0.9994** |
+| Head B R2 | 0.907 / 0.952 | **0.935 / 0.960** |
+
+20/21 organisms improve on cosine, and it reproduces across Head A seeds: worst
+cosine **0.9558 / 0.9500 / 0.9545** (r1, seeds 0/1/2) against **0.9633 / 0.9645 /
+0.9662** (p2), i.e. +0.011 with the seed sd halved (0.003 -> 0.0015).
+
+**M11's blocker is closed.** `n_missed_essential` **6 -> 0**. Unrestricted
+(`--no-keep-essential`), where the old head took a 273-component medium to 41 with
+`mu_true` 0/0/0 on every case, the new one gives 2/3, 0/3, **3/3** members clearing
+the floor and `worst_true_frac` 0.436 against 0.000. V6 still does not pass at a 0.5
+floor (0.491 / 0.436 / 0.512) but it is now a few-percent question. The minimal
+media are co-limited, as they should be: all three members land on the same `mu`
+(34.77 / 34.77 / 34.77).
+
+**`value_rel_err_low_mu` reads worse (median 0.077 -> 0.242) and is not
+comparable.** A new design means a new held-out set, and this one contains many
+more genuinely slow media. Same for any per-band row count.
+
+### ...and it made the §8.1 composition worse at large community size — 2026-08-31
+
+The same 10 communities, **n=5 replicates each** (3 medium draws x Head A seed 0,
+plus seeds 1 and 2 at draw 0 — matching the r1 replicate set exactly). The media
+are **identical** between the two: `community_medium` only uses band scales when
+`--scales` is passed, and the active-subspace lists did not change, so `p2` heads
+on the `r1` label root reproduce `p2` on `p2` bit for bit. Same ruler.
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | `mu_rel` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `r1` | 0.009 | 0.018 | 0.076 | 0.027 | **0.027** | 0.017 | 0.0045 |
+| `p2` | 0.014 | 0.067 | **0.029** | 0.093 | **0.466** | 0.031 | 0.0087 |
+
+1. **This is not seed noise, and it is not the medium draw.** At size 21 the p2
+   cells are bimodal: all three Head A seeds fail at medium draw 0
+   (0.482 / 0.466 / 0.469, `dc_cos` 0.913) where all three r1 seeds are fine
+   (0.029 / 0.029 / 0.017), and draws 100/200 give 0.078 / 0.081 against r1's
+   0.027. So there is a ~3x regression everywhere at size 21 plus a reproducible
+   blow-up on one medium.
+2. **It is a tail, not a level.** At the failing medium the median |rel| over the
+   21 members is 0.055 (r1) vs 0.071 (p2); what changed is the worst member —
+   p2 over-predicts AAXE02 by **+153%** (44.6 against a true 17.6) and
+   GCA_000151225.1 by +79%, where r1's worst is -28%.
+3. **The working hypothesis is effective dimensionality against a fixed plane
+   budget.** In `r1` the trace metals had `x_scale = 1`, so no plane depended on
+   them; `p2` resolves ~20 more dimensions per organism, and a max-affine head is
+   an *upper* bound wherever no plane sits tangent — which is exactly a
+   many-metabolites-scarce-at-once point like a 21-member community medium.
+   `frac_low_mu` caps the scarce subset at 3 (`low_mu_subset`), so that regime is
+   still not in the design. Two cheap tests: raise `--gm-group` (retrain only), and
+   widen `low_mu_subset` (a relabel).
+
+**The verdict is not "revert".** The label fix is a clean, reproducible win on
+every label-level metric and it is what closes M11's essentiality blocker; the
+composition regression is a separate, newly exposed weakness of the head at
+multi-limited media. Do not read the old `r1` composition numbers as evidence the
+old labels were better — they were better *at hiding* those dimensions.
+
 ### M11: the minimal medium is blocked on essentiality, not on the program — 2026-08-30
 
 `cfs minimal-medium` (`src/cfs/science/minimal.py`) is §13.3: minimise `cost . c`
