@@ -381,8 +381,14 @@ steepest and where feasibility flips.
 > `(0.5, 1.5)` cannot reach the window by construction and is dropped. `(0.0, 1.5)`
 > covers the failing community medium's 3-10 near-onset metabolites at its p95 and
 > keeps 97% of media growing. Note co-limitation *falls* — which is consistent with
-> it not being the predictor. The unfocused strata want the same treatment; that is
-> a separate change and is not in this run.
+> it not being the predictor.
+>
+> **It was relabelled and scored (`labels_p4`), and the composition did not move.**
+> n=21 median log-X 0.466 (`p2`) → 0.783 (`p3`) → **0.706** (`p4`); overall 0.031 →
+> 0.030 → 0.035. Head A's held-out metrics stay good throughout. The change is kept
+> — `(0.0, 1.5)` is the more defensible definition of "replete" and costs nothing
+> measurable — but it is **not** the fix, and the third proxy in a row to move as
+> designed with no downstream effect. See §8.5 for the stock-take that follows.
 
 ### 4.4 Growth-rate grid
 
@@ -1396,6 +1402,134 @@ Unknowns = `|shared|` from §2.1, not `M`. Jacobian is a sum of PSD Hessians.
 
 ---
 
+### 8.5 The size-21 regression — stock-take and the plan (2026-08-31)
+
+**The problem.** After the `probe_lo = -12` relabel, §8.1 regressed at large
+community size, and **three design fixes have not moved it**. Median log-X over
+5 replicates x 10 communities, identical community list and media throughout:
+
+| | n=2 | n=3 | n=5 | n=10 | n=21 | overall |
+| --- | --- | --- | --- | --- | --- | --- |
+| `r1` pre-relabel | 0.009 | 0.018 | 0.076 | 0.027 | **0.027** | 0.017 |
+| `p2` relabel | 0.014 | 0.067 | 0.029 | 0.093 | 0.466 | 0.031 |
+| `p3` stratum budget | 0.024 | 0.049 | 0.022 | 0.082 | 0.783 | 0.030 |
+| `p4` anchor-relative background | 0.032 | 0.048 | 0.026 | 0.095 | 0.706 | 0.035 |
+
+It is **reproducible and localised**, not sampling noise. At n=21 medium draw 0
+fails on all three Head A seeds (0.47 / 0.79 / 0.71) where all three `r1` seeds
+are fine (0.017-0.029); draws 100/200 are ~3x worse than `r1` but not
+catastrophic. On the true path at that medium Head A's `mu_rel_median` is
+**0.005 (`r1`) against 0.104 / 0.144 / 0.144**.
+
+**It is a tail, one member.** Median |rel| over the 21 members is 0.055 (`r1`) vs
+0.068 (`p4`); what changed is **AAXE02, `mu_hat` 43.6 against a true 17.6
+(+147%)**, and GCA_000151225.1 at +74%. `r1`'s worst member is -28%.
+
+**And every label-level metric improved across the same relabel**: worst grad
+cosine 0.956 → 0.963, value R² 0.974 → 0.989, Head B R² 0.907 → 0.937, rows per
+(organism, metabolite) where that metabolite limits p10 **1 → 100**, M11's
+`n_missed_essential` 6 → 0.
+
+> So this is not a fit deficit and not a coverage deficit. It is **distribution
+> shift the held-out protocol cannot see**, because held-out media are drawn from
+> the same design that changed. That is P24, restated.
+
+**Five metrics are refuted as predictors of §8.1** (P25). Each moved the right way
+with no downstream effect: co-limitation count (`p3`: >=5 8.6% → 9.9%),
+near-onset count (`p4`: median 0 → 4, p95 4 → 10), §6.3 nearest-training-medium
+distance in `x` (unchanged or better at the failing members), per-metabolite
+limiting-row coverage (p10 1 → 100), and held-out cosine / R². Also refuted:
+the plane budget (K=1000 → 2000 changes nothing), and the limiter's own band
+(`EX_g3pg_e` 7.43e-3 → 7.34e-3, it never moved).
+
+**One structural observation.** At the failing medium both `r1` and `p4` put
+essentially all of AAXE02's gradient on `EX_12ppd__R_e`, which limits in 1 and 0
+training rows respectively — the argsort-tie-among-zeros artefact, now visible at
+the gradient. The true limiter `EX_g3pg_e` (276 → 98 limiting rows) gets ~0. The
+composition integrates the *value*, so this does not explain +147% by itself, but
+the head has no correct local structure there.
+
+**Why max-affine over-predicts here, structurally.** `mu_hat(u) = min_j [mu_j +
+pi_j.(u - u_j)]` is a min of tangents to a concave function, so it is an **upper
+bound everywhere**, and it is tight only near a tangent point. At a medium with
+no nearby anchor the min of the remaining planes sits high — +147% is the
+textbook form of that, not an anomaly. Any fix has to either put a plane near the
+community regime or bound the head from the other side.
+
+#### The plan, in order
+
+The methodological point first: three design changes were chosen from proxies and
+each cost a ~5 h relabel + 3-seed retrain + 5-replicate scoring. That loop is not
+converging, and the measurement should be fixed before the next design change.
+
+1. **E1 — cutting-plane check at the failing medium.** Score the parameter-free
+   `min_j` model over `p4`'s *own* training tangents at that medium. Minutes, no
+   training. If it also over-predicts AAXE02, the labels lack the information and
+   no architecture change helps; if it does not, the deficit is the trained head.
+   Everything below is conditional on this.
+2. **A1 — a community-regime held-out label set.** ~2000 media per organism drawn
+   over the **union** of the members' active subspaces, solved once and held out
+   permanently. Converts a 5 h blind loop into a minutes-long one, and is the
+   direct instrument for P24. This should have preceded `p3`.
+3. **A2 — report per-member worst |rel| in `cfs community`.** The failure is a
+   tail and the summary reports medians; it hid this for three runs.
+4. **C4 — take the min over the Head A seeds already trained.** Valid for an
+   upper-bound family, preserves concavity and monotonicity, directly attacks the
+   over-prediction tail, and costs nothing: three seeds are already trained per
+   run. The one-line version of E2.
+
+Then, conditional on E1:
+
+**If the labels are sufficient (cutting-plane is right at that medium):**
+
+- **C1 — put planes in the community regime.** Re-rank `init_from_tangents` /
+  `reanchor` to include community-style media, rather than `rank_by_active_set`
+  over the training rows alone. This is why K above 1000 is inert: more planes in
+  the wrong place.
+- **C1b — bound from the other side.** Clip the head with the Liebig bound
+  `min_m (a_m + b_m u_m)` fitted per metabolite from the labels: exactly
+  computable, a valid upper bound, and much tighter than a generic tangent in the
+  multi-limited regime.
+- **E2 — a predictive quantile instead of a point estimate.** `d(log X)/dt = mu`,
+  so systematic over-prediction compounds along the trajectory; a deep ensemble
+  (already available) or a last-layer Laplace with a low quantile is the
+  statistically correct object for composition.
+- **C2 — a shared cross-organism residual head** trained only on community media.
+  Keep it concave and non-decreasing and §8.4's PSD tag survives.
+- **D1/D2** — `--w-rel` targeted at the mid-`mu` band with `calibrate` refitted
+  (never tested in combination); `reanchor` ranked by relative over-prediction
+  *inside* training and on community media (the post-hoc version hurt cosine).
+
+**If the labels are insufficient (cutting-plane also over-predicts):**
+
+- **B1** — make community-regime media a first-class stratum, 30-50% of the
+  budget, not an 800-media round-1 afterthought.
+- **B2** — oversample `mu / mu_max` in [0.3, 0.8]; AAXE02 sits at 45% of its
+  plateau at the failing medium, squarely in Head A's known weak band.
+- **B3** — active learning with `ensemble.gradient_disagreement` evaluated **at
+  sampled community media**. That function exists for exactly this and has never
+  been used.
+
+**Sampling rather than optimising** (E2 above is the main one). Also open:
+**E3**, turn the value call into an argmin — sample the head along each active
+coordinate at each dFBA step to identify the limiter, which the head is
+measurably good at (top-1 share 0.83-0.94), instead of trusting the level.
+**E4**, HMC over the design, is the wrong tool for this; that is §13's inverse
+problem, not this.
+
+**Not worth spending on.** A different optimiser: the train/held-out gap is 0.005
+cosine and 0.013 R², so nothing is being lost to optimisation — this is an
+inductive-bias and distribution problem, not a convergence one.
+
+**A coordinate caveat that affects all of the above.** `x = u/(u+s)` takes `s`
+from the training rows, so **every relabel silently changes the input
+coordinate** and no two label roots' distributions are strictly comparable. A
+fixed coordinate (clipped `log u`) would make this class of question answerable;
+it is a prerequisite if the distribution-shift hypothesis is to be tested
+rigorously rather than by proxy.
+
+---
+
 ## 9. Phase 6 — minimal medium (D9)
 
 ```
@@ -1781,7 +1915,8 @@ the hardest downstream use, and most uses need less.
 | P21 | The designer walks out of the design | Spectacular objective, LP disagrees; medium far from any training medium | Trust region on the §6.3 nearest-training-medium distance — the same metric that diagnosed P18 — plus V5 at every reported optimum |
 | P22 | An objective on flux *magnitude* | Inherits Head B's weakest axis while the diagnostics (cosine, sign agreement) look fine | Prefer direction- and structure-valued objectives; label magnitude-valued results exploratory |
 | P23 | Optimising a batch-culture endpoint | The answer flips under changes that improve the right-hand side on every measure — the endpoint turns on which metabolite empties first | Optimise rates, or a chemostat steady state. Never a batch endpoint |
-| P24 | A new sampling stratum paid for out of the unfocused budget | Every label-level metric improves and the composition gets worse in proportion to community size | The focus strata vary one metabolite and the low-`mu` stratum 1-3; only the unfocused strata cover the joint regime a community medium is in. Take the budget from `frac_focus` or raise `n_media`, and score any design change on §8.1 at n=21, not on held-out cells |
+| P24 | A relabel that improves every held-out metric and breaks composition | Worst grad cosine, value R², per-metabolite coverage and M11 all improve; §8.1 regresses 17x at n=21 | Held-out media come from the *same design that changed*, so they cannot see it. Score every design change on a **community-regime held-out set** (§8.5). The stratum-budget reading of P24 was measured and is wrong — see §4.3 |
+| P25 | Tuning a training distribution against a proxy metric | The proxy moves exactly as designed, three times, and the downstream number does not follow | Co-limitation count, near-onset count, NN-distance in `x` and per-metabolite limiting rows are all refuted as predictors of §8.1 (§8.5). Do not spend a 5 h relabel on a metric that has not first been shown to correlate with the composition on runs already on disk |
 
 ### 13.9 Milestones
 

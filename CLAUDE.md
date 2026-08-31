@@ -26,7 +26,7 @@
 > | §4 sampling + bulk labels | **done, generated** — active subspace, stratified-Sobol design, parquet driver | `src/cfs/sampling/`, `--stage labels` |
 > | M3 Head A (value) | **gate not met; roster-wide worst is 0.958 against 0.99.** Three causes, each measured and each fixed: concavity imposed in the wrong coordinate (`x`, not `u`), random initialisation collapsing the max-affine head, and planes going *dead during training* and being unable to revive. Seeded `groupmax-u` + `--gm-reanchor 3`, 21 organisms: worst cosine **0.958**, median 0.978, median R² 0.995 | `src/cfs/surrogate/{picnn_u,deepset_u,groupmax}.py` |
 > | M4 Head B (behaviour) | **done** — `z_i(c, alpha)` masked MLP predicting **specific** flux `z / mu_max`, worst held-out R2 **0.883** / median 0.941, worst flux cosine 0.995. The `z` parametrisation cost the M5 tail: see below | `src/cfs/surrogate/behaviour.py` |
-> | M5 dFBA composition | **built and measured over replicates; the 1% gate is not met, sizes 2/3 are within 2x.** 10 communities of size 2-21 against per-organism FBA on the same integrator: median log-X error ~5% at every size once Head A is trained at `--gm-temp 0.01` (was 4-32%), then **1.4% / 1.6% at sizes 10 / 21** with the output calibration (`cfs.surrogate.calibrate`); size 3 regressed to 7.2%. Specific-flux Head B + §3.3's uptake clamp + a community-regime label round, scored over **n=5 replicates** (3 Head A seeds x 3 medium draws): median log-X **0.9% / 1.8% / 7.6% / 2.7% / 2.7%** at sizes 2/3/5/10/21. Nothing passes 1%; sizes 2/3 are within 2x. A single run has ~6x sampling error on a small community — larger than any model change measured — so no single-draw M5 cell is quotable. **Error does not grow with community size** | `src/cfs/compose/dfba.py`, `src/cfs/surrogate/calibrate.py` |
+> | M5 dFBA composition | **built and measured over replicates; the 1% gate is not met and the regression is open.** Median log-X over n=5 replicates x 10 communities: **0.009 / 0.018 / 0.076 / 0.027 / 0.027** at sizes 2/3/5/10/21 on the pre-relabel labels (`r1`), but **0.014 / 0.067 / 0.029 / 0.093 / 0.466** after the `probe_lo` relabel — and three design fixes have not moved it (`p3` 0.783, `p4` 0.706 at n=21). Error does not grow with community size; the failure is one over-predicted member at one medium. Stock-take and ranked plan: **design spec §8.5** | `src/cfs/compose/dfba.py`, `src/cfs/surrogate/calibrate.py` |
 > | M3b HPC sweep | **two runs. 2026-08-25** (350 tasks, 324 cpu-h) refuted its own "scale closes the gap": width/depth inert. **2026-08-27** (442/442 tasks, 21 cells x 21 organisms) is the source of the roster numbers below. The rows arm has now failed to run three times | `examples/hpc_run/`, `--stage sweep` |
 >
 > | M9-M14 Phase 7 applications | **spec written; M9, M10 and M11 done** — `cfs simulate` integrates a community forward, batch or chemostat (`--dilution`), surrogate only, no LP; `cfs maximise-growth` is §13.2's convex medium design, 19/20 V5 round-trips at the default trust region, median true gain +2.2%, median optimism 0.3%. `cfs minimal-medium` is §13.3's convex program, and V6 does not pass: Head A cannot represent essentiality (below). The rest (steady state, interaction maximisation, the inverse-problem posterior) is specced in **§13** with a per-use-case accuracy table: most need less than M3's and M5's unmet gates | `src/cfs/compose/dfba.py` (`simulate`, `with_chemostat`), `src/cfs/science/growth.py` |
@@ -37,6 +37,12 @@
 > 20000 for HPC. 21/21 organisms, 63/63 shards, **100% optimal solves**, one
 > `index_hash` throughout (P13). Per organism: 32 000 rows at the primary
 > `eps=1e-3` and 6400 at each of `1e-2`/`1e-4`. `|A_i|` = 11–32, median 24.
+>
+> Four label roots now live under it: `labels` (= `r1`, pre-relabel), `labels_p2`
+> (`probe_lo = -12` + the low-`mu` stratum), `labels_p3` (P24 budget, reverted in code)
+> and `labels_p4` (`focus_bg_decades`, kept). Each has base + a round-1 community pass,
+> 63/63 shards, 100% optimal, one `index_hash`; every §8.1 comparison in this file is on
+> the identical community list and media. See the design spec §8.5.
 >
 > It supersedes `20hm/` (same design, one shared sampling band) and differs only
 > in that each metabolite's focus stratum is centred on **its own** limiting
@@ -1083,21 +1089,64 @@ on the `r1` label root reproduce `p2` on `p2` bit for bit. Same ruler.
    7.43e-3 -> 7.34e-3. The surrogate's 44.6 is roughly the `mu` of a medium with
    **10x** the limiting carbon — it is not resolving how scarce that one
    metabolite is, at a point where ~30 others are also in bands.
-5. **So the suspect is the budget reallocation, not the new anchors.**
-   `frac_low_mu = 0.15` is taken out of `n_rest`, and the unfocused strata are the
-   *only* ones that vary many metabolites at once — which is exactly what a
-   21-member community medium is, and why the damage scales with community size
-   (n=2 0.009 -> 0.014, n=21 0.027 -> 0.466). The focus strata hold one metabolite
-   scarce with the rest replete; the low-mu stratum holds 1-3 scarce. Neither
-   covers the joint regime, and the stratum that did just lost 30% of its rows.
-   **Next test:** pay for `frac_low_mu` out of `frac_focus` instead of `n_rest`, or
-   raise `n_media`, and relabel. Not yet run.
+5. ~~**So the suspect is the budget reallocation, not the new anchors.**~~
+   **REFUTED — two relabels, see the next section.** `frac_low_mu` does come out
+   of `n_rest`, and the unfocused "below Km" stratum *is* the only one that
+   produces co-limited media. Both were fixed and neither changed the composition.
 
 **The verdict is not "revert".** The label fix is a clean, reproducible win on
 every label-level metric and it is what closes M11's essentiality blocker; the
 composition regression is a separate, newly exposed weakness of the head at
 multi-limited media. Do not read the old `r1` composition numbers as evidence the
 old labels were better — they were better *at hiding* those dimensions.
+
+### The size-21 regression: three design fixes, none of them it — 2026-08-31
+
+Full stock-take and the ranked plan are **§8.5 of the design spec**. Read that
+before touching the sampling design again. Summary:
+
+| median log-X, n=5 replicates | n=2 | n=3 | n=5 | n=10 | n=21 | overall |
+| --- | --- | --- | --- | --- | --- | --- |
+| `r1` pre-relabel | 0.009 | 0.018 | 0.076 | 0.027 | **0.027** | 0.017 |
+| `p2` relabel | 0.014 | 0.067 | 0.029 | 0.093 | 0.466 | 0.031 |
+| `p3` stratum budget out of `frac_focus` | 0.024 | 0.049 | 0.022 | 0.082 | 0.783 | 0.030 |
+| `p4` `focus_bg_decades = (0.0, 1.5)` | 0.032 | 0.048 | 0.026 | 0.095 | 0.706 | 0.035 |
+
+1. **Reproducible, and a tail.** At n=21, medium draw 0 fails on all three Head A
+   seeds (0.47/0.79/0.71) where all three `r1` seeds are fine; `mu_rel_median` on
+   the true path is 0.005 (`r1`) vs 0.104-0.144. Median |rel| over the 21 members
+   barely moves (0.055 -> 0.068) — it is **AAXE02 at +147%** (`mu_hat` 43.6 vs a
+   true 17.6) and GCA_000151225.1 at +74%.
+2. **Every label metric improved over the same relabel** — worst cosine 0.956 ->
+   0.963, R² 0.974 -> 0.989, Head B R² 0.907 -> 0.937, per-metabolite limiting
+   rows p10 **1 -> 100**, M11 misses 6 -> 0. So it is not fit and not coverage:
+   it is distribution shift the held-out protocol **cannot see**, because
+   held-out media come from the design that changed (P24).
+3. **Five refuted predictors (P25).** Co-limitation count, near-onset count,
+   NN-distance in `x`, per-metabolite limiting rows, held-out cosine/R². Each
+   moved as designed with no downstream effect. Also refuted: plane budget
+   (K 1000 -> 2000, nothing) and the limiter's band (never moved). **Do not spend
+   a 5 h relabel on a proxy that has not first been shown to correlate with §8.1
+   on runs already on disk.**
+4. **`p3` was reverted; `p4` (`focus_bg_decades`) was kept** as the more
+   defensible definition of "replete", not as a fix.
+5. **Structural reason max-affine over-predicts here:** a min of tangents to a
+   concave function is an *upper bound* everywhere and tight only near a tangent
+   point. At a medium with no nearby anchor the min of the rest sits high. Any
+   fix must put a plane in the community regime or bound the head from below.
+
+**The plan (§8.5), in order:** E1 cutting-plane check at the failing medium
+(minutes, decides labels-vs-head, everything else is conditional on it); A1 a
+community-regime **held-out label set** so design changes are scored in minutes
+instead of 5 h; A2 report per-member worst |rel| in `cfs community`; C4 take the
+min over the three Head A seeds already trained (free, and correct for an
+upper-bound family). Then C1/C1b/E2/C2/D1 if the labels are sufficient, or
+B1/B2/B3 if they are not. A different optimiser is **not** worth spending on —
+the train/held-out gap is 0.005 cosine.
+
+**Caveat that affects all of it:** `x = u/(u+s)` takes `s` from the training
+rows, so every relabel silently changes the input coordinate and two label roots
+are never strictly comparable.
 
 ### M11: the minimal medium is blocked on essentiality, not on the program — 2026-08-30
 
