@@ -85,6 +85,25 @@ class SamplingConfig:
     # which came from shifting whole bands so nothing was replete. Every column
     # here stays above its own onset; only the focused one goes below.
     focus_bg_decades: tuple[float, float] = (0.0, 1.5)
+    # B2 (§8.5): the mid-`mu` stratum. A share of `A_i` drawn *between* each
+    # metabolite's own 10%-recovery anchor and its `mid_target_frac`-recovery
+    # point, the rest replete -- so several metabolites are mildly limiting at
+    # once and `mu` lands in the middle of the organism's range, which is the
+    # regime §8.1 actually runs in and the one the design had emptied.
+    #
+    # E1 measured why this is the lever: at the 21-member medium that fails on
+    # every Head A seed, the binding tangent of the *parameter-free* cutting-plane
+    # model over `p4`'s own labels is anchored at a `mu = 50.6` plateau row and
+    # over-predicts the true 17.63 by +153% -- worse than the trained head. The
+    # same model on `r1`'s labels is exact there, and its binding tangent is
+    # anchored at `mu = 17.9`. A max-affine head cannot beat the min over its own
+    # planes, so the deficit is which media were labelled, and the missing ones
+    # are the mid-`mu` ones: rows with `mu/mu_max` in 0.3-0.6 fell 261 -> 90
+    # (AAXE02) and 231 -> 109 (GCA_000151225.1) across the relabel, while rows
+    # below 0.2 went 0.17 -> 0.65 of the design.
+    frac_mid_mu: float = 0.15
+    mid_target_frac: float = 0.5  # the second probe's recovery target
+    mid_mu_share: tuple[float, float] = (0.2, 1.0)  # share of A_i drawn near onset
     low_mu_subset: tuple[int, int] = (1, 3)  # how many metabolites go scarce at once
     low_mu_decades: tuple[float, float] = (-1.0, 0.5)  # drawn relative to the anchor
     # Growth-rate grid, K=8, densified near 1 where dFBA lives and z moves fastest.
@@ -186,6 +205,7 @@ def sample_media(
     cfg: SamplingConfig | None = None,
     scales: dict[str, float] | None = None,
     focus_weights: dict[str, float] | None = None,
+    mid_scales: dict[str, float] | None = None,
 ) -> list[dict]:
     """Return ``[{exchange_id: concentration}]`` media for one organism (§4.3).
 
@@ -258,29 +278,33 @@ def sample_media(
             warnings.simplefilter("ignore", category=UserWarning)
             return qmc.Sobol(d=d, seed=int(rng.integers(1 << 31))).random(n)
 
+    def _perturb_bg(m):
+        """The community regime: take a random *share* of the background off rich."""
+        if held and rng.random() < cfg.frac_bg_perturb:
+            # A *subset* of the background, not all of it. In a community the
+            # background metabolites that stop being replete are the other
+            # members' active sets, which is 20% of the background for a pair
+            # and most of it for the whole roster -- so the share is itself
+            # drawn, spanning every community size in one design.
+            #
+            # Perturbing all-or-nothing left this bimodal: 90% of media with
+            # every background dim rich and 10% with essentially none, and
+            # nothing in between. Every failing M5 community medium sits in
+            # that hole -- 2.92 from the nearest training medium against a
+            # held-out median of 0.10, with each coordinate individually in
+            # range. Head B's flux cosine tracks that distance on all 21
+            # organisms (Spearman 0.33-0.84).
+            share = rng.random()
+            for ex in held:
+                if rng.random() < share:
+                    m[ex] = km[ex] * 10.0 ** rng.uniform(cfg.log10_lo, cfg.log10_hi)
+        return m
+
     def _emit(u, lo, hi):
         """Unit cube -> media. ``lo``/``hi`` are scalars or per-column log10 bounds."""
         for row in kmv * 10.0 ** (lo + u * (hi - lo)):
             m = {**held_rich, **{ex: float(c) for ex, c in zip(sampled, row, strict=True)}}
-            if held and rng.random() < cfg.frac_bg_perturb:
-                # A *subset* of the background, not all of it. In a community the
-                # background metabolites that stop being replete are the other
-                # members' active sets, which is 20% of the background for a pair
-                # and most of it for the whole roster -- so the share is itself
-                # drawn, spanning every community size in one design.
-                #
-                # Perturbing all-or-nothing left this bimodal: 90% of media with
-                # every background dim rich and 10% with essentially none, and
-                # nothing in between. Every failing M5 community medium sits in
-                # that hole -- 2.92 from the nearest training medium against a
-                # held-out median of 0.10, with each coordinate individually in
-                # range. Head B's flux cosine tracks that distance on all 21
-                # organisms (Spearman 0.33-0.84).
-                share = rng.random()
-                for ex in held:
-                    if rng.random() < share:
-                        m[ex] = km[ex] * 10.0 ** rng.uniform(cfg.log10_lo, cfg.log10_hi)
-            media.append(m)
+            media.append(_perturb_bg(m))
 
     # Per-metabolite focus strata: an equal share of the budget for each sampled
     # metabolite, in media where *that* metabolite is the scarce one (drawn below
@@ -343,10 +367,32 @@ def sample_media(
             m[sampled[j]] = kmv[j] * 10.0 ** max(cfg.probe_lo, a + rng.uniform(d_lo, d_hi))
         media.append(m)
 
+    # B2: mid-`mu` media -- a community-sized share of `A_i` between its own
+    # anchor (10% recovery) and its `mid_target_frac` point, everything else
+    # replete for itself. Co-limitation pulls the joint `mu` below what any one
+    # of them would give, which is the shape of a real community medium.
+    n_mid = int(round(cfg.frac_mid_mu * n_bulk)) if d else 0
+    mid = {ex: np.log10(float(v)) for ex, v in (mid_scales or {}).items()}
+    s_lo, s_hi = cfg.mid_mu_share
+    for _ in range(n_mid):
+        m = {**held_rich}
+        for j, ex in enumerate(sampled):
+            a = anchor[ex]
+            m[ex] = kmv[j] * 10.0 ** min(a + cfg.focus_bg_decades[1], cfg.log10_hi)
+        share = rng.uniform(s_lo, s_hi)
+        pick = rng.choice(d, size=max(1, int(round(share * d))), replace=False)
+        for j in pick:
+            a = anchor[sampled[j]]
+            # No second probe for this metabolite (it never limits inside the
+            # band): half a decade above its own anchor is the honest stand-in.
+            b = mid.get(sampled[j], a + 0.5)
+            m[sampled[j]] = kmv[j] * 10.0 ** min(rng.uniform(min(a, b), max(a, b)), cfg.log10_hi)
+        media.append(_perturb_bg(m))
+
     # The remainder keeps the original two strata in log10(c/Km): below Km
     # [lo, 0), at/above Km [0, hi]. Both regimes still need unfocused coverage —
     # real media limit on several things at once and the head has to see that.
-    n_rest = n_bulk - n_focused - n_low
+    n_rest = n_bulk - n_focused - n_low - n_mid
     n_below = int(round(cfg.frac_below_km * n_rest))
     for n_str, lo, hi in ((n_below, cfg.log10_lo, 0.0), (n_rest - n_below, 0.0, cfg.log10_hi)):
         if n_str <= 0:

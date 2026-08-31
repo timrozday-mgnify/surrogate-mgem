@@ -246,7 +246,9 @@ def test_low_mu_stratum_starves_a_few_metabolites_below_their_own_anchor():
     scales = dict.fromkeys(ex, 1e-6)  # onset 6 decades below Km
     # The unfocused "below Km" stratum also goes under Km, so it is switched off:
     # what is under test is the anchor-relative window, not that stratum.
-    cfg = SamplingConfig(n_media=600, seed=5, frac_low_mu=0.3, frac_focus=0.0, frac_below_km=0.0)
+    cfg = SamplingConfig(
+        n_media=600, seed=5, frac_low_mu=0.3, frac_focus=0.0, frac_below_km=0.0, frac_mid_mu=0.0
+    )
     media = sample_media(sub, load_km_defaults(), cfg, scales)
 
     rich = max(m[ex[0]] for m in media)
@@ -303,3 +305,42 @@ def load_km_defaults_km(ex):
     from cfs.groundtruth.solve import km_for_exchange
 
     return km_for_exchange(ex, load_km_defaults())
+
+
+def test_mid_mu_stratum_puts_many_metabolites_between_their_two_anchors():
+    """B2 (§8.5): several metabolites mildly limiting at once, none starving.
+
+    The low-`mu` stratum drives 1-3 metabolites *below* onset and the focus strata
+    move one at a time, so the design had nothing in the middle of the organism's
+    growth range — which is where §8.1's communities run and where E1 located the
+    size-21 regression (`p4`'s binding tangent anchored at `mu = 50.6` against a
+    truth of 17.6).
+    """
+    import numpy as np
+
+    ex = [f"EX_a{i}_e" for i in range(10)]
+    sub = ActiveSubspace("g", ex, [], dict.fromkeys(ex, 1.0), 10.0)
+    onset = dict.fromkeys(ex, 1e-6)  # 10% recovery, 6 decades below Km
+    mid = dict.fromkeys(ex, 1e-4)  # 50% recovery, 4 decades below
+    cfg = SamplingConfig(
+        n_media=400,
+        seed=11,
+        frac_mid_mu=1.0,
+        frac_focus=0.0,
+        frac_low_mu=0.0,
+        frac_below_km=0.0,
+        focus_bg_decades=(0.0, 3.0),  # so "replete" is clear of the mid band
+    )
+    media = sample_media(sub, load_km_defaults(), cfg, onset, mid_scales=mid)
+
+    from cfs.groundtruth.solve import km_for_exchange
+
+    km = km_for_exchange(ex[0], load_km_defaults())
+    # skip the all-but-one-depleted corners `sample_media` always emits first
+    r = np.array([[m[e] / km for e in ex] for m in media[len(ex) :]])  # c/Km
+    band = (r >= 1e-6) & (r <= 1e-4)
+    n_in = band.sum(1)
+    assert n_in.min() >= 1 and n_in.max() == len(ex)  # a pair's share, and the roster's
+    assert n_in.mean() > 2  # not a one-at-a-time stratum
+    # Nothing is driven below its own onset: that is the low-`mu` stratum's job.
+    assert r.min() >= 1e-6

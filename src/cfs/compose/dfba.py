@@ -356,7 +356,10 @@ def compare(
                 "mu_rel_median": float(np.median(mu_rel)),
                 "mu_rel_max": float(np.max(mu_rel)),
                 "mu_rel_per_member": per_member.tolist(),
-                "mu_rel_worst_member": [sur.genome_ids[sur.members[worst]], float(per_member[worst])],
+                "mu_rel_worst_member": [
+                    sur.genome_ids[sur.members[worst]],
+                    float(per_member[worst]),
+                ],
             },
             "trajectory": {
                 "x_log_err_final": float(x_log[-1].max()),

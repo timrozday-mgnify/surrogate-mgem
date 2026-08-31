@@ -102,7 +102,25 @@ def generate_organism(
         else {}
     )
     scales, sources = band_scales(probe, scales, roster_median, sampled)
-    media = sample_media(subspace, km_cfg, cfg, scales, focus_weights)
+    # B2 (§8.5): a second bisection at a higher recovery target bounds the mid-`mu`
+    # stratum's band from above. Same ~350 LPs and ~2 s as the first probe, and it
+    # is the only way to place that band without labels; there is no fallback
+    # chain because a metabolite with no probe result never limits in the band at
+    # all, and `sample_media` stands in with half a decade above its own anchor.
+    mid_scales = (
+        demand_probe(
+            model,
+            sampled,
+            km_cfg,
+            lo=cfg.probe_lo,
+            hi=cfg.log10_hi,
+            steps=cfg.probe_steps,
+            target_frac=cfg.mid_target_frac,
+        )
+        if cfg.probe and cfg.frac_mid_mu > 0
+        else {}
+    )
+    media = sample_media(subspace, km_cfg, cfg, scales, focus_weights, mid_scales)
     ex_order = [ex.id for ex in model.exchanges]
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)

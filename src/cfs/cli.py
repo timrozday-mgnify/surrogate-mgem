@@ -66,6 +66,13 @@ def build_parser() -> argparse.ArgumentParser:
         "raise it for a round meant to cover §8.1 media.",
     )
     gen.add_argument(
+        "--mid-mu",
+        type=float,
+        help="Share of the bulk budget spent on mid-`mu` media: a community-sized "
+        "share of A_i between each metabolite's own onset and its 50%%-recovery "
+        "point (default 0.15). B2 -- the band E1 showed the labels had emptied.",
+    )
+    gen.add_argument(
         "--scales",
         type=Path,
         help="JSON {genome_id: {exchange: scale}} from "
@@ -260,6 +267,23 @@ def build_parser() -> argparse.ArgumentParser:
     cm.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the medium.")
     cm.add_argument("--seed", type=int, default=0)
 
+    ch = sub.add_parser(
+        "community-holdout",
+        help="A1/§8.5: make or score a community-regime held-out label set — the "
+        "one ruler a change to the sampling design cannot move (P24).",
+    )
+    ch.add_argument("action", choices=["make", "score"])
+    ch.add_argument("--out", type=Path, required=True, help="Report dir (make: the npz too).")
+    ch.add_argument("--roster", type=Path, help="make: CSV genome_id, model_path.")
+    ch.add_argument("--labels", type=Path, help="make: label root, for the subspaces.")
+    ch.add_argument("--index", type=Path, help="make: frozen metabolite_index.json.")
+    ch.add_argument("--communities", help="make: semicolon-separated member lists.")
+    ch.add_argument("--n-media", type=int, default=200, help="make: media per community.")
+    ch.add_argument("--eps", type=float, default=1e-3)
+    ch.add_argument("--holdout", type=Path, help="score: community_holdout.npz.")
+    ch.add_argument("--value", type=Path, help="score: Head A checkpoint dir.")
+    ch.add_argument("--seed", type=int, default=0)
+
     gx = sub.add_parser(
         "maximise-growth",
         help="§13.2/M10: convex medium design — maximise one organism's mu, then V5 it.",
@@ -426,6 +450,25 @@ def main(argv: list[str] | None = None) -> int:
             organisms=organisms,
             seed=args.seed,
         )
+        return 0
+
+    if args.command == "community-holdout":
+        from cfs.validate import community_holdout as CH
+
+        if args.action == "make":
+            rep = CH.make(
+                args.roster,
+                args.labels,
+                args.index,
+                args.out,
+                communities=[c.split(",") for c in args.communities.split(";") if c],
+                n_media=args.n_media,
+                eps=args.eps,
+                seed=args.seed,
+            )
+        else:
+            rep = CH.score(args.holdout, args.value, args.out)
+        print(json.dumps(rep, indent=2))
         return 0
 
     if args.command == "train-value":
@@ -703,6 +746,8 @@ def main(argv: list[str] | None = None) -> int:
         cfg = SamplingConfig(seed=args.seed, probe=not args.no_probe)
         if args.bg_perturb is not None:
             cfg = replace(cfg, frac_bg_perturb=args.bg_perturb)
+        if args.mid_mu is not None:
+            cfg = replace(cfg, frac_mid_mu=args.mid_mu)
         if args.n_media is not None:
             cfg = replace(cfg, n_media=args.n_media)
         scales = json.loads(args.scales.read_text()) if args.scales else None
