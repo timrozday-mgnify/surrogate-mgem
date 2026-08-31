@@ -104,6 +104,14 @@ class SamplingConfig:
     frac_mid_mu: float = 0.15
     mid_target_frac: float = 0.5  # the second probe's recovery target
     mid_mu_share: tuple[float, float] = (0.2, 1.0)  # share of A_i drawn near onset
+    # Where the picked metabolites sit, in decades *above* their own
+    # `mid_target_frac` point. Above, not between it and onset: co-limitation
+    # compounds downward, so a share of `A_i` each individually at 50% recovery
+    # lands the joint `mu` far below 50%. Measured -- the first version drew in
+    # [onset, mid] and moved rows with `mu/mu_max` in [0.3, 0.8] the *wrong* way
+    # (AAXE02 29 -> 13, `<0.2` 0.65 -> 0.76). Each metabolite is individually
+    # replete-ish and the *combination* is what pulls `mu` into the middle.
+    mid_mu_decades: tuple[float, float] = (0.0, 1.0)
     low_mu_subset: tuple[int, int] = (1, 3)  # how many metabolites go scarce at once
     low_mu_decades: tuple[float, float] = (-1.0, 0.5)  # drawn relative to the anchor
     # Growth-rate grid, K=8, densified near 1 where dFBA lives and z moves fastest.
@@ -381,12 +389,13 @@ def sample_media(
             m[ex] = kmv[j] * 10.0 ** min(a + cfg.focus_bg_decades[1], cfg.log10_hi)
         share = rng.uniform(s_lo, s_hi)
         pick = rng.choice(d, size=max(1, int(round(share * d))), replace=False)
+        m_lo, m_hi = cfg.mid_mu_decades
         for j in pick:
             a = anchor[sampled[j]]
             # No second probe for this metabolite (it never limits inside the
             # band): half a decade above its own anchor is the honest stand-in.
             b = mid.get(sampled[j], a + 0.5)
-            m[sampled[j]] = kmv[j] * 10.0 ** min(rng.uniform(min(a, b), max(a, b)), cfg.log10_hi)
+            m[sampled[j]] = kmv[j] * 10.0 ** min(b + rng.uniform(m_lo, m_hi), cfg.log10_hi)
         media.append(_perturb_bg(m))
 
     # The remainder keeps the original two strata in log10(c/Km): below Km

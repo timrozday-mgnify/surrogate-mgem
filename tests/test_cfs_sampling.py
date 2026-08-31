@@ -307,7 +307,7 @@ def load_km_defaults_km(ex):
     return km_for_exchange(ex, load_km_defaults())
 
 
-def test_mid_mu_stratum_puts_many_metabolites_between_their_two_anchors():
+def test_mid_mu_stratum_puts_many_metabolites_just_above_their_50pc_point():
     """B2 (§8.5): several metabolites mildly limiting at once, none starving.
 
     The low-`mu` stratum drives 1-3 metabolites *below* onset and the focus strata
@@ -315,6 +315,13 @@ def test_mid_mu_stratum_puts_many_metabolites_between_their_two_anchors():
     growth range — which is where §8.1's communities run and where E1 located the
     size-21 regression (`p4`'s binding tangent anchored at `mu = 50.6` against a
     truth of 17.6).
+
+    The band sits **above** each metabolite's 50%-recovery point, not between that
+    and onset: co-limitation compounds downward, so a share of `A_i` each
+    individually at 50% lands the joint `mu` far *below* the target band. Measured
+    on three organisms (|A| = 16/20/30), this window puts 0.64-0.68 of media in
+    `mu/mu_max` [0.3, 0.8] with none below 0.2; drawing between onset and the 50%
+    point instead moved AAXE02's [0.3, 0.8] rows 29 -> 13.
     """
     import numpy as np
 
@@ -338,9 +345,11 @@ def test_mid_mu_stratum_puts_many_metabolites_between_their_two_anchors():
     km = km_for_exchange(ex[0], load_km_defaults())
     # skip the all-but-one-depleted corners `sample_media` always emits first
     r = np.array([[m[e] / km for e in ex] for m in media[len(ex) :]])  # c/Km
-    band = (r >= 1e-6) & (r <= 1e-4)
+    # `mid_mu_decades` = (0, 1) above the 50% point at c/Km = 1e-4.
+    band = (r >= 1e-4) & (r <= 1e-3)
     n_in = band.sum(1)
     assert n_in.min() >= 1 and n_in.max() == len(ex)  # a pair's share, and the roster's
     assert n_in.mean() > 2  # not a one-at-a-time stratum
-    # Nothing is driven below its own onset: that is the low-`mu` stratum's job.
-    assert r.min() >= 1e-6
+    # Nothing is driven below its own 50% point: going lower is what made the
+    # joint `mu` collapse, and starving is the low-`mu` stratum's job anyway.
+    assert r.min() >= 1e-4
