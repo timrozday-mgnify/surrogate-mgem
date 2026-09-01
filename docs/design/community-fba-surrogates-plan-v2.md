@@ -1514,7 +1514,13 @@ means anything without it: three relabels improved every held-out metric while
 inverse of the held-out order. **Every stage below is scored here before anything
 downstream is retrained.** Cost: 45 min once, seconds per checkpoint after.
 
-**Stage 1 — a non-adaptive stratum (B2). Built, running.** `--mid-mu` (default
+**Stage 1 — a non-adaptive stratum (B2). RUN, AND REFUTED (2026-09-01).** It hit
+its label target exactly (rows with `mu/mu_max` in [0.3, 0.8]: median 183 -> 555,
+minimum **13 -> 470**) and made both A1 and §8.1 worse, calibrated or not. Kept in
+the code at `--mid-mu` default 0.15; **pass `--mid-mu 0` for a new label root**
+until something re-motivates it. The description below is what it does.
+
+**Stage 1 (as designed).** `--mid-mu` (default
 0.15): a community-sized share of `A_i` between each metabolite's own onset and
 its 50%-recovery point, bounded by a second `demand_probe` bisection (~2 s per
 organism, no labels needed). This is the cheapest thing that puts tangents in the
@@ -1523,7 +1529,17 @@ cannot chase its own errors. **Gate: A1 median abs and worst p90 at or below
 `value_r1`'s 0.0022 / 0.163.** If it clears, stop: the remaining stages buy
 nothing a fixed design already has.
 
-**Stage 2 — retune the stratum, not the mechanism.** `mid_target_frac` (0.5),
+**Stage 2 — retune the stratum, not the mechanism. DONE, AND IT WAS NOT A
+PARAMETER MISS.** The first band drew each picked metabolite *between* its onset
+and its 50%-recovery point and moved the target band the wrong way (AAXE02's
+[0.3, 0.8] rows 29 -> 13); recalibrating it above the 50% point, by solving a few
+hundred media per organism, put 0.64-0.68 of media in the band on three organisms.
+The histogram was then right and §8.1 still did not improve — so the mechanism,
+not the parameters, is what fails. This is the stage working: a 20-minute solve
+caught the parameter error before the 8 h retrain, and the retrain then closed the
+mechanism question.
+
+**Stage 2 (as designed).** `mid_target_frac` (0.5),
 `mid_mu_share` (0.2-1.0) and `frac_mid_mu` (0.15) are three scalars, and the
 resulting `mu/mu_max` histogram is measurable on the labels **without training
 anything**. If Stage 1 misses, check that histogram first: if the stratum is not
@@ -1571,6 +1587,43 @@ regime pool that has been actively covered still leaves A1's tail high. Then the
 deficit is genuinely representational and C1b (a Liebig lower bound) or E2 (a
 predictive quantile rather than a point estimate) apply. Nothing before Stage 4
 distinguishes that case from an unlabelled region, which is why they come last.
+
+#### Where this stands after 2026-09-01, and why stages 3-5 are not the live question
+
+E1 has now been run on **two different** n=21 failures and gives opposite answers,
+which is the whole reason it comes first:
+
+| failure | trained head | cutting-plane over the same labels | verdict |
+| --- | --- | --- | --- |
+| AAXE02, `p4` **calibrated** | +148% | **+153%** (`r1`: -0.000) | labels insufficient |
+| GCA_000007325.1, `p4` **uncalibrated** | 0.055 vs a true 0.363 | **0.363, exact** | trained-head deficit |
+
+So the B branch was correct for the over-prediction the output calibration was
+masking, and is **wrong for the failure that remains**. Two head-side changes
+followed from that, both in the code and both measured:
+
+- **`--w-under`** — a one-sided relative penalty on under-prediction. `mu_max` is
+  concave and the head is a min of affine pieces, so `mu_hat < mu` at a labelled
+  row is a **provable violation**, not an accuracy trade. On `p4`'s bottom-5%-`mu`
+  training rows the head under-predicts 53-68% (against `r1`'s 0.2-0.5%); the hinge
+  takes that to 19-24%, cuts A1's worst p90 0.311 -> 0.051, and halves the n=21
+  cell at draw 0 (0.776 -> 0.346). `w=1` beats `w=10` on every axis.
+- **`--gm-select level1`** — SDDP's cut selection (Part 3a of `docs/reading-map.md`).
+  Gives back the held-out cosine the hinge cost (0.899 -> 0.919) and takes the
+  composition's worst cell 1.698 -> 0.418, but does not move `n=21`. Its durable
+  contribution is diagnostic: **~90% of label tangents never bind anywhere**, and
+  `K = 1000` exceeds the useful cut count on **21/21 organisms**, which is why the
+  plane budget was inert.
+
+**The state to hand on:** sizes 2/3/5 are under M5's 1% gate, n=10 is 5.5-11%, and
+`n=21` is flat at 0.27-0.35 across five independent interventions. It is one member
+(DACTBY01, +0.68 to +1.22) at one community — an over-prediction at a point with no
+nearby tangent, which is max-affine's structural one-sided error. Cheap and untried:
+**C4** (min over the three trained Head A seeds, valid for an upper-bound family and
+free) and `--gm-trial-media` against a larger community-regime pool than A1's 2000.
+A1 is a *tail* instrument — its `worst_p90` reproduced the composition's `max`
+ordering exactly — and no per-medium statistic can see a single member at a single
+community, so **A2's `mu_rel_worst_member` is the reporting unit for this cell.**
 
 **Sampling rather than optimising** (E2 above is the main one). Also open:
 **E3**, turn the value call into an argmin — sample the head along each active

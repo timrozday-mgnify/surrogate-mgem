@@ -1148,16 +1148,25 @@ fell **261 -> 90** (AAXE02) across the relabel. Nearest-row distance in `w` is
 proxy. Numbers and the script (`20hm_bands/e1_cutting_plane.py`): **design spec
 §8.5 / "E1: the labels are insufficient"**.
 
-### M5's 1% gate is met at every size but 21 — 2026-09-01
+### M5's 1% gate is met at every size but 21, and n=21 is the whole remaining failure — 2026-09-01
 
-Median final log-X, 5 replicates x 10 communities, identical list and media:
+Median final log-X, 3 medium draws x 10 communities, identical list and media
+throughout. `p4` labels; `_nc` = the output calibration stripped.
 
-| run | n=2 | n=3 | n=5 | n=10 | n=21 | overall |
-| --- | --- | --- | --- | --- | --- | --- |
-| `r1` | 0.009 | 0.018 | 0.076 | 0.027 | **0.027** | 0.017 |
-| `p4` | 0.032 | 0.048 | 0.026 | 0.095 | 0.706 | 0.035 |
-| `p5` (B2) | 0.028 | 0.026 | 0.028 | 0.269 | 0.569 | 0.038 |
-| **`p4`, calibration stripped** | **0.005** | **0.002** | **0.004** | **0.007** | 0.729 | **0.006** |
+| run | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `r1` (pre-relabel) | 0.006 | 0.016 | 0.028 | 0.027 | **0.027** | 0.014 | 0.739 |
+| `p4` calibrated | 0.032 | 0.048 | 0.026 | 0.095 | 0.706 | 0.035 | 1.192 |
+| `p5` (B2 mid-`mu` stratum) | 0.028 | 0.026 | 0.028 | 0.269 | 0.569 | 0.038 | 1.698 |
+| `p4` no cal | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | 0.007 | 1.698 |
+| `+ --w-under 1` | 0.006 | 0.002 | 0.005 | **0.055** | 0.346 | **0.006** | 0.462 |
+| `+ level1` (rows) | 0.006 | 0.004 | 0.004 | 0.110 | 0.342 | **0.006** | 0.447 |
+| `+ level1` (community pts) | 0.005 | 0.005 | 0.009 | 0.106 | 0.340 | 0.009 | **0.418** |
+
+**Sizes 2/3/5 are at 0.4-0.9%, under M5's 1% gate. n=10 is 5.5-11%. n=21 sits at
+0.27-0.35 and has not moved for five independent interventions** — four label
+designs (`p2`/`p3`/`p4`/`p5`), the output calibration, `--w-under`, the plane
+budget, and cut selection. It is the entire remaining M5 failure.
 
 1. **The output calibration's sign flips with the label design.** It helps on
    `r1` (A1 median abs 0.0022 vs 0.0054 uncalibrated) and is the *dominant*
@@ -1175,38 +1184,90 @@ Median final log-X, 5 replicates x 10 communities, identical list and media:
    both A1 and §8.1 worse, calibrated or not. Seventh refuted proxy, but caught
    by A1 in seconds instead of a 5 h loop. Kept in the code, default 0.15;
    **set `--mid-mu 0` for a new label root** until something re-motivates it.
-3. **The size-21 regression is neither the calibration nor the labels' mid-`mu`
-   band.** 0.57-0.81 on every `p*` variant, 0.027 on `r1`. The one change `r1`
-   lacks is `probe_lo = -12` — which is also what closed M11's essentiality
-   blocker, so a revert trades one gate for another. That is the next test.
-4. **Bug fixed:** `calibrate.apply` returned **NaN** for a negative raw
+3. **`--w-under` (new): the one-sided hinge, and the diagnosis behind it.** At the
+   failing n=21 medium the head read `mu` = 0.055 against a true 0.363 — an
+   *under*-prediction, which a max-affine head cannot do from valid tangents. On
+   training rows in the bottom 5% of `mu`, `p4` under-predicts **53-68%** against
+   `r1`'s **0.2-0.5%**: `probe_lo` made the design bottom-heavy, so the absolute
+   MSE now has thousands of low-`mu` rows and straddles them, and near zero that
+   reads as a dead member. `_loss` now adds
+   `w_under * mean(relu(mu - mu_hat)/den)^2` — a **provable violation** (every
+   labelled point is one a min-of-supporting-hyperplanes must sit on or above),
+   not an accuracy trade like `--w-rel`. `w=1` beats `w=10` on every axis; it costs
+   worst held-out cosine 0.921 -> 0.899 and cuts A1's worst p90 0.311 -> 0.051.
+4. **Level 1 cut selection (`--gm-select level1`) — see below.** It gives that
+   cosine back (0.899 -> 0.919) and buys the worst cell, not `n=21`.
+5. **Bug fixed:** `calibrate.apply` returned **NaN** for a negative raw
    prediction under the identity calibration (`d0 * exp(-m/1e-12)` = `0 * inf`),
    which took a dFBA trajectory to NaN at step 0. Every pre-2026-08-30 checkpoint
    was exposed.
 
-**A1 and A2 are done, and B2 is built.** `cfs community-holdout make|score`
-(A1) is 2000 media over the communities' member-union active subspaces, solved
-once for `mu_max`; scoring a checkpoint takes seconds. It ranks `value_r1`
-(median abs rel **0.0022**, worst p90 **0.163**) above `value_p4` (0.0052 /
-0.443) and `value_p2` (0.0052 / 0.405) — **the opposite of every held-out
-metric**, which is P24 made measurable. Score every future sampling-design
-change there *before* retraining anything. `cfs community` now reports
-`mu_rel_per_member` / `mu_rel_worst_member` (A2). B2 is `cfs generate --mid-mu`
-(default 0.15): a community-sized share of `A_i` between each metabolite's own
-onset and its 50%-recovery point, from a second `demand_probe` bisection.
-C4 (min over the trained Head A seeds) is still free and untried.
+### E1, run twice, gives opposite answers — and both are right
 
-**The staged plan for improving the training rows is §8.5's "The progression for
-improving the training rows"** — Stage 0 A1 (done) -> 1 B2 non-adaptive stratum
-(running) -> 2 retune it from the labels' own `mu/mu_max` histogram, no retrain
--> 3 B1 community media as a first-class stratum -> 4 adaptive search, and only
-with a community-regime candidate pool and the *bound-looseness* acquisition
-function (max-affine can only over-predict, so the binding tangent's anchor `mu`
-scores a candidate with no ensemble, no training and no solve) -> 5 accept a
-label ceiling and change the head. Each stage is gated on the previous one's A1
-score. `cfs topup` is the naive version of stage 4 and has already failed twice;
-do not re-run it against held-out media from the design being changed. A different optimiser is **not** worth spending on —
-the train/held-out gap is 0.005 cosine.
+§8.5's cutting-plane check scores the parameter-free `min_j` model over a root's
+**own** training tangents at a failing medium. It has now been run on two
+different n=21 failures and it separates them cleanly:
+
+| failure | trained head | cutting-plane over the same labels | verdict |
+| --- | --- | --- | --- |
+| AAXE02, `p4` **calibrated** | +148% | **+153%** (`r1`: -0.000) | labels insufficient |
+| GCA_000007325.1, `p4` **uncalibrated** | 0.055 vs a true 0.363 | **0.363, exact** | trained-head deficit |
+
+So "the labels are insufficient" was correct for the over-prediction the
+calibration was masking, and is **wrong for the failure that remains**. Run E1
+before choosing a branch; it costs minutes and it has flipped once already.
+
+### SDDP's Level 1 cut selection, adopted — and ~90% of tangents never bind
+
+The cutting-plane model *is* SDDP's outer approximation, sign-flipped: label
+tangents are **cuts**, media are **trial points**, `--gm-group K` is the cut
+budget. `groupmax.rank_by_territory` implements **Level 1 dominance** (de Matos,
+Philpott & Finardi 2015) = the **territory algorithm** (Pfeiffer, Apparigliato &
+Auchapt 2012 — provably the same selection): each cut owns the trial points where
+it is the active minimum, and a cut with an **empty territory** is dropped. Scoring
+all cuts at all points in one pass, keeping only the active index per point, makes
+this the **limited-memory** variant (Guigues 2017): O(points), not O(cuts x points).
+We **store and select** rather than prune, which is free because the tangents live
+in the label shards. `--gm-select level1`, `--gm-trial-media <community_holdout.npz>`.
+
+**The diagnostic is the durable result, and it needed no training.** Of ~3985
+usable tangents per organism, those with a non-empty territory over the 4000
+training media number **174-686, median 419 — about 10%**; over community-regime
+trial points, **44-170**. The budget K=1000 **exceeds the useful count on 21/21
+organisms**, so K 1000 -> 2000 could not have helped: there were never 2000 binding
+cuts. That reproduces Pfeiffer et al.'s own ratio (490 -> 220 -> 55 cuts/stage with
+the forward cost falling at the same rate). **K was never the lever.**
+
+Level 1 wins the label metrics and the worst cell — worst grad cosine 0.899 ->
+0.919, A1 worst organism 0.0083 -> 0.0022, composition `max` 1.698 -> 0.418 across
+the four arms, an ordering that tracks A1's `worst_p90` exactly — and **loses at
+n=10** (0.055 -> 0.110). `rank_by_active_set` stays the default: it is a proxy for
+the same thing and every number on file was measured with it.
+
+**A1 is a tail instrument and behaved as one.** Its `worst_p90` reproduced the
+composition's `max` ordering; its median correctly said the four heads are
+equivalent in bulk. Neither predicts the n=21 median, because that is not a tail
+over media — it is one member at one community.
+
+### Where the plan stands, and what is next
+
+The staged plan is §8.5's "The progression for improving the training rows":
+Stage 0 A1 **done**, Stage 1 B2 **run and refuted**, Stage 2 (retune from the `mu`
+histogram) **done — the histogram was right and it did not help**. Stages 3-5 are
+*not* the live question for n=21, because the second E1 says the labels are
+sufficient at that medium. What is open:
+
+- **n=21 is one member at one community.** Report it that way: `cfs community`
+  emits `mu_rel_per_member` / `mu_rel_worst_member` (A2). The worst member is
+  DACTBY01 at +0.68 to +1.22 — an over-prediction, which is max-affine's
+  structural one-sided error at a point with no nearby tangent.
+- **Untried and cheap:** C4 (min over the three trained Head A seeds — valid for
+  an upper-bound family, free), and `--gm-trial-media` pointed at a *bigger*
+  community-regime pool than A1's 2000.
+- **Do not** re-run `cfs topup` against held-out media from the design being
+  changed; that is the naive Stage 4 and it has failed twice.
+- **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
+  touching cut selection again.
 
 **Caveat that affects all of it:** `x = u/(u+s)` takes `s` from the training
 rows, so every relabel silently changes the input coordinate and two label roots
