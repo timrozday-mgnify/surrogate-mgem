@@ -1722,6 +1722,52 @@ at step 0 — every pre-2026-08-30 checkpoint was exposed. Fixed by clipping the
 exponent at 700 and writing `beta = 1` in `_identity_cal`;
 `tests/test_cfs_value_head.py::test_identity_calibration_is_finite_on_negative_predictions`.
 
+
+### SDDP's Level 1 cut selection, adopted — 2026-09-01
+
+The parameter-free cutting-plane model is SDDP's outer approximation, sign-flipped:
+label tangents are *cuts*, media are *trial points*, `--gm-group K` is the cut
+budget. That field settled cut selection fifteen years ago, and the rule transfers
+directly. `groupmax.rank_by_territory` implements **Level 1 dominance** (de Matos,
+Philpott & Finardi 2015) = the **territory algorithm** (Pfeiffer, Apparigliato &
+Auchapt 2012 — the two provably select the same cuts): each cut owns the trial
+points where it is the active minimum, and a cut with an **empty territory** is
+dropped, because dropping it changes the approximation nowhere on those points.
+Scoring every cut at every point in one pass and keeping only the active index per
+point makes this the **limited-memory** variant (Guigues 2017): O(points), not
+O(cuts x points). We **store and select** rather than prune — the other convention
+Guigues distinguishes — which is free here because the tangents live in the label
+shards. `--gm-select level1`, `--gm-trial-media <community_holdout.npz>`.
+
+**It explains "K is inert above 1000" mechanically, before any training.** Of ~3985
+usable tangents per organism, the number with a **non-empty territory** over the
+4000 training media is **174-686, median 419 — about 10%**. The budget K=1000
+**exceeds the useful count on 21/21 organisms**, so K 1000 -> 2000 could not have
+helped: there were never 2000 binding cuts to find. That reproduces Pfeiffer et
+al.'s own ratio (490 -> 220 -> 55 cuts per stage with the forward cost falling at
+the same rate) on our labels. Over *community-regime* trial points the count falls
+further, to **44-170 (median 88)**.
+
+Same knobs as `value_p4_wu1` throughout, only the selection rule and its point set
+differ; all scored uncalibrated on A1:
+
+| checkpoint | A1 med abs | A1 worst org | A1 p90 | worst grad cos |
+| --- | --- | --- | --- | --- |
+| `p4` (active-set) | 0.0007 | 0.0027 | 0.311 | 0.9211 |
+| `+ --w-under 1` | 0.0007 | 0.0083 | 0.051 | 0.8985 |
+| **`+ level1`, training rows** | 0.0010 | **0.0022** | **0.050** | **0.9194** |
+| `+ level1`, community media | **0.0005** | 0.0038 | 0.055 | 0.9209 |
+
+**Level 1 gives back the held-out gradient cosine the hinge cost, at no cost to the
+tail** (0.8985 -> 0.9194 against an unhinged 0.9211, with p90 still 0.05 against
+0.311). It dominates the `--w-under`-only arm on every column. The community
+point-set arm buys the best median and a slightly worse worst organism — the two
+point sets are a real trade, not a strict ordering.
+
+**`rank_by_active_set` stays the default.** It buckets rows by dual support pattern
+as a *proxy* for which regimes occur; Level 1 is the exact version of what that
+proxy approximates, but every number on file was measured with the proxy.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)
