@@ -1652,6 +1652,12 @@ for a frozen head** — untrained cuts have never absorbed the softmin's
 worse (n=2 0.058) until the uniform shift fixes it. **Training still buys the
 middle** — n=3/n=5 stay better trained, `overall` 0.007 vs 0.013.
 
+**And the selection axis is now closed.** A 10x trial pool (20 000
+community-regime media, free of solves — `_trial_points` never reads `mu`) keeps
+2.4x more cuts and moves n=21 by 0.006 (0.175 -> 0.169). With "~90% of tangents
+never bind" and "K 1000 -> 2000 is inert" already on file, more points, more
+budget and better ranking are all exhausted. What remains is the cuts themselves.
+
 So the trade is now separated rather than conflated: the label tangents are right
 for the tail, gradient training is right for the bulk. Interpolating them is what
 proximal / level bundle methods (Lemarechal-Nemirovskii-Nesterov 1995; Kiwiel)

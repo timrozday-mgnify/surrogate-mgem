@@ -1382,6 +1382,22 @@ Reproduce: `cfs train-value --epochs 0 --gm-init labels --gm-select level1
 --gm-trial-media holdout_community/community_holdout.npz --gm-group 1000
 --gm-temp 0.01 --width 1 --depth 1`, then `20hm_bands/repair_posthoc.py`.
 
+**5. The trial pool is saturated at 2000 points — selection is now exhausted.** A
+10x pool (`trial_pool_20k.npz`, 20 000 community-regime media over the same 10
+communities) keeps **2.4x more cuts** (108/232/268 per organism against
+45/93/103) and buys nothing: n=21 **0.175 -> 0.169**, max 0.508 -> 0.484, every
+other size identical, A1 flat (med 0.00033 -> 0.00041, p90 0.218 -> 0.216).
+
+Building that pool is **free of solves** — `train._trial_points` reads only
+`media` and `exchanges`, never `mu`, because a cut is kept for being the active
+minimum at a point, which is a property of the head (`20hm_bands/make_trial_pool.py`,
+~4 min for 20 000 media). So this is a cheap test and it should be run before any
+future selection idea. Its verdict: **the useful cut count is set by the label
+tangents available, not by how many points you score them at.** Combined with
+"~90% of tangents never bind" and "K 1000 -> 2000 changes nothing", the whole
+selection axis is now closed. What is left is the *cuts* — their slopes — or the
+model class.
+
 ### E1, run twice, gives opposite answers — and both are right
 
 §8.5's cutting-plane check scores the parameter-free `min_j` model over a root's
