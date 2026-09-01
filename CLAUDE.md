@@ -1333,6 +1333,55 @@ in seconds instead of a 5 h composition run.
 1500-epoch run was discarded by an import error inside that post-hoc 1-D fit; the
 identity is a valid calibration, so it must never be able to throw away training.
 
+### Selected label tangents, not trained ones: n=21 moves for the first time — 2026-09-01
+
+SDDP's position taken literally — **never modify a cut, only select which ones you
+keep** — is the arm nothing had tried, and it is the first thing to move `n=21`.
+`--epochs 0` with `--gm-init labels` is now a supported mode (optax needed a
+`max(1, ...)` on the decay schedule): the head is then exactly the selected
+label-tangent model, smoothed, with the slopes left as the duals wrote them.
+
+3 medium draws x the same 10 communities, all uncalibrated, `p4`:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max | A1 med / p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| trained baseline | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | **0.007** | 1.698 | 0.00066 / 0.311 |
+| trained `--w-under 1` | 0.006 | 0.002 | 0.005 | 0.055 | 0.346 | 0.006 | 0.462 | 0.00069 / 0.051 |
+| frozen, level1 | 0.058 | 0.058 | 0.055 | 0.063 | 0.198 | 0.059 | 1.698 | 0.02105 / 0.573 |
+| **frozen, level1 + `--gm-repair`** | 0.006 | 0.007 | 0.009 | 0.060 | **0.175** | 0.013 | 0.508 | **0.00033 / 0.218** |
+| frozen, active-set + repair | 0.015 | 0.016 | 0.009 | **0.039** | 0.336 | 0.016 | 1.023 | — |
+
+1. **`n=21` = 0.175, against 0.272-0.36 for everything else ever tried.** Nine
+   interventions left that cell flat; leaving the slopes alone moved it 36%. It is
+   still not the 1% gate, but it is the first evidence the training loop — not the
+   labels, the budget, the temperature or the loss — is what that cell was paying
+   for.
+2. **The repair is what makes it usable at all, and this is the cleanest
+   demonstration of why.** Frozen cuts alone are 10x worse in bulk (n=2
+   0.058 vs 0.006) because an untrained head has never absorbed the softmin's
+   `T*ln(K_active)` downward offset: A1 `median_signed` is **-0.021**, a pure
+   *under*-prediction, and DACTBY01 reads **-1.000** (predicted dead). Training
+   normally absorbs that in the intercepts; `--gm-repair`'s uniform shift does it
+   in closed form. After it, A1 `median_abs` 0.021 -> **0.00033**, i.e. **2x better
+   than the trained head's 0.00066**, and `worst_p90` 0.573 -> 0.218 vs 0.311.
+3. **The trial-point set is the lever, exactly as the cut-selection literature
+   says.** Level 1 over community-regime media gives n=21 **0.175**; the same
+   frozen model with `active-set` selection gives **0.336**. Same cuts available,
+   same budget, same everything else — only *which* 1000 of ~3985 are kept. That
+   is the strongest evidence yet for reading §8.1 as a cut-selection problem
+   (`docs/reading-map.md` §3a).
+4. **What training still buys is the bulk.** n=3 and n=5 stay better trained
+   (0.002/0.004 vs 0.007/0.009) and `overall` is 0.007 vs 0.013. So the trade is
+   now cleanly separated: **the label tangents are right for the tail, gradient
+   training is right for the middle** — which is what a proximal/stability-centre
+   method (bundle methods; Lemarechal-Nemirovskii-Nesterov 1995) exists to
+   interpolate. That is the next arm, and it now has direct evidence the trade-off
+   is live rather than being a guess.
+
+Reproduce: `cfs train-value --epochs 0 --gm-init labels --gm-select level1
+--gm-trial-media holdout_community/community_holdout.npz --gm-group 1000
+--gm-temp 0.01 --width 1 --depth 1`, then `20hm_bands/repair_posthoc.py`.
+
 ### E1, run twice, gives opposite answers — and both are right
 
 §8.5's cutting-plane check scores the parameter-free `min_j` model over a root's

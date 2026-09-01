@@ -1635,6 +1635,32 @@ min can only push predictions down. The DACTBY01 over-prediction above is the
 fix**, because the two failures need opposite tools and the toolkit is almost
 entirely built for the over-prediction one. The under-prediction branch is §8.6.
 
+#### §8.6a — cut selection beats cut fitting on n=21
+
+`--epochs 0 --gm-init labels` is a supported mode: the head is the selected
+label-tangent model with the slopes left as the duals wrote them. With Level 1
+selection over community-regime trial media **and** the validity repair, `n=21`
+is **0.175** — against 0.272-0.36 for every trained head across nine
+interventions, and the first time that cell has moved at all. A1 median 0.00033
+(2x better than the trained head) and worst p90 0.218 (vs 0.311).
+
+Three things it establishes. **The trial-point set is the lever** — the identical
+frozen model selected by `active-set` instead gives 0.336, so which 1000 of ~3985
+cuts are kept is worth a factor of two on that cell. **The repair is mandatory
+for a frozen head** — untrained cuts have never absorbed the softmin's
+`T*ln(K_active)` offset, so A1 `median_signed` is -0.021 and the bulk is 10x
+worse (n=2 0.058) until the uniform shift fixes it. **Training still buys the
+middle** — n=3/n=5 stay better trained, `overall` 0.007 vs 0.013.
+
+So the trade is now separated rather than conflated: the label tangents are right
+for the tail, gradient training is right for the bulk. Interpolating them is what
+proximal / level bundle methods (Lemarechal-Nemirovskii-Nesterov 1995; Kiwiel)
+are for — a stability centre at the seeded tangents with a trust radius on how far
+the slopes may move. **That is the next arm, and unlike every previous guess it
+has a measured trade-off behind it.** The cheap ML shorthand is a
+`||a_j - a_j^0||^2` penalty in `_loss`; the principled version is the bundle
+method proper.
+
 #### §8.6 — the under-prediction branch, in priority order
 
 An under-prediction is not an accuracy shortfall; it is a **certificate that the

@@ -360,7 +360,11 @@ def train_value_heads(
         )
     n = x.shape[1]
     steps_per_epoch = max(1, n // batch)
-    optimiser = optax.adam(optax.cosine_decay_schedule(lr, epochs * steps_per_epoch))
+    # `--epochs 0` is a supported mode, not a degenerate one: with `--gm-init labels`
+    # it is the pure selected-tangent model -- SDDP's outer approximation with the
+    # cuts left exactly as the label duals wrote them. The schedule still has to be
+    # constructible, and optax rejects zero decay steps.
+    optimiser = optax.adam(optax.cosine_decay_schedule(lr, max(1, epochs * steps_per_epoch)))
     opt_state = optimiser.init(eqx.filter(heads, eqx.is_inexact_array))
     heads, opt_state, x, mu, g, gvalid, x_scale, gfloor = _shard_organisms(
         len(ds.genome_ids), (heads, opt_state, x, mu, g, gvalid, x_scale, gfloor)
