@@ -77,6 +77,8 @@ for the reason documented there — the target is concave in ``u`` and *not* in
 
 from __future__ import annotations
 
+import logging
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -85,6 +87,8 @@ from jax import Array
 
 from cfs.surrogate.picnn import _softplus_inv
 from cfs.surrogate.picnn_u import INPUT_TRANSFORM, W_CAP, to_diag  # noqa: F401
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_GROUP = 8
 DEFAULT_TEMP = 0.01
@@ -276,6 +280,66 @@ def rank_by_active_set(g_w: np.ndarray, valid: np.ndarray) -> np.ndarray:
     return np.asarray(out, dtype=int)
 
 
+def rank_by_territory(
+    g_w: np.ndarray,
+    w: np.ndarray,
+    mu: np.ndarray,
+    mask: np.ndarray,
+    w_eval: np.ndarray,
+    valid: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Row indices ordered by **Level 1 dominance** — SDDP's cut-selection rule.
+
+    Our tangent model ``mu_hat(w) = min_j [mu_j + pi_j.(w - w_j)]`` is exactly the
+    outer approximation SDDP maintains for a Bellman value function, sign-flipped:
+    their *cuts* are our label tangents, their *trial points* are our media, and
+    ``--gm-group K`` is their cut budget. That field has settled how to choose
+    which cuts to keep, and this is their rule.
+
+    A cut is **useless** when dropping it changes the approximation nowhere on the
+    domain. Deciding that exactly costs one LP per cut (Pfeiffer, Apparigliato &
+    Auchapt 2012, the *test of usefulness*) and is too slow to run routinely. The
+    **territory algorithm** -- identical in its selection to de Matos, Philpott &
+    Finardi's *Level 1 dominance* -- replaces "everywhere on the domain" with "at
+    the trial points actually visited": each cut owns the points where it is the
+    active one, and a cut whose territory is empty is dropped. Pure evaluations, no
+    LP. It can drop a cut that would be useful on a region containing no visited
+    point; in SDDP that is safe because the cut can be recomputed, and here because
+    :func:`reanchor` reinstalls tangents mid-training.
+
+    Because we score every cut at every point in one pass and keep, per point, only
+    the index of its active cut, this is the *limited memory* variant (Guigues
+    2017): memory is O(points), not O(cuts x points).
+
+    **The point set is the whole lever, and it is ours to choose.** Ranking over
+    the training rows reproduces the design's own distribution; ranking over
+    community-regime media puts planes where §8.1 evaluates, which is why K above
+    1000 was inert -- more planes, still in the wrong place. Measured in SDDP
+    (Pfeiffer et al., 19-dimensional state, 500 iterations): territory selection
+    cuts the model from 490 to 220 cuts per stage, and the combination with the
+    exact test to 55, with the forward cost decreasing *at the same rate* as with
+    no selection at all. The count was never the lever there either.
+
+    ``w_eval`` is ``(P, M)`` trial points in the head's own ``w`` coordinate.
+    Returns ``(order, territory)``: row indices sorted by territory size, largest
+    first and empty territories last, plus the per-row point count.
+    """
+    ok = np.flatnonzero(valid)
+    territory = np.zeros(len(w), dtype=int)
+    if ok.size == 0 or len(w_eval) == 0:
+        return ok, territory
+    a = (g_w * mask)[ok]  # (J, M) non-negative slopes
+    c = mu[ok] - np.einsum("km,km->k", a, w[ok])  # (J,) intercepts
+    # min_j over cuts at every trial point, in chunks: (P, J) is P*J floats.
+    step = max(1, int(2e7 // max(len(ok), 1)))
+    for lo in range(0, len(w_eval), step):
+        active = np.argmin(w_eval[lo : lo + step] @ a.T + c, axis=1)
+        np.add.at(territory, ok[active], 1)
+    # Largest territory first; ties by row order so the result is deterministic.
+    order = ok[np.argsort(-territory[ok], kind="stable")]
+    return order, territory
+
+
 def _softplus_inv_np(a: np.ndarray) -> np.ndarray:
     """``softplus^-1``, stable: ``expm1`` overflows at ``a ~ 88`` in float32 and the
     head is then seeded with inf weights and NaN curvature. Real label tangents
@@ -294,7 +358,13 @@ def _tangent_planes(g_w, w, mu, mask):
     return a, mu - np.einsum("km,km->k", a, w)
 
 
-def init_from_tangents(heads: GroupMaxHead, ds, seed: int = 0) -> GroupMaxHead:
+def init_from_tangents(
+    heads: GroupMaxHead,
+    ds,
+    seed: int = 0,
+    select: str = "active-set",
+    trial_points: np.ndarray | None = None,
+) -> GroupMaxHead:
     """Seed the first layer's units with real supporting hyperplanes of ``mu_max``.
 
     Every labelled row is an *exact* tangent of the target — ``mu_max`` is concave
@@ -318,6 +388,18 @@ def init_from_tangents(heads: GroupMaxHead, ds, seed: int = 0) -> GroupMaxHead:
     non-negative sum of group-wise minima rather than one global minimum, so it is
     a warm start and not a reproduction. The docstring says so because the
     difference is measurable and someone will otherwise assume the exact case.
+
+    ``select`` picks which tangents fill the budget. ``"active-set"`` buckets rows
+    by their dual's support pattern (:func:`rank_by_active_set`), a *proxy* for
+    which regimes occur. ``"level1"`` is SDDP's own answer
+    (:func:`rank_by_territory`): keep the cuts that are the active minimum at some
+    trial point, which is the exact version of what that proxy approximates.
+
+    ``trial_points`` is ``(G, P, M)`` in the ``w`` coordinate, one point set per
+    organism — the medium distribution the head will be *evaluated* on, which for
+    §8.1 is community-regime media rather than the design's own. Default: the
+    organism's training rows, which is the closest Level 1 analogue of SDDP's
+    "points the forward pass actually visited".
     """
     n_slots = heads.wx[0].shape[1]
     G, _, M = ds.x_train.shape
@@ -333,7 +415,20 @@ def init_from_tangents(heads: GroupMaxHead, ds, seed: int = 0) -> GroupMaxHead:
         g_w = ds.g_train[i] * (1.0 - x) ** 2 / ds.mu_scale[i]
         w = np.asarray(to_diag(jnp.asarray(x)))
         mu = ds.mu_train[i] / ds.mu_scale[i]
-        idx = rank_by_active_set(g_w, ds.gvalid_train[i])
+        if select == "level1":
+            pts = w if trial_points is None else np.asarray(trial_points[i])
+            idx, territory = rank_by_territory(g_w, w, mu, ds.mask[i], pts, ds.gvalid_train[i])
+            LOGGER.info(
+                "%s: level1 keeps %d cuts with a non-empty territory of %d usable, "
+                "over %d trial points; budget %d",
+                ds.genome_ids[i],
+                int((territory > 0).sum()),
+                int(ds.gvalid_train[i].sum()),
+                len(pts),
+                n_slots,
+            )
+        else:
+            idx = rank_by_active_set(g_w, ds.gvalid_train[i])
         if idx.size == 0:
             continue
         if idx.size < n_slots:  # too few usable rows: cycle, then jitter the rest

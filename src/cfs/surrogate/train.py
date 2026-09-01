@@ -126,6 +126,32 @@ def _du(x, x_scale):
     return (1.0 - x) ** 2 / x_scale[:, None, :]
 
 
+def _trial_points(ds, media_npz) -> np.ndarray | None:
+    """``(G, P, M)`` trial points in ``w`` for SDDP-style Level 1 cut selection.
+
+    ``media_npz`` is a ``cfs community-holdout make`` archive — media drawn over
+    the *union* of a community's members' active subspaces. Feeding those as the
+    trial-point set is the whole point of Level 1: cuts are kept because they are
+    the active minimum where the head will actually be evaluated, rather than where
+    the design happened to sample. None (the default) leaves the training rows as
+    the point set, which is the direct analogue of SDDP's "points the forward pass
+    visited".
+    """
+    if media_npz is None:
+        return None
+    z = np.load(Path(media_npz), allow_pickle=True)
+    ex = [str(e) for e in z["exchanges"]]
+    if ex != list(ds.exchanges):
+        raise ValueError("trial media and labels disagree on the metabolite index (P13)")
+    from cfs.groundtruth.solve import km_for_exchange, load_km_defaults
+
+    km_cfg = load_km_defaults()
+    km = np.array([km_for_exchange(e, km_cfg) for e in ex])
+    u = z["media"] / (km + z["media"])  # (P, M)
+    # Same map the head reads: w = min(u / x_scale, W_CAP), per organism.
+    return np.minimum(u[None] / ds.x_scale[:, None, :], groupmax.W_CAP)
+
+
 def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, bvg):
     mu_hat, g_hat = bvg(heads, x)
     value = jnp.mean((mu_hat - mu) ** 2)
@@ -232,11 +258,13 @@ def _shard_organisms(n_organisms: int, tree):
     # Leaves without a leading organism axis (the deepset's shared trunk, scalars)
     # replicate; everything else splits.
     return jax.tree.map(
-        lambda a: jax.device_put(
-            a, org if getattr(a, "shape", ()) and a.shape[0] == n_organisms else repl
-        )
-        if eqx.is_array(a)
-        else a,
+        lambda a: (
+            jax.device_put(
+                a, org if getattr(a, "shape", ()) and a.shape[0] == n_organisms else repl
+            )
+            if eqx.is_array(a)
+            else a
+        ),
         tree,
     )
 
@@ -260,6 +288,8 @@ def train_value_heads(
     gm_temp: float | None = None,
     gm_init: str | None = None,
     gm_reanchor: int = 0,
+    gm_select: str = "active-set",
+    gm_trial_media=None,
     gm_temp_final: float | None = None,
     seed: int = 0,
 ) -> eqx.Module:
@@ -297,7 +327,13 @@ def train_value_heads(
     if gm_init == "labels":
         # Seeded from the labels' own supporting hyperplanes, not from noise. Done
         # here rather than in `_build` so the architecture registry stays data-free.
-        heads = groupmax.init_from_tangents(heads, ds, seed=seed)
+        heads = groupmax.init_from_tangents(
+            heads,
+            ds,
+            seed=seed,
+            select=gm_select,
+            trial_points=_trial_points(ds, gm_trial_media),
+        )
     n = x.shape[1]
     steps_per_epoch = max(1, n // batch)
     optimiser = optax.adam(optax.cosine_decay_schedule(lr, epochs * steps_per_epoch))
@@ -360,9 +396,9 @@ def train_value_heads(
             # Adam's moments are themselves head-shaped pytrees, so they carry the
             # old temperature in their metadata and stop matching `heads`.
             opt_state = jax.tree.map(
-                lambda z, t=t_new: groupmax.with_temp(z, t)
-                if isinstance(z, groupmax.GroupMaxHead)
-                else z,
+                lambda z, t=t_new: (
+                    groupmax.with_temp(z, t) if isinstance(z, groupmax.GroupMaxHead) else z
+                ),
                 opt_state,
                 is_leaf=lambda z: isinstance(z, groupmax.GroupMaxHead),
             )
@@ -372,11 +408,11 @@ def train_value_heads(
             # to be there and would walk it straight back, so clear them.
             heads, slots = groupmax.reanchor(heads, ds, seed=seed + epoch)
             opt_state = jax.tree.map(
-                lambda a, sl=slots, shape=heads.wx[0].shape[:2]: a.at[
-                    np.arange(len(sl))[:, None], sl
-                ].set(0.0)
-                if eqx.is_array(a) and a.shape[: sl.ndim] == shape
-                else a,
+                lambda a, sl=slots, shape=heads.wx[0].shape[:2]: (
+                    a.at[np.arange(len(sl))[:, None], sl].set(0.0)
+                    if eqx.is_array(a) and a.shape[: sl.ndim] == shape
+                    else a
+                ),
                 opt_state,
             )
             LOGGER.info("epoch %4d  re-anchored %d planes/organism", epoch, slots.shape[1])
@@ -649,8 +685,7 @@ def save(
                     "u = c / (Km + c), x = u / (u + x_scale); Km from km_defaults.yaml",
                 ),
                 "gradient_units": (
-                    "d(mu_max)/dx = max(-shadow, 0) * Vmax * (u + x_scale)^2 / x_scale, "
-                    "Vmax = 1000"
+                    "d(mu_max)/dx = max(-shadow, 0) * Vmax * (u + x_scale)^2 / x_scale, Vmax = 1000"
                 ),
                 "arch": arch,
             },
@@ -704,6 +739,8 @@ def run(
     gm_temp: float | None = None,
     gm_init: str | None = None,
     gm_reanchor: int = 0,
+    gm_select: str = "active-set",
+    gm_trial_media=None,
     gm_temp_final: float | None = None,
     seed: int = 0,
     organisms: list[str] | None = None,
@@ -732,6 +769,8 @@ def run(
         gm_temp=gm_temp,
         gm_init=gm_init,
         gm_reanchor=gm_reanchor,
+        gm_select=gm_select,
+        gm_trial_media=gm_trial_media,
         gm_temp_final=gm_temp_final,
         seed=seed,
     )
@@ -755,6 +794,8 @@ def run(
         meta["gm_temp"] = groupmax.DEFAULT_TEMP if gm_temp is None else gm_temp
         meta["gm_init"] = gm_init or "random"
         meta["gm_reanchor"] = gm_reanchor
+        meta["gm_select"] = gm_select
+        meta["gm_trial_media"] = str(gm_trial_media) if gm_trial_media else None
         if gm_temp_final:
             meta["gm_temp_final"] = gm_temp_final
     if arch.startswith("deepset"):

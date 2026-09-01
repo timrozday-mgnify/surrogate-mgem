@@ -638,3 +638,35 @@ def test_w_under_penalises_only_under_prediction():
     assert loss(over, 0.0) == loss(under, 0.0)
     assert loss(over, 10.0) == loss(over, 0.0)
     assert loss(under, 10.0) > loss(under, 0.0)
+
+
+def test_level1_drops_exactly_the_cuts_with_an_empty_territory():
+    """SDDP's Level 1 / territory rule: a cut kept iff it is active somewhere.
+
+    Three tangents to a concave function, one of which (`hi`) lies strictly above
+    the other two everywhere on the trial set — it is *useless* in the SDDP sense,
+    since `min_j` never selects it, so dropping it changes the approximation
+    nowhere. Level 1 must rank it last with territory 0, while `rank_by_active_set`
+    cannot see it: its dual support pattern is as common as anyone's.
+    """
+    import numpy as np
+
+    from cfs.surrogate.groupmax import rank_by_territory
+
+    # mu_hat(w) = min_j (a_j . w + c_j), one input dimension that matters.
+    w = np.array([[0.0, 0.0], [4.0, 0.0], [2.0, 0.0]])
+    g_w = np.array([[1.0, 0.0], [0.1, 0.0], [1.0, 0.0]])  # slopes
+    mu = np.array([0.0, 1.0, 9.0])  # third row's intercept sits far above
+    mask = np.ones(2)
+    valid = np.ones(3, dtype=bool)
+    pts = np.stack([np.linspace(0, 8, 40), np.zeros(40)], axis=1)
+
+    order, territory = rank_by_territory(g_w, w, mu, mask, pts, valid)
+    assert territory[2] == 0  # never the active minimum: useless
+    assert territory[0] > 0 and territory[1] > 0
+    assert order[-1] == 2  # ranked last, so a budget of 2 excludes it
+
+    # The point set is the lever: restricted to large w, the shallow cut owns
+    # everything and the steep one is the useless one.
+    _, far = rank_by_territory(g_w, w, mu, mask, pts[pts[:, 0] > 5], valid)
+    assert far[1] > 0 and far[0] == 0

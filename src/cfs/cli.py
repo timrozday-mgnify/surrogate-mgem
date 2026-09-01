@@ -178,6 +178,24 @@ def build_parser() -> argparse.ArgumentParser:
         "Seeding fixes initialisation; this fixes planes that go dead during it.",
     )
     tv.add_argument(
+        "--gm-select",
+        choices=["active-set", "level1"],
+        default="active-set",
+        help="Which label tangents fill the plane budget. 'active-set' buckets rows "
+        "by dual support pattern; 'level1' is SDDP's cut selection (de Matos "
+        "Level 1 / the territory algorithm) -- keep the cuts that are the active "
+        "minimum at some trial point. Measured there: 10x fewer, well-chosen cuts "
+        "represent the value function as well as the full set.",
+    )
+    tv.add_argument(
+        "--gm-trial-media",
+        type=Path,
+        default=None,
+        help="community_holdout.npz whose media are the Level 1 trial points. The "
+        "point set is the lever: ranking over community-regime media puts planes "
+        "where §8.1 evaluates. Default: the organism's training rows.",
+    )
+    tv.add_argument(
         "--phi-hidden",
         type=int,
         default=None,
@@ -506,6 +524,8 @@ def main(argv: list[str] | None = None) -> int:
             gm_temp=args.gm_temp,
             gm_init=args.gm_init,
             gm_reanchor=args.gm_reanchor,
+            gm_select=args.gm_select,
+            gm_trial_media=args.gm_trial_media,
             gm_temp_final=args.gm_temp_final,
             k_code=args.k_code,
             seed=args.seed,
