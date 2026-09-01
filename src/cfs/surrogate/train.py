@@ -583,8 +583,13 @@ def evaluate(
 
 
 def _identity_cal(n: int) -> np.ndarray:
+    """``(d0, beta, a) = (0, 1, 1)``. ``beta`` is 1 rather than 0 because it is a
+    divisor: at 0 the identity is only saved from a division by zero by a 1e-12
+    floor, and the resulting overflow makes `calibrate.apply` return NaN for a
+    negative raw prediction (`0 * inf`). `d0 = 0` makes the term vanish either
+    way, so any positive `beta` is the identity."""
     c = np.zeros((n, 3))
-    c[:, 2] = 1.0
+    c[:, 1:] = 1.0
     return c
 
 

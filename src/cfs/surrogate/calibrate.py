@@ -116,6 +116,13 @@ def apply(mu_hat, cal) -> np.ndarray:
     a = cal[:, 2] if cal.shape[1] > 2 else np.ones_like(d0)
     shape = (-1,) + (1,) * (np.ndim(mu_hat) - 1)
     m = np.asarray(mu_hat)
+    # The exponent is clipped, not just the divisor. `beta = 0` is what an
+    # uncalibrated checkpoint stores, and `-m/1e-12` overflows to `inf` for any
+    # negative raw prediction; `d0 * inf` is then **NaN**, not the 0 the identity
+    # is supposed to be. Head A's raw output does go negative at a scarce medium,
+    # so this poisoned the whole dFBA trajectory at step 0 the first time an
+    # uncalibrated checkpoint was composed. 700 is where `exp` overflows float64;
+    # below it the term is constant, so `g` stays increasing (`g' = a > 0`).
     return a.reshape(shape) * m - d0.reshape(shape) * np.exp(
-        -m / np.maximum(beta.reshape(shape), 1e-12)
+        np.minimum(-m / np.maximum(beta.reshape(shape), 1e-12), 700.0)
     )

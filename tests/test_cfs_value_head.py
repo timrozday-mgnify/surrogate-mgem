@@ -584,3 +584,23 @@ def test_calibration_is_increasing_concave_and_identity_at_zero():
     cal = calibrate.fit(y + 0.1 * np.exp(-y / 0.5), y)
     resid = calibrate.apply(y + 0.1 * np.exp(-y / 0.5), cal) - y
     assert abs(np.median(resid[y < 0.3])) < 0.01
+
+
+def test_identity_calibration_is_finite_on_negative_predictions():
+    """`d0 = 0` must vanish, not overflow.
+
+    An uncalibrated checkpoint stores `beta = 0`, and `apply` floors the divisor
+    at 1e-12, so `exp(-m/beta)` overflows to `inf` for any m < 0 and `0 * inf` is
+    NaN. Head A's raw output is negative at a scarce medium, so this took a dFBA
+    trajectory to NaN at step 0 the first time an uncalibrated head was composed.
+    """
+    import numpy as np
+
+    from cfs.surrogate import calibrate
+    from cfs.surrogate.train import _identity_cal
+
+    m = np.array([[-5.0], [-0.1], [0.0], [3.0]])
+    for cal in (_identity_cal(4), np.array([[0.0, 0.0, 1.0]] * 4)):  # new and on-disk
+        out = calibrate.apply(m, cal)
+        assert np.isfinite(out).all()
+        assert np.allclose(out, m)
