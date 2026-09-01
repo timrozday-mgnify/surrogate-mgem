@@ -1744,9 +1744,22 @@ so `tau = 0.5` reproduces the plain MSE **bit for bit** — verified,
    `value_under_rate_low_mu` are now in `score`, so any future one-sided knob is
    chosen from a checkpoint in seconds instead of a 5 h composition run.
 
-**Untried and cheap: `--w-under 1 --w-tau 0.9` together.** They are different
-objects — an additive hinge on violations plus a tilt on everything — and nothing
-measured says they compete. One 13-minute training run.
+5. **The combination is refuted: they do compete.** `--w-under 1 --w-tau 0.9`
+   together lands on the *expectile's* behaviour and slightly worse than it, not
+   between the two — worst cosine **0.8870** (the worst of the four arms), A1 p90
+   0.1174, and the composition's worst numbers everywhere that matters:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | max | A1 p90 | worst cos |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `tau = 0.5` (baseline) | 0.005 | 0.002 | 0.004 | 0.093 | **0.272** | 1.698 | 0.449 | 0.9211 |
+| **`--w-under 1`** | 0.006 | 0.002 | 0.005 | **0.055** | 0.346 | **0.462** | **0.051** | 0.8985 |
+| `tau = 0.9` | 0.014 | 0.001 | 0.005 | 0.077 | 0.327 | 1.658 | 0.130 | 0.9076 |
+| `--w-under 1 --w-tau 0.9` | 0.015 | 0.001 | 0.004 | 0.084 | 0.362 | 1.755 | 0.117 | 0.8870 |
+
+   The tilt is applied to the *same* residuals the hinge acts on, so once every row
+   is reweighted the hinge has no separate signal left to contribute — it is not
+   two independent constraints, and the guess that it was is retracted. **Use
+   `--w-under` alone.**
 
 **Option 2 as originally specced.** `--w-under` is the
 `tau -> 1` hinge of the asymmetric-loss family (Koenker & Bassett 1978; Newey &

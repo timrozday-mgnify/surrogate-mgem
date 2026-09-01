@@ -1316,8 +1316,18 @@ in seconds instead of a 5 h composition run.
    (0.051 / 0.130 / 0.449 -> 0.462 / 1.658 / 1.698) and again did not predict
    n=21. It is a tail-over-media instrument; n=21 is one member at one community.
 
-**Untried and cheap:** `--w-under 1 --w-tau 0.9` together — different objects
-(additive hinge on violations vs a tilt on everything), one 13-minute run.
+5. **The combination is refuted — they compete.** `--w-under 1 --w-tau 0.9`
+   lands on the expectile's behaviour and slightly worse, not between the two:
+   worst cosine **0.8870** (worst of the four arms), A1 p90 0.117, n=21 **0.362**,
+   composition max 1.755. Both act on the same residuals, so once every row is
+   tilted the hinge has no separate signal left. **Use `--w-under` alone.**
+
+| median log-X, 3 draws | n=2 | n=3 | n=5 | n=10 | n=21 | max | A1 p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `tau 0.5` (baseline) | 0.005 | 0.002 | 0.004 | 0.093 | **0.272** | 1.698 | 0.449 |
+| **`--w-under 1`** | 0.006 | 0.002 | 0.005 | **0.055** | 0.346 | **0.462** | **0.051** |
+| `tau 0.9` | 0.014 | 0.001 | 0.005 | 0.077 | 0.327 | 1.658 | 0.130 |
+| `--w-under 1 --w-tau 0.9` | 0.015 | 0.001 | 0.004 | 0.084 | 0.362 | 1.755 | 0.117 |
 
 **Also fixed:** `train.run` wrapped `calibrate.fit` in a try/except. A finished
 1500-epoch run was discarded by an import error inside that post-hoc 1-D fit; the
