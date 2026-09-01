@@ -1764,9 +1764,38 @@ tail** (0.8985 -> 0.9194 against an unhinged 0.9211, with p90 still 0.05 against
 point-set arm buys the best median and a slightly worse worst organism — the two
 point sets are a real trade, not a strict ordering.
 
+**But the composition does not follow, and n=21 is now flat across everything.**
+Median final log-X, 3 medium draws x 10 communities, identical list and media:
+
+| run | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `r1` | 0.006 | 0.016 | 0.028 | 0.027 | **0.027** | 0.014 | 0.739 |
+| `p4` no cal | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | 0.007 | 1.698 |
+| `+ --w-under 1` | 0.006 | 0.002 | 0.005 | **0.055** | 0.346 | **0.006** | 0.462 |
+| `+ level1` rows | 0.006 | 0.004 | 0.004 | 0.110 | 0.342 | **0.006** | 0.447 |
+| `+ level1` community pts | 0.005 | 0.005 | 0.009 | 0.106 | 0.340 | 0.009 | **0.418** |
+
+1. **Level 1 buys the label metrics and the worst cell, not the composition.** The
+   max over all 30 runs falls 1.698 -> 0.418 across the four `p4` arms and the
+   ordering tracks A1's `worst_p90` (0.311 / 0.051 / 0.050 / 0.055) — which is what
+   A1's p90 was built to predict, and it does. But `n=10` is *worse* than the hinge
+   alone (0.055 -> 0.110) and `n=21` is unmoved.
+2. **`n=21` is flat at 0.27-0.35 across every arm**, and is now untouched by five
+   independent interventions: four label designs (`p2`/`p3`/`p4`/`p5`), the output
+   calibration, `--w-under`, the plane budget, and cut selection. Sizes 2/3/5 are
+   at 0.4-0.9% — under M5's gate — and n=10 is 5.5-11%. **The whole remaining M5
+   failure is one cell.**
+3. **A1 is behaving as designed and should be read as a *tail* instrument.** It
+   ranked the arms by `worst_p90` exactly as the composition's `max` came out, and
+   its *median* (0.0005-0.0010 across all four) correctly says these heads are
+   equivalent in bulk. Neither statistic predicts the n=21 median, because that is
+   not a tail over media — it is one member at one community.
+
 **`rank_by_active_set` stays the default.** It buckets rows by dual support pattern
 as a *proxy* for which regimes occur; Level 1 is the exact version of what that
-proxy approximates, but every number on file was measured with the proxy.
+proxy approximates, and it wins on held-out cosine, A1 worst organism and the
+composition's worst cell — but it loses at `n=10`, so the evidence does not yet
+justify flipping a default every number on file was measured against.
 
 ---
 
