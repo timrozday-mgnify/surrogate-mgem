@@ -1279,6 +1279,50 @@ default. **Next is a chosen quantile (`--w-under` made explicit as `tau`), which
 moves the slopes too — the ranked options and their literature are design spec
 §8.6 and `docs/reading-map.md` §3c.**
 
+### `--w-tau`: the expectile works, and the hinge still beats it — 2026-09-01
+
+Option 2 of §8.6. `--w-tau` makes the value loss an **expectile** (asymmetric least
+squares): the under-predicting side gets weight `tau`, the rest `1-tau`, scaled so
+`tau = 0.5` is the plain MSE **bit for bit** — verified, `value_p4_tau0.5` matches
+`value_p4` on all 21 organisms' `grad_cosine` to 1e-9, so `lr`/`w_grad` keep their
+meaning. `score` now also reports `value_under_rate` / `value_under_rate_low_mu`,
+the one-sided invariant as a rate, so a knob like this is chosen from a checkpoint
+in seconds instead of a 5 h composition run.
+
+| 21 organisms | worst cos | med R2 | low-`mu` under-rate | A1 worst p90 | n=21 log-X |
+| --- | --- | --- | --- | --- | --- |
+| `tau 0.5` (= `value_p4`) | 0.9211 | 0.9994 | 0.558 | 0.4493 | **0.272** |
+| `tau 0.7` | 0.9237 | 0.9993 | 0.539 | 0.3045 | — |
+| **`tau 0.9`** | 0.9076 | 0.9993 | **0.517** | **0.1298** | 0.327 |
+| `tau 0.99` | 0.9228 | 0.9989 | 0.508 | 0.5322 | — |
+| `--w-under 1` | 0.8985 | 0.9993 | — | **0.0509** | 0.346 |
+
+1. **A prediction made here that it would be inert is retracted.** The value term
+   is 0.3% of the objective at `w_grad 10` (`loss 0.248, value 0.00071,
+   grad 0.02473`), and the inference that a tilt inside 0.3% cannot matter was
+   wrong: A1's `worst_p90` falls 3.5x monotonically over `tau` 0.5 -> 0.9, and
+   `tau 0.9` flips the failing n=21 member's sign exactly as the hinge does
+   (GCA_000007325.1 **-0.857** -> DACTBY01 **+0.713**). A small term can decide a
+   tail.
+2. **There is an optimum and it is interior.** `tau 0.99` turns over hard (A1 p90
+   0.130 -> 0.532) — at weight 0.02 nothing holds the plateau down. "More
+   one-sided is better" is false.
+3. **The hinge wins, and the mechanism is why.** The expectile tilts *every* row,
+   so it buys one-sidedness by degrading the fit everywhere — community
+   `mu_rel_median` 0.254 against `--w-under`'s 0.052 — while the hinge is exactly
+   zero on compliant rows. For a **provable violation**, paying only at the
+   violation is the right shape.
+4. **A1's p90 reproduced the composition's `max` ordering a third time**
+   (0.051 / 0.130 / 0.449 -> 0.462 / 1.658 / 1.698) and again did not predict
+   n=21. It is a tail-over-media instrument; n=21 is one member at one community.
+
+**Untried and cheap:** `--w-under 1 --w-tau 0.9` together — different objects
+(additive hinge on violations vs a tilt on everything), one 13-minute run.
+
+**Also fixed:** `train.run` wrapped `calibrate.fit` in a try/except. A finished
+1500-epoch run was discarded by an import error inside that post-hoc 1-D fit; the
+identity is a valid calibration, so it must never be able to throw away training.
+
 ### E1, run twice, gives opposite answers — and both are right
 
 §8.5's cutting-plane check scores the parameter-free `min_j` model over a root's

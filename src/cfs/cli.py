@@ -240,6 +240,17 @@ def build_parser() -> argparse.ArgumentParser:
         "before it), and a slow member predicted near 0 reads as dead in §8.1.",
     )
     tv.add_argument(
+        "--w-tau",
+        type=float,
+        default=0.5,
+        help="Expectile level for the value loss (asymmetric least squares): "
+        "residuals on the under-predicting side get weight tau, the rest 1-tau. "
+        "0.5 is the plain MSE, bit for bit. Unlike --w-under's hinge, which only "
+        "sees rows already in violation, this reweights every row and so moves the "
+        "*slopes* -- which is what --gm-repair provably cannot fix. Choose it from "
+        "`value_under_rate` in the diagnostics, not from a composition run.",
+    )
+    tv.add_argument(
         "--gm-temp-final",
         type=float,
         default=None,
@@ -534,6 +545,7 @@ def main(argv: list[str] | None = None) -> int:
             w_grad=args.w_grad,
             w_rel=args.w_rel,
             w_under=args.w_under,
+            w_tau=args.w_tau,
             emb_dim=args.emb_dim,
             phi_hidden=args.phi_hidden,
             gm_group=args.gm_group,

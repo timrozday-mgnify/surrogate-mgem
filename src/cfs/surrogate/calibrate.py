@@ -96,8 +96,10 @@ def fit(mu_hat: np.ndarray, mu: np.ndarray) -> np.ndarray:
             continue
         r = least_squares(
             # Relative residuals: the whole point is the bottom of the range.
-            lambda q, m=m[ok], y=med[ok]: (q[2] * m - q[0] * np.exp(-m / q[1]) - y)
-            / np.maximum(np.abs(y), _W_FLOOR * np.abs(y).max()),
+            lambda q, m=m[ok], y=med[ok]: (
+                (q[2] * m - q[0] * np.exp(-m / q[1]) - y)
+                / np.maximum(np.abs(y), _W_FLOOR * np.abs(y).max())
+            ),
             [0.1, 0.3 * span, 1.0],
             bounds=([0.0, _BETA_FLOOR * span, 0.5], [np.inf, span, 2.0]),
         )

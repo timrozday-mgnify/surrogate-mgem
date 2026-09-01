@@ -260,7 +260,7 @@ def test_low_mu_stratum_starves_a_few_metabolites_below_their_own_anchor():
 
 
 def test_focus_background_is_replete_relative_to_its_own_anchor():
-    """"Replete" must mean replete *for that metabolite*, not "above Km".
+    """ "Replete" must mean replete *for that metabolite*, not "above Km".
 
     A community pool puts many of a member's metabolites near their own onsets at
     once. With the focus strata's background band absolute and `probe_lo` having
@@ -279,7 +279,9 @@ def test_focus_background_is_replete_relative_to_its_own_anchor():
     media = sample_media(sub, load_km_defaults(), cfg, scales)
 
     km = load_km_defaults_km(ex[0])
-    off = np.array([[np.log10(m[e] / km) + 6.0 for e in ex] for m in media if all(m[e] > 0 for e in ex)])
+    off = np.array(
+        [[np.log10(m[e] / km) + 6.0 for e in ex] for m in media if all(m[e] > 0 for e in ex)]
+    )
     near = ((off >= -0.5) & (off <= 0.5)).sum(1)
     assert np.median(near) >= 1  # several metabolites sit near their own onsets
     assert np.percentile(near, 90) >= 3  # and the many-at-once regime is reached

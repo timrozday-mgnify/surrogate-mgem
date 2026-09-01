@@ -1698,7 +1698,57 @@ read it as the repair removing the only thing that was hiding a slope error.
 `--gm-repair` is off by default and worth carrying because it makes the head's
 one-sidedness true rather than approximate, which is what §13's programs assume.
 
-**Option 2 — a chosen quantile instead of a tuned weight.** `--w-under` is the
+**Option 2 — a chosen quantile instead of a tuned weight. IMPLEMENTED
+(`--w-tau`), REAL, AND DOMINATED BY `--w-under`.** `--w-tau` makes the value term
+an expectile (asymmetric least squares, Newey & Powell 1987): residuals on the
+under-predicting side get weight `tau`, the rest `1 - tau`, with the `2x` chosen
+so `tau = 0.5` reproduces the plain MSE **bit for bit** — verified,
+`value_p4_tau0.5` matches `value_p4` on the `grad_cosine` of all 21 organisms to
+1e-9, so `lr` and `w_grad` keep the scale every number on file was measured at.
+
+| 21 organisms, held out | worst cos | med cos | med R2 | low-`mu` under-rate | A1 worst p90 |
+| --- | --- | --- | --- | --- | --- |
+| `tau = 0.5` (= `value_p4`) | 0.9211 | 0.9630 | 0.9994 | 0.558 | 0.4493 |
+| `tau = 0.7` | 0.9237 | 0.9595 | 0.9993 | 0.539 | 0.3045 |
+| **`tau = 0.9`** | 0.9076 | 0.9578 | 0.9993 | **0.517** | **0.1298** |
+| `tau = 0.99` | 0.9228 | 0.9579 | 0.9989 | 0.508 | 0.5322 |
+| `--w-under 1` (the hinge) | 0.8985 | 0.9626 | 0.9993 | — | **0.0509** |
+
+3 medium draws x the same 10 communities, all uncalibrated:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `tau = 0.5` (baseline) | 0.005 | 0.002 | 0.004 | 0.093 | **0.272** | 0.007 | 1.698 |
+| `--w-under 1` | 0.006 | 0.002 | 0.005 | **0.055** | 0.346 | **0.006** | **0.462** |
+| `tau = 0.9` | 0.014 | 0.001 | 0.005 | 0.077 | 0.327 | 0.015 | 1.658 |
+
+1. **It works, and an earlier prediction that it would be inert is retracted.** At
+   `w_grad = 10` the value term is 0.3% of the objective (`loss = 0.248,
+   value = 0.00071, grad = 0.02473`), and the reasoning that a tilt inside 0.3% of
+   the gradient cannot matter is **wrong**: A1's `worst_p90` falls 3.5x
+   monotonically over `tau` 0.5 -> 0.9, and `tau = 0.9` flips the failing n=21
+   member's sign exactly as the hinge does (GCA_000007325.1 **-0.857** ->
+   DACTBY01 **+0.713**). A small term can still decide a tail.
+2. **There is an optimum and it is not at the end.** `tau = 0.99` turns over hard
+   (A1 p90 0.130 -> 0.532): with the over-prediction side at weight 0.02 nothing
+   holds the plateau down. Do not read "more one-sided is better".
+3. **The hinge still wins, and the mechanism is the difference between them.** The
+   expectile tilts **every** row, so it buys one-sidedness by degrading the fit
+   everywhere — its community `mu_rel_median` is 0.254 against the hinge's 0.052 —
+   while `--w-under` is an additive term that is exactly zero on rows already in
+   compliance. For a *provable violation*, paying only at the violation is the
+   right shape. A1's p90 ordering reproduced the composition's `max` ordering for
+   a third time (0.051/0.130/0.449 -> 0.462/1.658/1.698) and again failed to
+   predict n=21, which is one member at one community, not a tail over media.
+4. **The durable win is the diagnostic.** `value_under_rate` and
+   `value_under_rate_low_mu` are now in `score`, so any future one-sided knob is
+   chosen from a checkpoint in seconds instead of a 5 h composition run.
+
+**Untried and cheap: `--w-under 1 --w-tau 0.9` together.** They are different
+objects — an additive hinge on violations plus a tilt on everything — and nothing
+measured says they compete. One 13-minute training run.
+
+**Option 2 as originally specced.** `--w-under` is the
 `tau -> 1` hinge of the asymmetric-loss family (Koenker & Bassett 1978; Newey &
 Powell 1987) with `tau` taken implicitly. Make it explicit: fit a `tau`-quantile
 envelope, so the one-sidedness comes with stated coverage rather than a weight

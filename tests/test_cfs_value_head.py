@@ -630,15 +630,26 @@ def test_w_under_penalises_only_under_prediction():
     x = jnp.full((1, 2, 2), 0.5)
     args = (x, mu, g, gvalid, np.ones((1, 2), dtype=np.float32), jnp.ones(1), 0.0)
 
-    def loss(pred, w_under):
+    def loss(pred, w_under, w_tau=0.5):
         h = _Fake(jnp.asarray(pred))
-        return float(_loss(h, *args, 0.0, w_under, lambda hh, xx: (hh.out, g))[1][0])
+        return float(_loss(h, *args, 0.0, w_under, w_tau, lambda hh, xx: (hh.out, g))[1][0])
 
     over, under = [[1.5, 1.5]], [[0.5, 0.5]]
     # Without the hinge the two are symmetric; with it, only under-prediction pays.
     assert loss(over, 0.0) == loss(under, 0.0)
     assert loss(over, 10.0) == loss(over, 0.0)
     assert loss(under, 10.0) > loss(under, 0.0)
+
+    # `--w-tau` is the other one-sided knob, and it is NOT the hinge: it tilts every
+    # row rather than only the violating ones, which is what reaches the slopes.
+    # tau = 0.5 must reproduce the plain MSE exactly -- every number on file was
+    # measured at that scale, and a silent factor would move `lr` and `w_grad` too.
+    assert loss(over, 0.0, 0.5) == loss(over, 0.0)
+    assert loss(under, 0.0, 0.9) > loss(under, 0.0, 0.5)
+    assert loss(over, 0.0, 0.9) < loss(over, 0.0, 0.5)  # over-prediction gets cheaper
+    # ...and unlike the hinge it is still symmetric-in-form: tau and 1-tau swap the
+    # two sides, so the asymmetry is a single interpretable number.
+    assert loss(under, 0.0, 0.9) == loss(over, 0.0, 0.1)
 
 
 def test_level1_drops_exactly_the_cuts_with_an_empty_territory():

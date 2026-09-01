@@ -152,9 +152,19 @@ def _trial_points(ds, media_npz) -> np.ndarray | None:
     return np.minimum(u[None] / ds.x_scale[:, None, :], groupmax.W_CAP)
 
 
-def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, bvg):
+def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, w_tau, bvg):
     mu_hat, g_hat = bvg(heads, x)
-    value = jnp.mean((mu_hat - mu) ** 2)
+    # `w_tau` makes the value term an **expectile** (asymmetric least squares, Newey
+    # & Powell 1987) rather than a mean: residuals on the under-predicting side get
+    # weight `tau`, the rest `1 - tau`. `w_under`'s hinge only sees rows already in
+    # violation, so it can push a plane back over a label without changing where the
+    # plane points; the expectile reweights *every* row, which is what moves the
+    # slopes -- and slopes are what the validity projection (`--gm-repair`) provably
+    # cannot fix. The 2x is chosen so `tau = 0.5` reproduces the plain MSE exactly,
+    # bit for bit, keeping `lr` and `w_grad` on the scale every number on file used.
+    resid = mu_hat - mu
+    aw = 1.0 if w_tau == 0.5 else 2.0 * jnp.where(resid < 0, w_tau, 1.0 - w_tau)
+    value = jnp.mean(aw * resid**2)
     # `w_rel` adds the same error measured *relatively*. The plain MSE is absolute
     # and 74% of rows sit on the plateau, so the 15% below a quarter of max mu carry
     # no weight and the head over-predicts every one of them -- median +98% at
@@ -165,7 +175,7 @@ def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, bvg)
     # mu; without it the plateau goes unweighted and R2 collapses to -1.66.
     if w_rel:
         den = mu + 0.1 * jnp.abs(mu).mean(axis=1, keepdims=True)
-        value = value + w_rel * jnp.mean(((mu_hat - mu) / den) ** 2)
+        value = value + w_rel * jnp.mean(aw * (resid / den) ** 2)
     # `w_under` penalises *under*-prediction only, relative, and it is a different
     # object from `w_rel`: it forbids a **provable violation** rather than trading
     # accuracy. `mu_max` is concave in `u` and the head is a min of affine pieces,
@@ -214,11 +224,24 @@ def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, bvg)
 
 @eqx.filter_jit
 def _step(
-    heads, opt_state, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, optimiser, bvg
+    heads,
+    opt_state,
+    x,
+    mu,
+    g,
+    gvalid,
+    x_scale,
+    gfloor,
+    w_grad,
+    w_rel,
+    w_under,
+    w_tau,
+    optimiser,
+    bvg,
 ):
     # `bvg` and `optimiser` are non-arrays, so `filter_jit` holds them static.
     (total, parts), grads = eqx.filter_value_and_grad(_loss, has_aux=True)(
-        heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, bvg
+        heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, w_tau, bvg
     )
     updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(heads, eqx.is_inexact_array))
     return eqx.apply_updates(heads, updates), opt_state, total, parts
@@ -281,6 +304,7 @@ def train_value_heads(
     w_grad: float = 1.0,
     w_rel: float = 0.0,
     w_under: float = 0.0,
+    w_tau: float = 0.5,
     emb_dim: int = 8,
     phi_hidden: int | None = None,
     k_code: int | None = None,
@@ -387,6 +411,7 @@ def train_value_heads(
                 w_grad,
                 w_rel,
                 w_under,
+                w_tau,
                 optimiser,
                 bvg,
             )
@@ -585,6 +610,12 @@ def score(
             "value_r2": float(r2[i]),
             "value_rel_err_low_mu": float(np.median(np.abs(relerr[i][low[i]]))),
             "value_bias_low_mu": float(np.median(relerr[i][low[i]])),
+            # The one-sided invariant, as a rate. `mu_max` is concave and the head
+            # is a min of affine pieces, so `mu_hat < mu` at a labelled row is a
+            # *provable* violation -- this is the coverage `--w-tau` buys, and it is
+            # measurable per checkpoint instead of after a 5 h composition run.
+            "value_under_rate": float((relerr[i] < 0).mean()),
+            "value_under_rate_low_mu": float((relerr[i][low[i]] < 0).mean()),
             **extra.get(gid, {}),
             "worst_grad_metabolites": [ds.exchanges[j] for j in worst],
             "per_limiting_metabolite": by_met,
@@ -732,6 +763,7 @@ def run(
     w_grad: float = 1.0,
     w_rel: float = 0.0,
     w_under: float = 0.0,
+    w_tau: float = 0.5,
     emb_dim: int = 8,
     phi_hidden: int | None = None,
     k_code: int | None = None,
@@ -763,6 +795,7 @@ def run(
         w_grad=w_grad,
         w_rel=w_rel,
         w_under=w_under,
+        w_tau=w_tau,
         emb_dim=emb_dim,
         phi_hidden=phi_hidden,
         k_code=k_code,
@@ -779,7 +812,15 @@ def run(
     if gm_repair:
         heads = groupmax.repair_intercepts(heads, ds)
     mu_tr = _over_media(lambda xx: _ARCH[arch].batched_value(heads, xx), jnp.asarray(ds.x_train))
-    cal = calibrate.fit(np.asarray(mu_tr), ds.mu_train / ds.mu_scale[:, None])
+    # The calibration is a 1-D post-hoc fit and the identity is a valid value for it,
+    # so it must never be able to discard a finished training run -- which it did
+    # once, losing 813 s to an import error inside `calibrate.fit`. On the cluster
+    # that would be hours.
+    try:
+        cal = calibrate.fit(np.asarray(mu_tr), ds.mu_train / ds.mu_scale[:, None])
+    except Exception:
+        LOGGER.exception("calibration fit failed — shipping the identity instead")
+        cal = _identity_cal(len(ds.genome_ids))
     diagnostics = evaluate(heads, ds, seed=seed, arch=arch, cal=cal)
     meta = {
         "arch": arch,
@@ -790,6 +831,7 @@ def run(
         "w_grad": w_grad,
         "w_rel": w_rel,
         "w_under": w_under,
+        "w_tau": w_tau,
         "eps": eps,
         "seed": seed,
     }
