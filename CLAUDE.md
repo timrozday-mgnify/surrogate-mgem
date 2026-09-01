@@ -1229,6 +1229,56 @@ reading 0.055 against a true 0.363) restated as a composition metric: **read
 Kept in the code — it costs one comma and it is the cheap fix if an
 over-prediction ever leads again.
 
+### An under-prediction is a validity failure, and `--gm-repair` proves it — 2026-09-01
+
+A min of *supporting* hyperplanes of a concave function is an upper bound
+everywhere, so a head that reads **low** has left the family. Two mechanisms can do
+that and both are separable in seconds, before any retrain:
+
+| mechanism | test | verdict on `p4` |
+| --- | --- | --- |
+| the softmin gap, `<= T*ln(K_active)` | re-evaluate at `T -> 1e-6` (`groupmax.with_temp`) | **refuted** — moves `mu_hat` 0.008 at the failing medium (the `T*ln K` bound, 0.75 in `mu` units, is loose: ~1 plane is near-active) |
+| planes no longer valid tangents | `mu_hat >= mu` on the head's **own training rows** | **confirmed** — 48.1% of rows under-predicted |
+
+`groupmax.repair_intercepts` / `cfs train-value --gm-repair` is the fix, and it
+applies **post hoc to an existing checkpoint** (`20hm_bands/repair_posthoc.py`, no
+refit): hold the slopes, set each plane's intercept to the tightest value keeping
+it above every training label, then apply the one uniform shift that covers the
+smoothing gap. It is SDDP's cut-validity invariant, which that literature keeps by
+never modifying a cut — we do, so we restore it after. With slopes fixed it is the
+exact optimum of the intercept LP, not a heuristic. Training rows under-predicted
+**48.1% -> 0.0%**, at a +4% median over-prediction.
+
+**Per-plane validity is necessary and NOT sufficient — this cost a cycle.** The
+head is the *smoothed* min and sits up to `c*T*ln(K)` below the hard one, and
+training had been paying for that gap in the intercepts. Repairing planes without
+restoring it left **96%** of rows under-predicted, worse than doing nothing. The
+uniform shift is exact: lowering every `b_j` by the same delta moves all
+pre-activations together, so it lifts the smoothed head by exactly `c*delta`. The
+regression test runs at a production temperature on purpose; at `temp=1e-4` the gap
+hides under any tolerance and the bug does not show.
+
+3 medium draws x the same 10 communities:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `p4` no cal | 0.005 | 0.002 | 0.004 | 0.093 | **0.272** | 0.007 | 1.698 |
+| + `--gm-repair` | 0.009 | 0.008 | 0.007 | **0.067** | 0.401 | 0.014 | 2.842 |
+
+**The under-prediction is gone and the head is now loose instead.** Every member at
+the failing n=21 medium flips sign — GCA_000007325.1 **-0.857 -> +0.998** — and
+`mu_rel_worst_member` becomes DACTBY01 at **+2.436**. So the §8.6 under-prediction
+and the §8.5 over-prediction are two ends of one thing, not two problems.
+
+**It localises the deficit to the slopes.** The projection moves intercepts only,
+and E1 found the cutting-plane model over the *same* labels is exact at that medium
+(0.363) — so a valid model can be tight there and this one cannot be at any
+intercept. Training moved the slopes off the label tangents. Do not read the n=21
+regression as the repair failing; it removed the thing hiding a slope error. Off by
+default. **Next is a chosen quantile (`--w-under` made explicit as `tau`), which
+moves the slopes too — the ranked options and their literature are design spec
+§8.6 and `docs/reading-map.md` §3c.**
+
 ### E1, run twice, gives opposite answers — and both are right
 
 §8.5's cutting-plane check scores the parameter-free `min_j` model over a root's

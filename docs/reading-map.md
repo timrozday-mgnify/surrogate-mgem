@@ -178,6 +178,37 @@ Three things worth taking:
 | "K = 1000 → 2000 changes nothing" | Expected. Cut count is not the lever; territory coverage of the region you evaluate in is. |
 | Auditing the seeded planes | The test-of-usefulness LP, run once over the K = 1000 seeded planes per organism, answers "how many of these are provably redundant" exactly. Affordable as a one-off. |
 
+### 3c. Under-prediction — the *other* sign, and why most of the toolkit misses it
+
+**An under-prediction is a certificate that the head has left the family.** A min of
+*supporting* hyperplanes of a concave function is an upper bound everywhere, so it
+cannot read low. There are exactly two ways to get one, and they are separable in
+minutes:
+
+| mechanism | test | verdict here (`p4`, n=21, GCA_000007325.1) |
+| --- | --- | --- |
+| the softmin's downward gap, `<= T*ln(K_active)` | re-evaluate the trained head at `T -> 1e-6` (`groupmax.with_temp`) | **refuted** — moves `mu_hat` by 0.008. The `T*ln(K)` bound (0.75 in mu units) is loose because ~1 plane is near-active there |
+| planes no longer valid tangents | check `mu_hat >= mu` on the head's **own training rows** | **confirmed** — 48.1% of `p4` rows under-predicted before repair, 53-68% in the bottom-5% `mu` band |
+
+Do this before reading anything: it decides which of the four families below applies,
+and the second row is checkable with no new solves.
+
+| Reference | Why it matters here |
+| --- | --- |
+| Pereira & Pinto, Math. Prog. 1991; Philpott & Guan, **On the convergence of stochastic dual dynamic programming**, ORL 2008; Füllner & Rebennack's review (3b) | **Cut validity is a structural invariant, not a fitted property.** SDDP keeps it by never modifying a cut once added — which is exactly what a gradient method does to ours. The technique that follows is a *validity projection*: hold the slopes, and set each intercept to the tightest value that keeps the plane above every training label. Closed form, no refit — `groupmax.repair_intercepts`, `--gm-repair`. |
+| Koenker & Bassett, **Regression quantiles**, Econometrica 1978; Newey & Powell, **Asymmetric least squares estimation**, Econometrica 1987 | The asymmetric-loss family `--w-under` belongs to. The hinge is the `tau -> 1` limit taken implicitly; the literature's contribution is that `tau` can be *chosen*, with stated coverage, instead of tuning a weight against the composition. |
+| Balázs, **Convex regression: theory, practice and applications** (2016, thesis) — already cited in Part 2 | The hard-constrained version: fit subject to `f(u_r) >= mu_r` for all `r`. With slopes fixed that is a linear program in the intercepts, i.e. the same object as the validity projection above — worth knowing they coincide, because it says the projection is *optimal* for its slopes and not a heuristic. |
+| Vovk, Gammerman & Shafer, **Algorithmic Learning in a Random World**; the conformal-MBO paper in 3b | One-sided conformal: inflate by the `(1-alpha)` quantile of the **signed** residual on a calibration set, for a finite-sample guarantee in whichever direction you need. The caveat has bitten this project twice — validity is w.r.t. the calibration distribution, so it must be `community_holdout`, never held-out media from the design being changed. |
+| Kumar et al., **Conservative Q-Learning**, NeurIPS 2020; Osband et al., **Bootstrapped DQN**, NeurIPS 2016 | Why C4 had nothing to offer, and why there is no symmetric fix. min-over-ensemble is pessimism, max is optimism — and **a concave family admits only the min**, since a max of concave functions is not concave. Do not reach for "max over seeds". |
+
+**The mismatch worth stating in a writeup.** The offline-MBO and offline-RL literatures
+are overwhelmingly about *conservatism*: a learned surrogate that is optimistic
+off-distribution gets exploited by whatever optimises against it. This head is
+conservative by construction, and the failure that remains is the opposite sign. So
+most of that machinery points the wrong way here, and the interesting question — how to
+keep a structurally one-sided estimator *tight* rather than how to make an unconstrained
+one safe — does not appear to be addressed.
+
 ### 3b. The rest of the training loop
 
 | Reference | Why it matters here |
@@ -210,6 +241,7 @@ Three things worth taking:
 | Open question | Read | What it should tell you |
 | --- | --- | --- |
 | The n=21 over-prediction tail that survived four design changes | Offline MBO review §conservatism; conformal one-sided certification; Balázs 2016 | Whether to bound the head from below, quantile-ise it, or design the composition around a one-sided estimator |
+| The n=21 **under**-prediction that remains once the calibration is stripped | **Part 3c above** — SDDP cut validity; asymmetric-loss regression; one-sided conformal | That an under-prediction is a validity failure, not an accuracy one, and that the repair is a projection with a closed form rather than a refit |
 | Cut selection: K inert above 1000, planes in the wrong place | **Part 3a above** — territory / Level 1 / LML1, test of usefulness | That 10× fewer well-chosen cuts perform the same, and that the selection criterion should use the point set you actually evaluate at |
 | Newton on a Hessian sum of rank ~20 of 365 | Qi & Sun, *A nonsmooth version of Newton's method*, Math. Prog. 1993; active-set / reduced-space methods | That a rank-deficient generalised Hessian is expected for a piecewise-linear value function, and the semismooth machinery built for it |
 | Choosing `T`: accuracy vs smoothness for downstream HMC | LogSumExp near-optimality bound; Higham & Mary on LSE numerics | The exact `T·ln(K)` offset being paid, why it shrinks only logarithmically in K, where float precision stops you |

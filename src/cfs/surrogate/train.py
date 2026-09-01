@@ -742,6 +742,7 @@ def run(
     gm_select: str = "active-set",
     gm_trial_media=None,
     gm_temp_final: float | None = None,
+    gm_repair: bool = False,
     seed: int = 0,
     organisms: list[str] | None = None,
 ) -> dict:
@@ -774,6 +775,9 @@ def run(
         gm_temp_final=gm_temp_final,
         seed=seed,
     )
+    # Before the calibration is fit, so the fit sees the head it will ship with.
+    if gm_repair:
+        heads = groupmax.repair_intercepts(heads, ds)
     mu_tr = _over_media(lambda xx: _ARCH[arch].batched_value(heads, xx), jnp.asarray(ds.x_train))
     cal = calibrate.fit(np.asarray(mu_tr), ds.mu_train / ds.mu_scale[:, None])
     diagnostics = evaluate(heads, ds, seed=seed, arch=arch, cal=cal)
@@ -795,6 +799,7 @@ def run(
         meta["gm_init"] = gm_init or "random"
         meta["gm_reanchor"] = gm_reanchor
         meta["gm_select"] = gm_select
+        meta["gm_repair"] = gm_repair
         meta["gm_trial_media"] = str(gm_trial_media) if gm_trial_media else None
         if gm_temp_final:
             meta["gm_temp_final"] = gm_temp_final

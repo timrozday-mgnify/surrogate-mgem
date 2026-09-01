@@ -188,6 +188,15 @@ def build_parser() -> argparse.ArgumentParser:
         "represent the value function as well as the full set.",
     )
     tv.add_argument(
+        "--gm-repair",
+        action="store_true",
+        help="After training, reset every plane's intercept to the tightest value "
+        "that keeps it above every training label (`groupmax.repair_intercepts`). "
+        "Restores SDDP's cut-validity invariant, which training breaks: an "
+        "under-prediction is proof the head has left the outer-approximation "
+        "family. Exact only at --width 1 --depth 1; closed form, no refit.",
+    )
+    tv.add_argument(
         "--gm-trial-media",
         type=Path,
         default=None,
@@ -532,6 +541,7 @@ def main(argv: list[str] | None = None) -> int:
             gm_init=args.gm_init,
             gm_reanchor=args.gm_reanchor,
             gm_select=args.gm_select,
+            gm_repair=args.gm_repair,
             gm_trial_media=args.gm_trial_media,
             gm_temp_final=args.gm_temp_final,
             k_code=args.k_code,

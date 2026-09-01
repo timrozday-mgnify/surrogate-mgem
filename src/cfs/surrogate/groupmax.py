@@ -544,3 +544,73 @@ def reanchor(heads: GroupMaxHead, ds, frac: float = 0.1, seed: int = 0) -> tuple
 
     heads = eqx.tree_at(lambda h: (h.wx[0], h.b[0]), heads, (jnp.asarray(wx0), jnp.asarray(b0)))
     return heads, slots
+
+
+def repair_intercepts(heads: GroupMaxHead, ds) -> GroupMaxHead:
+    """Restore the outer-approximation invariant: no plane below any training label.
+
+    A min of *supporting* hyperplanes of a concave function is an upper bound
+    everywhere, so a trained head that reads **low** is proof it has left the
+    family: Adam moves both slope and intercept, and nothing re-imposes validity.
+    (Measured: on `p4` training rows in the bottom 5% of `mu` the head
+    under-predicts 53-68%, i.e. it is below labels it was fit on. The other
+    candidate mechanism, the softmin's `T*ln(K)` downward gap, is refuted -- at the
+    failing n=21 medium, re-evaluating at `T -> 1e-6` moves `mu_hat` by 0.008.)
+
+    This is SDDP's cut-validity invariant, which that literature keeps by never
+    modifying a cut once added. We do modify them, so we restore it afterwards.
+    With the slopes held, the tightest valid intercept per plane is a closed form:
+    the head is ``mu_hat(y) = min_j[(c a_j + q).y - c b_j - out_b]``, and plane `j`
+    is valid iff ``c b_j <= min_r[(c a_j + q).y_r - out_b - mu_r]``. Taking that
+    bound with equality gives the *lowest* valid upper bound for those slopes --
+    so it is the exact optimum of the intercept LP, not a heuristic, and it
+    tightens over-predicting planes in the same pass.
+
+    **Exact only at width=1, depth=1**, the production config, where the head
+    really is a min of affine functions; wider or deeper it is a non-negative sum
+    of group-wise minima and no per-plane intercept has this meaning. Other shapes
+    are returned untouched.
+    """
+    if len(heads.wx) != 1 or heads.out_z.shape[1] != 1:
+        LOGGER.warning("repair_intercepts: head is not width=1 depth=1 — skipped")
+        return heads
+
+    b0 = np.asarray(heads.b[0]).copy()
+    for i in range(ds.x_train.shape[0]):
+        head = organism(heads, i)
+        w_rows = np.asarray(to_diag(jnp.asarray(ds.x_train[i])))  # (N, M)
+        y = w_rows * ds.mask[i]
+        mu = ds.mu_train[i] / ds.mu_scale[i]  # (N,)
+        c = float(jax.nn.softplus(head.out_z)[0])
+        if c <= 1e-12:  # a collapsed output gain carries no planes to repair
+            continue
+        s = c * np.asarray(jax.nn.softplus(head.wx[0])) + np.asarray(
+            jax.nn.softplus(head.out_x)
+        )  # (K, M)
+        # `min_r` is over rows *jointly* with `mu_r`, so the label cannot be split
+        # out of the matmul: (K, N) is the whole point.
+        slack = np.asarray(jnp.asarray(s) @ jnp.asarray(y).T) - float(head.out_b) - mu[None, :]
+        new = slack.min(axis=1) / c
+
+        # The head is the *smoothed* min, which sits below the hard one by up to
+        # `c*T*ln(K)` -- so per-plane validity is necessary and not sufficient, and
+        # training had been paying for that gap in the intercepts. Lowering every
+        # `b_j` by the same delta shifts all pre-activations together, hence lifts
+        # the smoothed head by exactly `c*delta`, so the minimal uniform lift that
+        # restores validity is one evaluation away. Doing it this way rather than
+        # assuming the worst-case `T*ln(K)` keeps the bound tight: the realised gap
+        # is `T*ln(#near-active)`, which is far smaller.
+        shifted = eqx.tree_at(lambda h: h.b[0], head, jnp.asarray(new))
+        v = float(np.max(mu - np.asarray(jax.vmap(shifted.on_w)(jnp.asarray(w_rows)))))
+        if v > 0:
+            new = new - v / c
+        LOGGER.info(
+            "%s: repaired %d of %d planes, median drop %.3g, smoothing lift %.3g",
+            ds.genome_ids[i],
+            int((new < b0[i] - 1e-9).sum()),
+            b0[i].size,
+            float(np.median(b0[i] - new)),
+            max(v, 0.0) / c,
+        )
+        b0[i] = new
+    return eqx.tree_at(lambda h: h.b[0], heads, jnp.asarray(b0))

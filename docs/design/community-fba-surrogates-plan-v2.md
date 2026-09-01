@@ -1616,14 +1616,123 @@ followed from that, both in the code and both measured:
   plane budget was inert.
 
 **The state to hand on:** sizes 2/3/5 are under M5's 1% gate, n=10 is 5.5-11%, and
-`n=21` is flat at 0.27-0.35 across five independent interventions. It is one member
-(DACTBY01, +0.68 to +1.22) at one community — an over-prediction at a point with no
-nearby tangent, which is max-affine's structural one-sided error. Cheap and untried:
-**C4** (min over the three trained Head A seeds, valid for an upper-bound family and
-free) and `--gm-trial-media` against a larger community-regime pool than A1's 2000.
+`n=21` is flat at 0.27-0.35 across five independent interventions. On the
+*calibrated* head it is one member (DACTBY01, +0.68 to +1.22) at one community — an
+over-prediction at a point with no nearby tangent, max-affine's structural one-sided
+error. On the uncalibrated head, which is the better arm, the worst member is an
+**under**-prediction and §8.6 applies instead. Cheap and untried:
+`--gm-trial-media` against a larger community-regime pool than A1's 2000.
 A1 is a *tail* instrument — its `worst_p90` reproduced the composition's `max`
 ordering exactly — and no per-medium statistic can see a single member at a single
 community, so **A2's `mu_rel_worst_member` is the reporting unit for this cell.**
+
+**C4 has since run and is refuted, and it changed the reading of the cell.** The
+min over three Head A seeds is a null (n=21 0.272 -> 0.259 over 3 medium draws) and
+had to be: on the **uncalibrated** `p4` head — the one that is otherwise best —
+`mu_rel_worst_member` is GCA_000007325.1 at **-0.857**, an *under*-prediction, and a
+min can only push predictions down. The DACTBY01 over-prediction above is the
+*calibrated* head's failure. **Read `mu_rel_worst_member`'s sign before picking a
+fix**, because the two failures need opposite tools and the toolkit is almost
+entirely built for the over-prediction one. The under-prediction branch is §8.6.
+
+#### §8.6 — the under-prediction branch, in priority order
+
+An under-prediction is not an accuracy shortfall; it is a **certificate that the
+head has left the valid-outer-approximation family**. A min of supporting
+hyperplanes of a concave function is an upper bound everywhere, so it cannot read
+low. Only two mechanisms produce one, and both are separable before any retrain:
+
+| mechanism | test | cost | verdict on `p4` |
+| --- | --- | --- | --- |
+| the softmin's downward gap, `<= T*ln(K_active)` | re-evaluate at `T -> 1e-6` (`groupmax.with_temp`) | seconds | **refuted** — moves `mu_hat` by 0.008 at the failing medium |
+| planes no longer valid tangents | `mu_hat >= mu` on the head's own **training** rows | seconds | **confirmed** — 48.1% of rows under-predicted, 53-68% in the bottom-5% `mu` band |
+
+Run both before spending anything. Literature for each option: `docs/reading-map.md`
+§3c. The options are ordered cheapest-first and each is gated on A1 plus
+`mu_rel_worst_member`, per Stage 0.
+
+**Option 1 — validity projection (`--gm-repair`). Implemented.** Hold the slopes;
+set each plane's intercept to the tightest value that keeps it above every training
+label, then apply the one uniform shift that covers the smoothing gap. Closed form,
+no refit, `O(K x N)` per organism, and it applies **post hoc to an existing
+checkpoint** (`20hm_bands/repair_posthoc.py`). This is SDDP's cut-validity
+invariant, which that literature maintains by never modifying a cut; we do modify
+them, so we restore it afterwards. Measured on `value_p4_nc`: training rows
+under-predicted **48.1% -> 0.0%**, at the cost of a +4% median over-prediction —
+which is what a genuine outer approximation costs and is the currency `--w-under`
+was buying in the same direction, but during training and only approximately.
+
+*Trap that cost a cycle:* per-plane validity is necessary and **not sufficient**.
+The head is the *smoothed* min and sits up to `c*T*ln(K)` below the hard one, and
+training had been paying for that gap in the intercepts. Repairing the planes
+without restoring it left **96%** of rows under-predicted — worse than doing
+nothing. The uniform shift is exact because lowering every `b_j` by the same delta
+moves all pre-activations together, so it lifts the smoothed head by exactly
+`c*delta`. `tests/test_cfs_value_head.py::test_repair_restores_validity_without_loosening_the_fit`
+runs at a production temperature specifically so this cannot regress; at
+`temp=1e-4` the gap hides under any tolerance and the bug does not show.
+
+**Measured on §8.1, and it is necessary but not sufficient — which is the useful
+part.** 3 medium draws x the same 10 communities, `value_p4_nc` vs the repaired
+checkpoint:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `p4` no cal | 0.005 | 0.002 | 0.004 | 0.093 | **0.272** | 0.007 | 1.698 |
+| **+ `--gm-repair`** | 0.009 | 0.008 | 0.007 | **0.067** | 0.401 | 0.014 | 2.842 |
+
+The invariant behaves exactly as designed and **the under-prediction is gone**: at
+the failing n=21 medium every member flips sign, GCA_000007325.1 from **-0.857 to
++0.998**, and `mu_rel_worst_member` becomes DACTBY01 at **+2.436**. n=10 improves.
+So a *valid* outer approximation at that medium is **loose** — which converts the
+§8.6 failure back into the §8.5 one, and the two are now provably two ends of one
+thing rather than two problems.
+
+**This localises the remaining deficit to the slopes, and that is the handoff to
+Option 2.** Validity projection moves intercepts only. E1 on this same failure
+found the cutting-plane model over the *same* labels is exact there (0.363), so a
+valid model can be tight at that medium — the trained head cannot be, with its
+slopes, at any intercept. Training moved the slopes off the label tangents and no
+projection recovers that. Do not read the n=21 regression as the repair failing;
+read it as the repair removing the only thing that was hiding a slope error.
+`--gm-repair` is off by default and worth carrying because it makes the head's
+one-sidedness true rather than approximate, which is what §13's programs assume.
+
+**Option 2 — a chosen quantile instead of a tuned weight.** `--w-under` is the
+`tau -> 1` hinge of the asymmetric-loss family (Koenker & Bassett 1978; Newey &
+Powell 1987) with `tau` taken implicitly. Make it explicit: fit a `tau`-quantile
+envelope, so the one-sidedness comes with stated coverage rather than a weight
+tuned against a 5 h composition run. Cheap — it is a loss change in `_loss`, one
+retrain — and it subsumes Option 1's guarantee *during* training rather than
+projecting onto it afterwards. Do it only if Option 1's post-hoc repair helps but
+the head then drifts back on a fresh label root. Note the hard-constrained version
+(fit subject to `f(u_r) >= mu_r`) is, with slopes fixed, the same LP as Option 1 —
+so Option 1 is optimal for its slopes, and Option 2's value is that it moves the
+*slopes* too.
+
+**Option 3 — one-sided conformal on the community holdout.** Inflate by the
+`(1-alpha)` quantile of the **signed** residual for a finite-sample guarantee in
+whichever direction is failing. The caveat is the one that has bitten this project
+twice: conformal validity is w.r.t. the calibration distribution, so it must be
+calibrated on `community_holdout` media, **never** on held-out media from the
+design being changed (P24). This is `calibrate.py`'s family with a guarantee
+attached — and note `calibrate` is already known to be design-dependent, so a
+conformal version inherits that and states it rather than hiding it.
+
+**Option 4 — nothing symmetric exists; do not look for it.** min-over-ensemble is
+pessimism (CQL), max is optimism (bootstrapped DQN/UCB), and **a concave family
+admits only the min** — a max of concave functions is not concave. C4 is therefore
+the *whole* ensemble toolkit available here, and it is the wrong sign for this
+failure. Do not reach for "max over seeds": it leaves the family, and §8.4's PSD
+Hessian tag goes with it.
+
+**The mismatch worth stating if this is written up.** The offline-MBO and offline-RL
+literatures are almost entirely about *conservatism*, because an optimistic
+surrogate gets exploited by whatever optimises against it. This head is conservative
+by construction and the failure that remains is the opposite sign, so most of that
+machinery points the wrong way. The question it leaves open — how to keep a
+structurally one-sided estimator **tight** rather than how to make an unconstrained
+one safe — does not appear to be addressed anywhere.
 
 **Sampling rather than optimising** (E2 above is the main one). Also open:
 **E3**, turn the value call into an argmin — sample the head along each active

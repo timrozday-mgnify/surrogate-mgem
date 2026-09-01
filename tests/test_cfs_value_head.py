@@ -560,9 +560,10 @@ def test_temperature_anneal_reaches_its_final_value():
         lr=3e-2,
     )
     assert heads.temp == pytest.approx(0.01)
-    assert evaluate(heads, ds, arch="groupmax-u")["per_organism"]["g0"][
-        "concavity_violation_rate"
-    ] == 0.0
+    assert (
+        evaluate(heads, ds, arch="groupmax-u")["per_organism"]["g0"]["concavity_violation_rate"]
+        == 0.0
+    )
 
 
 def test_calibration_is_increasing_concave_and_identity_at_zero():
@@ -670,3 +671,47 @@ def test_level1_drops_exactly_the_cuts_with_an_empty_territory():
     # everything and the steep one is the useless one.
     _, far = rank_by_territory(g_w, w, mu, mask, pts[pts[:, 0] > 5], valid)
     assert far[1] > 0 and far[0] == 0
+
+
+def test_repair_restores_validity_without_loosening_the_fit():
+    """A head pushed below its own labels is put back above them, and no higher.
+
+    The invariant is one-sided: a min of supporting hyperplanes of a concave
+    function cannot read low, so a head that does has left the family. Break it
+    the way training does -- shift every intercept down -- and check the pass
+    restores ``mu_hat >= mu`` on every training row while staying *tight*.
+    """
+    import equinox as eqx
+
+    from cfs.surrogate import groupmax
+
+    ds = _min_affine_dataset(K=5, n=600, M=4)
+    M = ds.x_train.shape[-1]
+    heads = groupmax.stack_heads(
+        jax.random.PRNGKey(0), 1, M, ds.mask, width=1, depth=1, group=64, temp=1e-2
+    )
+    seeded = groupmax.init_from_tangents(heads, ds)
+    mu = ds.mu_train[0] / ds.mu_scale[0]
+    # A production temperature, not a token one: per-plane validity is necessary
+    # and NOT sufficient, because the smoothed min sits up to `T*ln(K)` below the
+    # hard one. At `temp=1e-4` that gap hides under any tolerance and the bug
+    # (repair leaving 96% of rows under-predicted) does not show.
+
+    def resid(h):  # mu_hat - mu on the training rows; must be >= 0
+        v = np.asarray(groupmax.batched_value(h, jnp.asarray(ds.x_train)))[0]
+        return v - mu
+
+    # Training moves intercepts; a downward shift is exactly the failure mode.
+    b0 = np.asarray(seeded.b[0]).copy() + 0.5
+    broken = eqx.tree_at(lambda h: h.b[0], seeded, jnp.asarray(b0))
+    assert resid(broken).min() < -0.1, resid(broken).min()
+
+    fixed = groupmax.repair_intercepts(broken, ds)
+    r = resid(fixed)
+    assert r.min() > -1e-3, r.min()  # valid: no row left under-predicted
+    # ...and tight: it does not buy validity by lifting the whole head.
+    assert float(np.median(r)) < 0.05, float(np.median(r))
+    # Idempotent — a valid head is already at the tightest intercepts.
+    assert np.allclose(
+        np.asarray(groupmax.repair_intercepts(fixed, ds).b[0]), np.asarray(fixed.b[0]), atol=1e-4
+    )
