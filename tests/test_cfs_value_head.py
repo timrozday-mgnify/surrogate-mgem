@@ -604,3 +604,37 @@ def test_identity_calibration_is_finite_on_negative_predictions():
         out = calibrate.apply(m, cal)
         assert np.isfinite(out).all()
         assert np.allclose(out, m)
+
+
+def test_w_under_penalises_only_under_prediction():
+    """The hinge is one-sided: sitting above a labelled point is free.
+
+    `mu_max` is concave and the head is a min of affine pieces, so a correct head
+    is an upper bound on every labelled row; `mu_hat < mu` proves a plane has
+    drifted below the target. `w_rel` penalises both directions and therefore
+    trades accuracy; this forbids a violation.
+    """
+    import jax.numpy as jnp
+    import numpy as np
+
+    from cfs.surrogate.train import _loss
+
+    class _Fake:  # a head that just returns a stored prediction
+        def __init__(self, out):
+            self.out, self.mask = out, jnp.ones((1, 1, 2))
+
+    mu = jnp.array([[1.0, 1.0]])
+    g = jnp.zeros((1, 2, 2))
+    gvalid = jnp.zeros((1, 2))
+    x = jnp.full((1, 2, 2), 0.5)
+    args = (x, mu, g, gvalid, np.ones((1, 2), dtype=np.float32), jnp.ones(1), 0.0)
+
+    def loss(pred, w_under):
+        h = _Fake(jnp.asarray(pred))
+        return float(_loss(h, *args, 0.0, w_under, lambda hh, xx: (hh.out, g))[1][0])
+
+    over, under = [[1.5, 1.5]], [[0.5, 0.5]]
+    # Without the hinge the two are symmetric; with it, only under-prediction pays.
+    assert loss(over, 0.0) == loss(under, 0.0)
+    assert loss(over, 10.0) == loss(over, 0.0)
+    assert loss(under, 10.0) > loss(under, 0.0)

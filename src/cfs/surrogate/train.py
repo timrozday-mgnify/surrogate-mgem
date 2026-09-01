@@ -126,7 +126,7 @@ def _du(x, x_scale):
     return (1.0 - x) ** 2 / x_scale[:, None, :]
 
 
-def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, bvg):
+def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, bvg):
     mu_hat, g_hat = bvg(heads, x)
     value = jnp.mean((mu_hat - mu) ** 2)
     # `w_rel` adds the same error measured *relatively*. The plain MSE is absolute
@@ -140,6 +140,25 @@ def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, bvg):
     if w_rel:
         den = mu + 0.1 * jnp.abs(mu).mean(axis=1, keepdims=True)
         value = value + w_rel * jnp.mean(((mu_hat - mu) / den) ** 2)
+    # `w_under` penalises *under*-prediction only, relative, and it is a different
+    # object from `w_rel`: it forbids a **provable violation** rather than trading
+    # accuracy. `mu_max` is concave in `u` and the head is a min of affine pieces,
+    # so a correct head is an upper bound on every labelled point — a row where
+    # `mu_hat < mu` proves some plane has drifted below the target, and the min
+    # then locks that in everywhere near it.
+    #
+    # It binds at the bottom, which is where the family loses the property and
+    # where composition cannot afford it. Measured on the training rows of the
+    # `probe_lo` design (`labels_p4`), bottom 5% of `mu`: **53-68% of rows are
+    # under-predicted**, against 0.2-0.5% on the pre-relabel design — the design
+    # went bottom-heavy (62% of media below 0.2 of max `mu` against r1's 10%), so
+    # the absolute MSE now has thousands of low-`mu` rows and straddles them.
+    # `d(log X)/dt = mu` then reads the slowest member as dead: at the failing
+    # 21-member medium the head predicts 0.055 against a true 0.363, where the
+    # cutting-plane model over the *same* labels' tangents is exact (0.363).
+    if w_under:
+        den = mu + 0.1 * jnp.abs(mu).mean(axis=1, keepdims=True)
+        value = value + w_under * jnp.mean((jnp.maximum(mu - mu_hat, 0.0) / den) ** 2)
     # (G, B, 1) row mask * the head's own (G, 1, M) exchange mask.
     w = gvalid[..., None] * heads.mask[:, None, :]
     # Per-row *relative* Sobolev error, not the raw ||grad - pi||^2 of §7.1. The
@@ -168,10 +187,12 @@ def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, bvg):
 
 
 @eqx.filter_jit
-def _step(heads, opt_state, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, optimiser, bvg):
+def _step(
+    heads, opt_state, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, optimiser, bvg
+):
     # `bvg` and `optimiser` are non-arrays, so `filter_jit` holds them static.
     (total, parts), grads = eqx.filter_value_and_grad(_loss, has_aux=True)(
-        heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, bvg
+        heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, bvg
     )
     updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(heads, eqx.is_inexact_array))
     return eqx.apply_updates(heads, updates), opt_state, total, parts
@@ -231,6 +252,7 @@ def train_value_heads(
     lr: float = 3e-3,
     w_grad: float = 1.0,
     w_rel: float = 0.0,
+    w_under: float = 0.0,
     emb_dim: int = 8,
     phi_hidden: int | None = None,
     k_code: int | None = None,
@@ -328,6 +350,7 @@ def train_value_heads(
                 gfloor,
                 w_grad,
                 w_rel,
+                w_under,
                 optimiser,
                 bvg,
             )
@@ -673,6 +696,7 @@ def run(
     lr: float = 3e-3,
     w_grad: float = 1.0,
     w_rel: float = 0.0,
+    w_under: float = 0.0,
     emb_dim: int = 8,
     phi_hidden: int | None = None,
     k_code: int | None = None,
@@ -700,6 +724,7 @@ def run(
         lr=lr,
         w_grad=w_grad,
         w_rel=w_rel,
+        w_under=w_under,
         emb_dim=emb_dim,
         phi_hidden=phi_hidden,
         k_code=k_code,
@@ -721,6 +746,7 @@ def run(
         "lr": lr,
         "w_grad": w_grad,
         "w_rel": w_rel,
+        "w_under": w_under,
         "eps": eps,
         "seed": seed,
     }

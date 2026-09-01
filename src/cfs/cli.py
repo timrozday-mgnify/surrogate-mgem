@@ -203,6 +203,16 @@ def build_parser() -> argparse.ArgumentParser:
         "composition. 0.3 removes the bias at no cost in grad_cosine or R2.",
     )
     tv.add_argument(
+        "--w-under",
+        type=float,
+        default=0.0,
+        help="Weight on a one-sided relative penalty for *under*-prediction. "
+        "mu_max is concave and the head is a min of affine pieces, so a row where "
+        "mu_hat < mu proves a plane has drifted below the target. The probe_lo "
+        "design under-predicts 53-68%% of its bottom-5%%-mu training rows (0.2%% "
+        "before it), and a slow member predicted near 0 reads as dead in §8.1.",
+    )
+    tv.add_argument(
         "--gm-temp-final",
         type=float,
         default=None,
@@ -489,6 +499,7 @@ def main(argv: list[str] | None = None) -> int:
             lr=args.lr,
             w_grad=args.w_grad,
             w_rel=args.w_rel,
+            w_under=args.w_under,
             emb_dim=args.emb_dim,
             phi_hidden=args.phi_hidden,
             gm_group=args.gm_group,
