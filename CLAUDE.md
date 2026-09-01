@@ -1202,6 +1202,33 @@ budget, and cut selection. It is the entire remaining M5 failure.
    which took a dFBA trajectory to NaN at step 0. Every pre-2026-08-30 checkpoint
    was exposed.
 
+### C4 (min over Head A seeds) is refuted — the sign is wrong — 2026-09-01
+
+`cfs community --value a,b,c` now takes the **pointwise min** over several Head A
+checkpoints (`dfba.Surrogate._mu`; the first dir supplies all metadata, and
+`growth`/`minimal` still use it alone). Valid for free: a max-affine head is an
+upper bound off-distribution, so a min of seeds stays in the family.
+
+`p4` uncalibrated, seeds 0/1/2, 3 medium draws x the same 10 communities:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall |
+| --- | --- | --- | --- | --- | --- | --- |
+| `p4` no cal (seed 0) | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | 0.007 |
+| **C4 min over 3 seeds** | 0.006 | 0.004 | 0.005 | 0.102 | **0.259** | 0.007 |
+
+**Null, and structurally it had to be.** The min binds on 14 of 21 members at the
+failing medium (median ratio 0.995), so it *is* doing something — but the n=21
+failure is an **under**-prediction: `mu_rel_worst_member` is GCA_000007325.1 at
+**-0.857** in both arms, and the community's `mu_rel_median` gets *worse*
+(0.127 -> 0.143). Pushing predictions down cannot fix a member the head already
+reads too low. This is the second E1 verdict ("trained-head deficit", the head
+reading 0.055 against a true 0.363) restated as a composition metric: **read
+`mu_rel_worst_member`'s sign before picking a fix.** C4 is the right tool for the
+*calibrated* `p4` failure (AAXE02 at +148%), which is a different failure.
+
+Kept in the code — it costs one comma and it is the cheap fix if an
+over-prediction ever leads again.
+
 ### E1, run twice, gives opposite answers — and both are right
 
 §8.5's cutting-plane check scores the parameter-free `min_j` model over a root's
@@ -1261,9 +1288,9 @@ sufficient at that medium. What is open:
   emits `mu_rel_per_member` / `mu_rel_worst_member` (A2). The worst member is
   DACTBY01 at +0.68 to +1.22 — an over-prediction, which is max-affine's
   structural one-sided error at a point with no nearby tangent.
-- **Untried and cheap:** C4 (min over the three trained Head A seeds — valid for
-  an upper-bound family, free), and `--gm-trial-media` pointed at a *bigger*
-  community-regime pool than A1's 2000.
+- **C4 is done and refuted** (see below): the min over seeds is the wrong sign
+  for an under-prediction. **Untried and cheap:** `--gm-trial-media` pointed at a
+  *bigger* community-regime pool than A1's 2000.
 - **Do not** re-run `cfs topup` against held-out media from the design being
   changed; that is the naive Stage 4 and it has failed twice.
 - **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before

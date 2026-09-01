@@ -80,7 +80,13 @@ class Surrogate:
         from cfs.surrogate import behaviour as B
         from cfs.surrogate import train as T
 
-        vheads, vmeta = T.load(Path(value_dir))
+        # C4: `--value a,b,c` is the min over several Head A seeds. A max-affine
+        # head is an *upper* bound on `mu` wherever no tangent is nearby, so the
+        # pointwise min of independently seeded heads is still a valid member of
+        # the family and can only reduce the one-sided error. The first dir is the
+        # primary: its metadata, and its heads, are what `growth`/`minimal` use.
+        vdirs = [Path(d) for d in str(value_dir).split(",") if d]
+        vheads, vmeta = T.load(vdirs[0])
         # §13.2 needs mu alone, so Head B is optional; `mu_and_z` then refuses.
         bheads, bmeta = (None, {}) if behaviour_dir is None else B.load(Path(behaviour_dir))
         for k in ("index_hash", "genome_ids", "exchanges"):
@@ -97,6 +103,22 @@ class Surrogate:
         self.mod = T._ARCH[vmeta.get("arch", {}).get("arch", "icnn")]
         self._B = B
         self._vheads, self._bheads = vheads, bheads
+        self._ens = [(self.mod, vheads, np.asarray(vmeta["mu_scale"], dtype=np.float32), None)]
+        for d in vdirs[1:]:
+            h, m = T.load(d)
+            if list(m["genome_ids"]) != list(vmeta["genome_ids"]) or not np.allclose(
+                m["x_scale"], vmeta["x_scale"]
+            ):
+                raise ValueError(f"{d} does not match the primary value checkpoint (P13/P14)")
+            cal = m.get("value_cal")
+            self._ens.append(
+                (
+                    T._ARCH[m.get("arch", {}).get("arch", "icnn")],
+                    h,
+                    np.asarray(m["mu_scale"], dtype=np.float32),
+                    None if cal is None else np.asarray(cal, dtype=np.float64),
+                )
+            )
         self.mask = np.array(vmeta["mask"], dtype=bool)
         self.x_scale = np.asarray(vmeta["x_scale"], dtype=np.float32)
         self.mu_scale = np.asarray(vmeta["mu_scale"], dtype=np.float32)
@@ -126,6 +148,15 @@ class Surrogate:
         u = c / (self.km + c)  # (M,)
         return (u / (u + self.x_scale))[:, None, :].astype(np.float32)  # (G, 1, M)
 
+    def _mu(self, x) -> np.ndarray:
+        """Calibrated ``mu`` per organism at one medium; min over the seed stack."""
+        out = None
+        for mod, heads, scale, cal in self._ens:
+            raw = np.asarray(mod.batched_value(heads, x))[:, 0]
+            m = calibrate.apply(raw[:, None], self.value_cal if cal is None else cal)[:, 0] * scale
+            out = m if out is None else np.minimum(out, m)
+        return out
+
     def mu_and_z(self, c: np.ndarray, alpha: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """``(mu, z)`` for every organism in the stack at medium ``c``."""
         if self._bheads is None:
@@ -133,8 +164,7 @@ class Surrogate:
         jnp = self._jnp
         x = jnp.asarray(self._x(c))
         a = jnp.asarray(alpha[:, None], dtype=jnp.float32)
-        mu = np.asarray(self.mod.batched_value(self._vheads, x))[:, 0]
-        mu = calibrate.apply(mu[:, None], self.value_cal)[:, 0] * self.mu_scale
+        mu = self._mu(x)
         mu = np.maximum(mu, 0.0)  # P2: an infeasible medium has mu_max = 0.
         zmu = (
             None

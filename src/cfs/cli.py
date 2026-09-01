@@ -264,7 +264,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cm.add_argument("--roster", type=Path, required=True, help="CSV: genome_id, model_path.")
     cm.add_argument("--labels", type=Path, required=True, help="Label root (for the subspaces).")
-    cm.add_argument("--value", type=Path, required=True, help="Head A checkpoint dir.")
+    cm.add_argument(
+        "--value",
+        type=Path,
+        required=True,
+        help="Head A checkpoint dir, or a comma-separated list: the composition "
+        "then uses the pointwise min over them (C4 — valid for an upper-bound "
+        "family; only the first dir's metadata is read).",
+    )
     cm.add_argument("--behaviour", type=Path, required=True, help="Head B checkpoint dir.")
     cm.add_argument("--out", type=Path, required=True, help="Report + trajectory dir.")
     cm.add_argument(
@@ -563,7 +570,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.communities:
             comms = [[g for g in c.split(",") if g] for c in args.communities.split(";") if c]
         else:
-            gids = json.loads((args.value / "value_heads.json").read_text())["genome_ids"]
+            first = Path(str(args.value).split(",")[0])
+            gids = json.loads((first / "value_heads.json").read_text())["genome_ids"]
             rng = __import__("numpy").random.default_rng(args.seed)
             comms = [
                 sorted(rng.choice(gids, size=int(n), replace=False).tolist())
