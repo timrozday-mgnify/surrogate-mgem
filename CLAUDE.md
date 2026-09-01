@@ -1148,6 +1148,42 @@ fell **261 -> 90** (AAXE02) across the relabel. Nearest-row distance in `w` is
 proxy. Numbers and the script (`20hm_bands/e1_cutting_plane.py`): **design spec
 §8.5 / "E1: the labels are insufficient"**.
 
+### M5's 1% gate is met at every size but 21 — 2026-09-01
+
+Median final log-X, 5 replicates x 10 communities, identical list and media:
+
+| run | n=2 | n=3 | n=5 | n=10 | n=21 | overall |
+| --- | --- | --- | --- | --- | --- | --- |
+| `r1` | 0.009 | 0.018 | 0.076 | 0.027 | **0.027** | 0.017 |
+| `p4` | 0.032 | 0.048 | 0.026 | 0.095 | 0.706 | 0.035 |
+| `p5` (B2) | 0.028 | 0.026 | 0.028 | 0.269 | 0.569 | 0.038 |
+| **`p4`, calibration stripped** | **0.005** | **0.002** | **0.004** | **0.007** | 0.729 | **0.006** |
+
+1. **The output calibration's sign flips with the label design.** It helps on
+   `r1` (A1 median abs 0.0022 vs 0.0054 uncalibrated) and is the *dominant*
+   error on the relabelled roots (`p4`: 0.0052 -> **0.0007**, worst organism
+   0.039 -> **0.0027**). `calibrate` weights residuals at `_W_FLOOR = 0.3` of
+   max `mu` — tuned when 72% of media sat above 0.8 of max `mu`; after
+   `probe_lo = -12`, **62% sit below 0.2**, so the fit is dominated by the bottom
+   and over-corrects the plateau, which is what `d(log X)/dt = mu` integrates.
+   The old note "it is not the calibration" was measured on `r1` only. **Re-measure
+   whether to calibrate on every new label root; it is a property of the design's
+   `mu` distribution, not of the head.** V5 improves too (`overgrowth` max +0.262
+   -> +0.097), so nothing runs away.
+2. **B2 (the mid-`mu` stratum) is refuted.** It hit its label-level target
+   exactly — rows in [0.3, 0.8] median 183 -> 555, **min 13 -> 470** — and made
+   both A1 and §8.1 worse, calibrated or not. Seventh refuted proxy, but caught
+   by A1 in seconds instead of a 5 h loop. Kept in the code, default 0.15;
+   **set `--mid-mu 0` for a new label root** until something re-motivates it.
+3. **The size-21 regression is neither the calibration nor the labels' mid-`mu`
+   band.** 0.57-0.81 on every `p*` variant, 0.027 on `r1`. The one change `r1`
+   lacks is `probe_lo = -12` — which is also what closed M11's essentiality
+   blocker, so a revert trades one gate for another. That is the next test.
+4. **Bug fixed:** `calibrate.apply` returned **NaN** for a negative raw
+   prediction under the identity calibration (`d0 * exp(-m/1e-12)` = `0 * inf`),
+   which took a dFBA trajectory to NaN at step 0. Every pre-2026-08-30 checkpoint
+   was exposed.
+
 **A1 and A2 are done, and B2 is built.** `cfs community-holdout make|score`
 (A1) is 2000 media over the communities' member-union active subspaces, solved
 once for `mu_max`; scoring a checkpoint takes seconds. It ranks `value_r1`

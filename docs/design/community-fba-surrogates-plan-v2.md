@@ -1653,6 +1653,75 @@ no alpha grid, no duals — because the failure it exists to catch is Head A's
 *level* at a multi-limited medium. Add duals to it only if a gradient question
 turns up that it cannot answer.
 
+
+### B2 is refuted, and the output calibration was the size-2-to-10 error — 2026-09-01
+
+Two separable results, both on 5 replicates x 10 communities, identical community
+list and media throughout. Median final log-X:
+
+| run | n=2 | n=3 | n=5 | n=10 | n=21 | overall |
+| --- | --- | --- | --- | --- | --- | --- |
+| `r1` | 0.009 | 0.018 | 0.076 | 0.027 | **0.027** | 0.017 |
+| `p4` | 0.032 | 0.048 | 0.026 | 0.095 | 0.706 | 0.035 |
+| `p5` (B2, mid-`mu` stratum) | 0.028 | 0.026 | 0.028 | 0.269 | 0.569 | 0.038 |
+| **`p4`, calibration stripped** | **0.005** | **0.002** | **0.004** | **0.007** | 0.729 | **0.006** |
+| `p5`, calibration stripped | 0.007 | 0.005 | 0.023 | 0.311 | 0.808 | 0.016 |
+
+**1. B2 did what it was designed to do and did not help.** Rows per organism with
+`mu/mu_max` in [0.3, 0.8] went median 183 -> 555 and **minimum 13 -> 470** (against
+`r1`'s 505/61), with `<0.2` held at 0.596 — i.e. `p4`'s low-`mu` coverage plus
+`r1`'s middle, which is exactly the design goal. A1 got *worse* (median abs 0.0075
+vs `p4`'s 0.0052, worst organism 0.145 vs 0.039) and so did §8.1, calibrated or
+not. A seventh refuted proxy (P25) — but refuted in **seconds by A1**, not in 5 h,
+which is Stage 0 of the progression doing its job. Stage 2's histogram check
+passed, so this is not a parameter miss: the mechanism does not help.
+
+**2. The output calibration's sign flips with the label design, and on the
+relabelled roots it is the dominant error at every size below 21.** A1:
+
+| | A1 median abs | A1 worst organism |
+| --- | --- | --- |
+| `value_r1` cal / no cal | **0.0022** / 0.0054 | **0.011** / 0.015 |
+| `value_p4` cal / no cal | 0.0052 / **0.0007** | 0.039 / **0.0027** |
+| `value_p5` cal / no cal | 0.0075 / 0.0010 | 0.145 / 0.187 |
+
+`calibrate` fits a downward concave map with residuals weighted at
+`_W_FLOOR = 0.3` of the organism's max `mu` — deliberately "set on the plateau,
+not on the band that motivated the work", and tuned when 72% of held-out media sat
+above 0.8 of max `mu`. After `probe_lo = -12`, **62% sit below 0.2**, the fit is
+dominated by the bottom, and it over-corrects the plateau — which is precisely what
+`d(log X)/dt = mu` integrates. The existing note "it is not the calibration" was
+measured on `r1`, where it genuinely helps (and still does); it does not transfer.
+
+Uncalibrated `p4` is better on every other axis too: `mu_rel_median` on the true
+path 0.0098 -> **0.0015**, V5 `overgrowth` max +0.262 -> **+0.097** (so nothing
+runs away), and worst-member |rel| median 0.002.
+
+> **M5's 1% gate is met at sizes 2, 3, 5 and 10 — 0.5% / 0.2% / 0.4% / 0.7% —
+> for the first time.** n=21 is untouched at 0.729 and is now the only cell that
+> fails, on any label root or calibration setting.
+
+**3. So the size-21 regression is neither the calibration nor the labels' mid-`mu`
+band.** It sits at 0.57-0.81 across `p2`/`p3`/`p4`/`p5`, calibrated and not, and at
+0.027 on `r1`. Every design change since `probe_lo = -12` has left it exactly
+where it was. The next hypothesis to test is `probe_lo` itself — it is the one
+change `r1` does not have, and it is also what closed M11's essentiality blocker,
+so a revert is not free.
+
+**Do not set `_W_FLOOR` (or decide to calibrate at all) without re-measuring on
+the label root in use.** It is a property of the design's `mu` distribution, not
+of the head. The cheapest correct form is probably to weight relative to the
+design's own plateau share rather than a fixed 0.3; that is untested.
+
+**A latent bug this uncovered.** `calibrate.apply` returns **NaN** for any negative
+raw prediction under the identity calibration: an uncalibrated checkpoint stores
+`beta = 0`, the divisor is floored at 1e-12, `exp(-m/1e-12)` overflows to `inf`
+and `d0 * inf` is NaN rather than 0. Head A's raw output does go negative at a
+scarce medium, so composing an uncalibrated head took the dFBA trajectory to NaN
+at step 0 — every pre-2026-08-30 checkpoint was exposed. Fixed by clipping the
+exponent at 700 and writing `beta = 1` in `_identity_cal`;
+`tests/test_cfs_value_head.py::test_identity_calibration_is_finite_on_negative_predictions`.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)
