@@ -1831,6 +1831,39 @@ Reproduce: `cfs train-value --epochs 0 --gm-init labels --gm-select level1
 --gm-trial-media holdout_community/community_holdout.npz --gm-group 1000
 --gm-temp 0.01 --gm-eval-temp 0.0001 --gm-repair --width 1 --depth 1`.
 
+**Step 4: with the smoothing gone, the frozen head dominates the trained one
+everywhere — "training wins the bulk" is retracted.** The same repair at T=1e-4
+applied to the *trained* head (`value_p4_nc`), same 3 draws, same 10 communities:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max | A1 med / p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **frozen l1 + repair, T=1e-4** | **0.003** | **0.004** | **0.000** | **0.025** | **0.009** | **0.004** | **0.318** | **0.000004 / 0.0093** |
+| trained + repair, T=1e-4 | 0.004 | 0.005 | 0.004 | 0.057 | 0.322 | 0.005 | 0.837 | 0.000266 / 0.0491 |
+| trained, T=0.01 (was the bulk winner) | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | 0.007 | 1.698 | — |
+
+1. **The frozen head is now better at every size and loses nowhere**, where at
+   T=0.01 the trained head won `overall` (0.007 vs 0.013) and sizes 2/3/5. That
+   trade was an artifact of the uniform lift: the trained head's intercepts had
+   absorbed the smoothing gap during training, so it paid less of the penalty the
+   frozen head paid in full. Remove the gap and the ordering flips.
+2. **Slope drift is worth ~90x at a scarce medium, not the ~50x the held-out rows
+   suggested.** Paired at n=21: draw 0 **0.0091 (frozen) vs 0.8368 (trained)**,
+   and the trained head gets *worse* there under the colder temperature
+   (0.7761 -> 0.8368) while the frozen head goes 0.1748 -> 0.0091. The held-out
+   low-`mu` bias gap (+0.0004 vs +0.023) understates it because the failure is one
+   member at one medium, which is exactly what A1's `worst_p90` catches
+   (0.0093 vs 0.0491) and its median does not.
+3. **So the proximal/bundle arm loses its motivation.** It existed to interpolate
+   between "label tangents win the tail, gradient training wins the bulk"; there
+   is no bulk left for training to win. `--w-prox` was already refuted directly
+   (monotonically harmful). Do not re-open it without a new measurement showing
+   gradient training buying something the selected tangents do not.
+4. **What is actually left is two cells, both §8.5's class, not §8.6b's.** n=10 at
+   0.025 (draws 0.0006 / 0.0249 / 0.0533) and the n=21 draw-200 cell at 0.318,
+   whose worst member is a **mid-`mu` over-prediction** (+0.254 at `mu_true` 11.7)
+   with `dc_rel_median` 0.878 — Head B is implicated there too. Run E1 on that
+   medium before choosing anything.
+
 #### §8.6 — the under-prediction branch, in priority order
 
 An under-prediction is not an accuracy shortfall; it is a **certificate that the
