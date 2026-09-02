@@ -1245,8 +1245,10 @@ def dfba_rhs(c, X):
 For the equilibrium, Newton-solve `rhs = 0` rather than integrating. Trajectory
 gradients are badly conditioned; a one-shot root-find is not.
 
-> **Implementation status (2026-08-28) — M5 built and measured; the 1% gate is
-> not met.** `src/cfs/compose/dfba.py`, CLI `cfs community`. Both frozen heads
+> **Implementation status — M5 built; the 1% gate is met at n=2/3/5 and n=21 as
+> of 2026-09-02 (§8.6c), with n=10 at 2.5% and one cell of 30 at 0.318. The
+> paragraphs below record the state at 2026-08-28, when it was not met; read them
+> as history and §8.6c/§8.6d for where it stands.** `src/cfs/compose/dfba.py`, CLI `cfs community`. Both frozen heads
 > into the right-hand side above (`inflow = 0`, batch culture), integrated with
 > explicit Euler and the pool clipped at zero. The ground truth is per-organism
 > FBA — `cfs.groundtruth.solve.solve`, the same call that made the labels — at
@@ -2391,9 +2393,9 @@ mixes beautifully while sampling the wrong thing.
 | M0 | 20 CarveMe models, QC'd, index frozen | V0 passes |
 | M1 | Degeneracy survey, D4 decided | V1 complete, choice documented |
 | M2 | Ground truth pipeline | V2 passes |
-| M3 | Head A trained, all 20, vmapped | Gradient cosine > 0.99 held-out |
-| M4 | Head B trained, alpha sweep validated | V3 passes — **built 2026-08-28**, worst held-out R² 0.856 / median 0.921; **specific-flux target + §3.3 uptake clamp + the §4.3 community-regime round (2026-08-30) take it to 0.907 / 0.952** on the same held-out media (§6.3) |
-| M5 | dFBA composition | Trajectory matches COBRApy dFBA to 1% — **built 2026-08-28; gate not met. Now scored over n=5 replicates (3 Head A seeds x 3 medium draws): median log-X 0.9% / 1.8% / 7.6% / 2.7% / 2.7% at sizes 2/3/5/10/21, sizes 2-3 within 2x. A single run carries ~6x sampling error on a small community — larger than any model change measured — so state this gate over replicates only** (§8.1) |
+| M3 | Head A trained, all 20, vmapped | Gradient cosine > 0.99 held-out — **not met, worst 0.952 (2026-09-02), and no longer what §8.1 waits on.** The best head is *frozen* label tangents (`--epochs 0 --gm-init labels --gm-select level1 --gm-repair --gm-eval-temp 1e-4`): median cosine 0.981, median R² 0.9999, low-`mu` bias +0.0004, and `mu_rel_median <= 5e-4` on all 30 §8.1 cells (§8.6c) |
+| M4 | Head B trained, alpha sweep validated | V3 passes — **built 2026-08-28**, worst held-out R² 0.856 / median 0.921; specific-flux target + §3.3 uptake clamp + the §4.3 community-regime round take it to **0.931 / 0.963** on `labels_p4` (§6.3). **Now M5's bottleneck (2026-09-02):** held-out is not the binding number — per-member flux cosine falls to 0.74-0.96 at community media, tracking NN distance to its own training media at Spearman +0.673 against `dc_rel`. `--w-mm`, the hinge on §3.3's bound, is refuted: the violation is off-distribution (§8.6d) |
+| M5 | dFBA composition | Trajectory matches COBRApy dFBA to 1% — **met at n=2/3/5 and n=21; n=10 and one cell of 30 open (2026-09-02).** Median log-X over 3 medium draws x 10 communities, frozen Head A at `--gm-eval-temp 1e-4`: **0.003 / 0.004 / 0.000 / 0.025 / 0.009** at sizes 2/3/5/10/21, overall 0.004, max 0.318 (was 0.006/0.007/0.009/0.060/0.175). The residual is Head B's coverage, not Head A (§8.6c/§8.6d). **State this gate over replicates only** — a single run carries ~6x sampling error on a small community, larger than most model changes measured (§8.1) |
 | M6 | Newton equilibrium + implicit gradients | V4 passes |
 | M7 | Minimal medium, surrogate vs exact MILP | V5, V6 pass |
 | M8 | SteadyCom / MICOM framings | Agreement with reference implementations |

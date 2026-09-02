@@ -24,9 +24,9 @@
 > | M1 degeneracy → D4 | **done, V1 complete** — **68.9%** of 371k exchange-FVA observations degenerate roster-wide (59.7–82.8% per genome; 88% at α=0.7 vs 50% at α=1.0) ⇒ **D4 = elastic net** | `src/cfs/validate/degeneracy.py` |
 > | M2 solve interface | **done, §3.4 gate verified on a real GEM** — MM uptake bounds (§3.3), FBA for `mu_max` + duals, then the **Clarabel** elastic-net QP for `z` | `src/cfs/groundtruth/solve.py` |
 > | §4 sampling + bulk labels | **done, generated** — active subspace, stratified-Sobol design, parquet driver | `src/cfs/sampling/`, `--stage labels` |
-> | M3 Head A (value) | **gate not met; roster-wide worst is 0.958 against 0.99.** Three causes, each measured and each fixed: concavity imposed in the wrong coordinate (`x`, not `u`), random initialisation collapsing the max-affine head, and planes going *dead during training* and being unable to revive. Seeded `groupmax-u` + `--gm-reanchor 3`, 21 organisms: worst cosine **0.958**, median 0.978, median R² 0.995 | `src/cfs/surrogate/{picnn_u,deepset_u,groupmax}.py` |
-> | M4 Head B (behaviour) | **done** — `z_i(c, alpha)` masked MLP predicting **specific** flux `z / mu_max`, worst held-out R2 **0.883** / median 0.941, worst flux cosine 0.995. The `z` parametrisation cost the M5 tail: see below | `src/cfs/surrogate/behaviour.py` |
-> | M5 dFBA composition | **built and measured over replicates; the 1% gate is not met and the regression is open.** Median log-X over n=5 replicates x 10 communities: **0.009 / 0.018 / 0.076 / 0.027 / 0.027** at sizes 2/3/5/10/21 on the pre-relabel labels (`r1`), but **0.014 / 0.067 / 0.029 / 0.093 / 0.466** after the `probe_lo` relabel — and three design fixes have not moved it (`p3` 0.783, `p4` 0.706 at n=21). Error does not grow with community size; the failure is one over-predicted member at one medium. Stock-take and ranked plan: **design spec §8.5** | `src/cfs/compose/dfba.py`, `src/cfs/surrogate/calibrate.py` |
+> | M3 Head A (value) | **gate not met on cosine — worst 0.952 against 0.99 — but Head A is no longer what §8.1 is waiting on.** Causes found and fixed in order: concavity imposed in the wrong coordinate (`x`, not `u`), random init collapsing the max-affine head, planes dying during training, and finally the repair's uniform softmin lift (§8.6c). Best head is **frozen** label tangents — `--epochs 0 --gm-init labels --gm-select level1 --gm-repair --gm-eval-temp 1e-4` — worst cosine 0.952, median 0.981, median R² 0.9999, low-`mu` bias **+0.0004**, and `mu_rel_median <= 0.0005` on all 30 §8.1 cells | `src/cfs/surrogate/{picnn_u,deepset_u,groupmax}.py` |
+> | M4 Head B (behaviour) | **done, and now the M5 bottleneck.** `z_i(c, alpha)` masked MLP predicting **specific** flux `z / mu_max`; on `labels_p4`, worst held-out R2 **0.931** / median 0.963, worst flux cosine 0.985. Held-out is not the binding number: per-member flux cosine falls to **0.74-0.96** at community media, tracking NN distance to its own training media | `src/cfs/surrogate/behaviour.py` |
+> | M5 dFBA composition | **gate met at n=2/3/5 and n=21; n=10 and one cell of 30 are open.** Median log-X over 3 medium draws x 10 communities, frozen Head A at `--gm-eval-temp 1e-4`: **0.003 / 0.004 / 0.000 / 0.025 / 0.009** at sizes 2/3/5/10/21, overall 0.004, max 0.318. Head A contributes essentially nothing now (`mu_rel_median <= 5e-4` everywhere); the residual is **Head B's coverage of community-regime media**, whose NN-distance proxy predicts `dc_rel` at Spearman +0.673 over the cells on disk. §8.6c/§8.6d | `src/cfs/compose/dfba.py`, `src/cfs/surrogate/{behaviour,calibrate}.py` |
 > | M3b HPC sweep | **two runs. 2026-08-25** (350 tasks, 324 cpu-h) refuted its own "scale closes the gap": width/depth inert. **2026-08-27** (442/442 tasks, 21 cells x 21 organisms) is the source of the roster numbers below. The rows arm has now failed to run three times | `examples/hpc_run/`, `--stage sweep` |
 >
 > | M9-M14 Phase 7 applications | **spec written; M9, M10 and M11 done** — `cfs simulate` integrates a community forward, batch or chemostat (`--dilution`), surrogate only, no LP; `cfs maximise-growth` is §13.2's convex medium design, 19/20 V5 round-trips at the default trust region, median true gain +2.2%, median optimism 0.3%. `cfs minimal-medium` is §13.3's convex program, and V6 does not pass: Head A cannot represent essentiality (below). The rest (steady state, interaction maximisation, the inverse-problem posterior) is specced in **§13** with a per-use-case accuracy table: most need less than M3's and M5's unmet gates | `src/cfs/compose/dfba.py` (`simulate`, `with_chemostat`), `src/cfs/science/growth.py` |
@@ -1774,25 +1774,51 @@ composition's `max` ordering; its median correctly said the four heads are
 equivalent in bulk. Neither predicts the n=21 median, because that is not a tail
 over media — it is one member at one community.
 
-### Where the plan stands, and what is next
+### Where the plan stands, and what is next — 2026-09-02
 
-The staged plan is §8.5's "The progression for improving the training rows":
-Stage 0 A1 **done**, Stage 1 B2 **run and refuted**, Stage 2 (retune from the `mu`
-histogram) **done — the histogram was right and it did not help**. Stages 3-5 are
-*not* the live question for n=21, because the second E1 says the labels are
-sufficient at that medium. What is open:
+**The Head A branch is closed.** §8.5's staged plan (Stage 0 A1 done, Stage 1 B2
+refuted, Stage 2 done and inert) and the whole §8.6 under-prediction branch were
+chasing one arithmetic error: `repair_intercepts`' uniform smoothing lift, sized
+by the *max* local gap and therefore uncancelled wherever a single plane is active.
+`--gm-eval-temp 1e-4` removes it. Head A's `mu_rel_median` is now **<= 0.0005 on
+all 30 §8.1 cells** and its held-out low-`mu` bias is +0.0004. Do not reopen
+`--w-rel`, `--w-under`, `--w-tau`, the B2 stratum, the output calibration or
+relative-error re-anchoring; each was compensating for that lift.
 
-- **n=21 is one member at one community.** Report it that way: `cfs community`
-  emits `mu_rel_per_member` / `mu_rel_worst_member` (A2). The worst member is
-  DACTBY01 at +0.68 to +1.22 — an over-prediction, which is max-affine's
-  structural one-sided error at a point with no nearby tangent.
-- **C4 is done and refuted** (see below): the min over seeds is the wrong sign
-  for an under-prediction. **Untried and cheap:** `--gm-trial-media` pointed at a
-  *bigger* community-regime pool than A1's 2000.
-- **Do not** re-run `cfs topup` against held-out media from the design being
-  changed; that is the naive Stage 4 and it has failed twice.
-- **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
-  touching cut selection again.
+**Milestone position.**
+
+| gate | state |
+| --- | --- |
+| **M5, 1% log-X** | **met at n=2/3/5 (0.3-0.4%) and n=21 (0.9%)**; n=10 is 2.5%; one cell of 30 sits at 0.318 |
+| **M3, 0.99 worst grad cosine** | 0.9522 — untouched by any of this, and no longer what §8.1 is waiting on |
+
+**What is open, in order.**
+
+1. **M5's residual is Head B's coverage, and the proxy passed P25's gate.** NN
+   distance in `x` to the member's own training media predicts `dc_rel` at
+   Spearman **+0.673** (p=4.6e-5) over the 30 cells already on disk — the only
+   proxy of eight to clear that bar before a relabel. The fix is to label the media
+   §8.1 actually visits: `make_traj_pool.py` extracts them from any `cfs community`
+   run. **Blocked on code, not on solves — `cfs generate` cannot take an explicit
+   media file.** That is the next thing to write.
+2. **The two remaining bad cells are §8.5's class, not §8.6b's.** n=21 draw 200
+   (0.318) has `mu_rel_worst_member` = GCA_000151225.1 at **+0.254** with
+   `mu_true` = 11.7 — a *mid-`mu`* over-prediction — and `dc_rel` 0.878, so both
+   heads are implicated. n=10 is at 0.025-0.055. Run E1 on that medium before
+   choosing anything; it has flipped once already.
+3. **Check a diagnostic on the training set before building a loss on it.**
+   `--w-mm` ranked the ten communities by trajectory error and was still refuted:
+   the violation is 0.053% on training rows, so the loss had nothing to reach, and
+   where it *did* work the composition did not follow. A free predictor is not a
+   target.
+4. **Select, do not fit.** The frozen (`--epochs 0`) label-tangent head now beats
+   the trained one at every community size and loses nowhere; "training wins the
+   bulk" was an artifact of the same lift. The proximal/bundle arm has no
+   motivation left, and `--w-prox` was already refuted directly.
+5. **Do not** re-run `cfs topup` against held-out media from the design being
+   changed; that is the naive Stage 4 and it has failed twice.
+6. **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
+   touching cut selection again.
 
 **Caveat that affects all of it:** `x = u/(u+s)` takes `s` from the training
 rows, so every relabel silently changes the input coordinate and two label roots
