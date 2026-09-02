@@ -1810,10 +1810,12 @@ relative-error re-anchoring; each was compensating for that lift.
    Spearman **+0.673** (p=4.6e-5) over the 30 cells already on disk — the only
    proxy of eight to clear that bar before a relabel. The fix is to label the media
    §8.1 actually visits: `make_traj_pool.py` extracts them from any `cfs community`
-   run. **`cfs generate --media <npz> --round N` now labels them** (the npz is
-   `make_traj_pool.py`'s output: `media`, `exchanges`, `index_hash`; the design,
-   the probe and the sidecars are all skipped, so the base run's bands stand).
-   Unblocked; the solves have not been run.
+   run. **`cfs generate --media <npz> --round N` labels them**, and round 2 has
+   run: it halves the whole-path NN distance and the composition's `overall`
+   (0.004 -> 0.002), improves 21 of 30 cells, and leaves the two far cells and the
+   0.318 outlier exactly where they were. One community's trajectory does not
+   reach another's — see "Round 2 labels the trajectory" below for what that
+   costs and what would fix it.
 2. **The two remaining bad cells are §8.5's class, not §8.6b's.** n=21 draw 200
    (0.318) has `mu_rel_worst_member` = GCA_000151225.1 at **+0.254** with
    `mu_true` = 11.7 — a *mid-`mu`* over-prediction — and `dc_rel` 0.878, so both
@@ -1889,6 +1891,59 @@ actually visits — `make_traj_pool.py` already extracts those states from any
 `cfs community` run, and unlike the Level 1 trial pool, labelling them costs real
 solves. **`cfs generate --media <npz> --round N` takes that pool directly** — it
 skips the design, the probe and the sidecars and labels exactly those states.
+
+### Round 2 labels the trajectory: coverage transfers in the bulk, not in the tail — 2026-09-02
+
+`cfs generate --media` (this session) labels an explicit medium list, so §8.6d's
+fix is runnable: `label_pool_n15.npz` is 672 forward-pass states, taken from the
+**16 n=15 communities x 2 medium draws** and strided 5. Deliberately *not* the 10
+benchmark communities — `make_traj_pool.py`'s Level 1 selection pool may reuse
+them because no label is involved, but labelling them would train on the M5
+benchmark. `--round 2` into `labels_p4`: 63/63 shards, 158 256 rows, **100%
+optimal**, one `index_hash`, ~8.5 min/organism. Both heads retrained (P14 —
+`x_scale` moves with a round), frozen level-1 + repair at `--gm-eval-temp 1e-4`.
+
+| held out, same 800 round-0 media | base | + round 2 |
+| --- | --- | --- |
+| Head A worst grad cosine | 0.9522 | 0.9522 |
+| Head B worst R2 / median | 0.9307 / 0.9630 | **0.9354 / 0.9638** |
+| Head B worst flux cosine / sign | 0.9853 / 0.9629 | 0.9826 / 0.9631 |
+
+| median log-X, 3 draws x 10 communities | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| frozen l1 + repair, T=1e-4 | 0.003 | 0.004 | 0.000 | 0.025 | **0.009** | 0.004 | 0.318 |
+| **+ round 2** | **0.002** | **0.002** | 0.000 | 0.026 | 0.013 | **0.002** | 0.318 |
+
+1. **It is a bulk win and a tail null, and the NN distance says why.** `nn_proxy.py`
+   measures the distance at **`t = 0` only** — the one state a design draw already
+   covers — so it barely moves (median 0.717 -> 0.670 as a correlation, distances
+   within 4%). Measured over *every* step instead (`nn_delta.py`, no solves), the
+   round **halves the typical distance and leaves the tail exactly where it was**:
+   median over 30 cells **0.252 -> 0.119**, p90 2.108 -> 2.129, max 2.315 -> 2.312.
+   The composition has the same shape: paired per draw, **21 of 30 cells improve**
+   and `dc_rel` falls on 21 of 30, sizes 2 and 3 halve, and the far cells do not
+   move.
+2. **One community's forward path does not reach another's.** That is the finding,
+   and it is what makes the clean-benchmark version of this fix weak: the n=15
+   trajectories are the same *regime* but not the same neighbourhood. Covering the
+   tail needs either many more communities in the pool (so the manifold is covered
+   generally) or a benchmark on fresh communities so the visited states may be
+   labelled directly.
+3. **The 0.318 cell is untouched, as predicted.** n=21 draw 200 goes 0.3181 ->
+   0.3180 with `mu_rel_median` **0.0388 in both** — §8.5's mid-`mu`
+   over-prediction, not §8.6d's coverage failure. Head B coverage was never its
+   problem, and this is the cheapest confirmation of that on file.
+4. **Two cells regress and both are near-boundary**: n=21 draw 0 (0.0091 -> 0.0129,
+   `dc_rel` 0.663 -> 0.818) and n=10 draw 100 (0.0249 -> 0.0518, though its
+   `dc_rel` *improves* 1.482 -> 1.168). Same rhs-vs-trajectory decoupling the MM
+   clamp showed: a better right-hand side changes which metabolite empties first.
+5. **Held-out cannot see it (P24, again).** Head A's worst cosine is unchanged to
+   four decimals and Head B moves +0.005 R2, against an overall composition halving.
+   Score a coverage round on the composition, never on round-0 media.
+
+Reproduce: `make_label_pool.py label_pool_n15.npz 5 community_n15_s0
+community_n15_s100`, then `cfs generate --media label_pool_n15.npz --round 2`
+per organism (`one_organism_media.sh`), then `r2.sh`.
 
 ### M11: the minimal medium is blocked on essentiality, not on the program — 2026-08-30
 
