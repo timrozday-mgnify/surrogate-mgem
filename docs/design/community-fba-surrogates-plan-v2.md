@@ -2402,6 +2402,74 @@ against. Quote cosine beside it — a fixed denominator flatters the deep end ex
 as a local one explodes, and the median hides the failure entirely (0.99 -> 0.86)
 where the p05 shows it (0.78 -> -0.44).
 
+#### §8.6f — Head B's target is ~25-dimensional, and the ranked plan (2026-09-02)
+
+§8.6e localised Head B's error and refuted its obvious fix. This section asks what
+*structure* the head is missing, measures three candidates against the labels
+before building any of them (P25: a proxy earns a retrain by first predicting
+something on runs already on disk), and refutes two of them in minutes.
+
+Three scripts, no LP solves, all under `20hm_bands/`: `bound_binding.py` (labels
+only), `gate_check.py` and `flux_rank.py` / `offmanifold.py` (labels plus a frozen
+head pair; `value_p4_ncrep_T0.0001` + `behaviour_p4` throughout).
+
+**1. Complementary slackness holds exactly on the labels — and the clamp already
+collects it.** Wherever a stored dual is non-zero, that exchange's flux sits on
+§3.3's uptake bound: `dual => tight` is **0.996-1.000** on every organism in every
+`mu` band. So the limiting metabolites' fluxes are a closed-form function of the
+medium, and Head A's gradient — which §8.6c leaves at `mu_rel <= 5e-4` — is an
+active-set classifier for them. That is Bertsimas & Stellato's "predict the active
+set, recover the solution exactly", available for free.
+
+**It buys nothing, because `mu_and_z`'s projection already lands there.** Head B
+over-predicts uptake magnitude, so on truly-tight entries the clamp is what
+answers, and the head's relative error on them is **0.000 in every depth bin**.
+The tight set also carries only **1-10% of the squared flux error**; 48-69% is on
+**secretion** entries, which are positive, unbounded above, and reachable by no
+projection. Refuted before it was built.
+
+**2. The label flux set is 12-39 dimensional out of 138-259 exchanges.** SVD of
+each organism's training specific-flux matrix `z / mu`:
+
+| explained | rank, roster range |
+| --- | --- |
+| 99% | **3-12** |
+| 99.9% | 8-23 |
+| 99.99% | **12-39** |
+
+And the basis generalises: projecting the **held-out** true flux onto the
+training basis costs a median relative error of **0.0009-0.0046**, i.e. 30-100x
+below the head's own 0.09-0.26. This is the LP's geometry showing through — the
+optimum is a vertex, `c -> z` is piecewise affine over critical regions (mpLP),
+and the reachable set is the flux cone's inner description. A conservation law
+(elemental balance, a left-null-space moiety) is by definition a direction the
+label matrix has zero variance in, so the SVD absorbs every one of them without
+needing formulas from the GEM.
+
+**But projecting the existing predictions is not the fix.** Post hoc, `z := V V^T z`
+moves the held-out relative error 0.1238 -> 0.1228 — the head's error is already
+almost entirely *inside* the subspace. The off-manifold component is 0.4-1.9% at
+held-out media and **0.9-8.7% at the dFBA trajectory states §8.1 visits** (median
+ratio **2.5x**, `offmanifold.py`, no truth needed), so it does grow exactly where
+the composition fails, but a few percent of the norm cannot explain a 12-26%
+error. **The basis is worth having as a reparametrisation, not as a projection**:
+a head that emits ~25 coefficients instead of ~200 fluxes cannot leave the
+manifold at all, and its output layer is 10x smaller.
+
+##### The ranked series, cheapest first
+
+| # | attempt | evidence it rests on | cost |
+| --- | --- | --- | --- |
+| **B1** | **Low-rank basis head.** `z / mu = w . V`, `V` the top-`r` right singular vectors of the training specific flux, `r` by a 99.99% cutoff; `V` in the checkpoint, clamp applied after. | rank 12-39; held-out oracle **0.001-0.005**; off-manifold 2.5x at trajectory states | SVD in `data.py`, one matmul in the head, one retrain |
+| **B2** | **Weight the loss by what `dc` feels.** 48-69% of the squared error is on secretion, and the composition consumes `sum_i X_i z_i`, not a per-metabolite MSE. Check the weighting on training rows before building it. | error split uptake/secretion/tight = 0.21-0.46 / 0.48-0.69 / 0.01-0.10 | one line in `_loss` |
+| **B3** | **Drop sub-floor rows at training** instead of flooring them (`data._MU_FLOOR_FRAC`). The target is `z / mu`; below the floor the division is noise and the head is fitting it. Inference keeps the floor — removing it there is refuted (§8.6e). | 89% of the failing states have `mu_hat` below the floor | one line in `load_behaviour_dataset` |
+| **B4** | **Re-state M5 over depletion depth**, not only over scarcity-matched media. | 42 of 780 benchmark member-states reach the regime | measurement only |
+| **B5** | **Conservation / elemental balance as a DC3-style completion.** Predict the free coordinates, solve the balance for the rest. | *probably subsumed by B1* — a conservation law is a null direction the SVD already removes | needs formulas from the GEMs; verify `E z = mu b` on the labels first |
+| **B6** | **Piecewise-affine / active-set head.** mpLP says `c -> z` is affine on critical regions and discontinuous across degenerate ones; Head A's gradient already names the active set. | the class is right; nothing measured | a different architecture |
+
+**Refuted today, on file so nobody re-runs them:** the complementarity gate (1
+above) and the post-hoc subspace projection (2 above).
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)

@@ -223,6 +223,38 @@ one safe — does not appear to be addressed.
 
 ---
 
+## Part 3d — Head B: the *argmin* map, and why none of Parts 1–3 applies
+
+Head A is the value function of a parametric LP. Head B is the **argmin** of the same
+LP, and almost nothing said about the value carries over: the argmin is not concave,
+not monotone, not continuous, and has no dual to supervise it. What it *is* is
+piecewise affine over polyhedral critical regions, confined to a low-dimensional flux
+subspace, and pinned exactly on the uptake bound wherever the corresponding dual is
+non-zero. Measured on the labels (design spec §8.6f): rank **12–39** of 138–259
+exchanges at 99.99% of variance, and `dual ⇒ flux on the bound` at **0.996–1.000**.
+
+| Reference | Why it matters here |
+| --- | --- |
+| Gal & Nemhauser, multiparametric LP; Borrelli, Bemporad & Morari, **Predictive Control for Linear and Hybrid Systems**, ch. on explicit MPC | The structure of the target. The optimiser is affine on each *critical region* — a polyhedron of parameters sharing an optimal active set — so `c -> z` is piecewise affine, and a smooth MLP is approximating a partition by a single smooth sheet. This is the Head B analogue of "concavity in the wrong coordinate". |
+| Jones, Kvasnica et al., **Lexicographic perturbation for multiparametric linear programming**, Automatica 2007 | **Degeneracy makes the argmin non-unique**: overlapping regions, discontinuous optimisers. M1 measured 68.9% degenerate exchange-FVA observations, and D4's elastic net is exactly the lexicographic-perturbation trick by another name — a strictly convex tiebreak that selects one canonical optimiser. Read this to know what continuity the labels do and do not have. |
+| Bertsimas & Stellato, **The Voice of Optimization**, [arXiv:1812.09991](https://arxiv.org/pdf/1812.09991); **Online Mixed-Integer Optimization in Milliseconds** | Learn the optimal *strategy* (active set), then recover the solution exactly by solving the small system it implies — instead of regressing the solution. For us the classifier is free: complementary slackness says the tight set is where Head A's gradient is non-zero, and Head A is at `mu_rel <= 5e-4`. **Measured and refuted anyway** (§8.6f): `mu_and_z`'s clamp already lands on the bound for every tight entry, and the tight set carries only 1–10% of the squared error. |
+| Chen, Fazlyab et al. / Katz, Pappas et al., **Universal approximation of parametric optimization via piecewise-linear policy approximation**, [arXiv:2308.10534](https://arxiv.org/pdf/2308.10534) | If the PWA structure is ever worth building in (B6), this is the approximation theory for it — including how many pieces a target with `N` critical regions needs. |
+| Klamt et al., **From elementary flux modes to elementary flux vectors**, [PLoS Comput Biol 2017](https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1005409); Bhadra, Blomberg, Castillo & Rousu, **Principal metabolic flux mode analysis**, [Bioinformatics 2018](https://academic.oup.com/bioinformatics/article/34/14/2409/4840578) | Why an SVD of the label fluxes has such low rank: the steady-state flux cone has an inner description by generating vectors, and any observed flux is a conical combination of them. Bhadra et al. is the practical version — extract a small basis of flux modes by convex optimisation and work in its coordinates, which is exactly **B1**. |
+| Famili & Palsson, **The convex basis of the left null space of the stoichiometric matrix**, [Biophys J 2003](https://www.cell.com/fulltext/S0006-3495(03)74450-6); Haraldsdóttir & Fleming, **Identification of conserved moieties**, [PLoS Comput Biol 2016](https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1004999) | The exact conservation relations `l·S = 0` that any feasible flux obeys, and how to compute them. Note the caveat the second paper states outright: **adding exchange reactions destroys the left null space**, so the useful relations for `z` are the *elemental/moiety* ones (carbon, nitrogen, charge) balanced against the biomass drain, not conservation of concentration. Worth knowing before building B5 — and B1 gets them for free, since a conservation law is a direction of zero variance the SVD discards. |
+| Donti, Rolnick & Kolter, **DC3: a learning method for optimization with hard constraints**, [arXiv:2104.12225](https://arxiv.org/abs/2104.12225) | The general recipe when a prediction must satisfy constraints: **completion** (predict the free coordinates, solve the equalities for the rest) plus **correction** (unrolled gradient steps on the inequality violations). Our MM clamp is a one-shot correction; B1's basis is a completion in disguise; B5 would be completion done literally. Note the measured order of value here: the correction bought the composition (§8.6d) and the *projection* bought 0.001 (§8.6f). |
+| Sturm & Wexler, **Conservation laws in a neural network architecture**, [GMD 15, 3417, 2022](https://gmd.copernicus.org/articles/15/3417/2022/) | The same idea in atmospheric chemistry, and the cleanest statement of the design: predict **fluxes** in a penultimate layer and derive the state change from them, so conservation holds by construction rather than by penalty. Head B already predicts fluxes; the missing half is the balance they must satisfy. |
+| **Linking intra- and extra-cellular metabolic domains via neural-network surrogates for dynamic metabolic control**, [arXiv:2310.17179](https://arxiv.org/pdf/2310.17179); **Hybrid physics-informed metabolic cybergenetics**, [arXiv:2401.00670](https://arxiv.org/pdf/2401.00670) | The nearest prior art for Head B specifically: an NN mapping manipulable intracellular fluxes to exchange fluxes, used inside a dynamic controller. Same object, no structure imposed — useful mainly to show that the unconstrained version is what everyone builds, and it is what fails here off-distribution. |
+| Chen, Roberts et al., **Coupling FBA with reactive transport modeling**, [Sci Rep 2025](https://www.nature.com/articles/s41598-025-89997-9) (also Part 4) | Read here too: their ANN *is* Head B, and the paper's own error analysis is about the same regime — near-depletion, where the LP's basis changes fastest. |
+| Cutler & Breiman, **Archetypal analysis**, Technometrics 1994 | The stricter version of B1 if the linear subspace is not enough: represent each prediction as a convex combination of extreme observed behaviours, so the head cannot leave the convex hull of the training fluxes at all. Bounds magnitude, not just direction — the failure in §8.6e was a 3300x magnitude blow-up. |
+
+**The measured verdict, in one line.** The uptake side is already handled by a
+projection (§8.6d's clamp) and complementary slackness adds nothing on top of it;
+the error lives on the **secretion** side (48–69% of it), which is unbounded above,
+and the only structure that constrains it is the flux subspace and the conservation
+relations inside it. That is why B1 leads the ranked list in §8.6f.
+
+---
+
 ## Part 4 — The use cases, and who else has tried
 
 | Reference | Why it matters here |
@@ -244,6 +276,7 @@ one safe — does not appear to be addressed.
 | The n=21 over-prediction tail that survived four design changes | Offline MBO review §conservatism; conformal one-sided certification; Balázs 2016 | Whether to bound the head from below, quantile-ise it, or design the composition around a one-sided estimator |
 | The n=21 **under**-prediction that remains once the calibration is stripped | **Part 3c above** — SDDP cut validity; asymmetric-loss regression; one-sided conformal | That an under-prediction is a validity failure, not an accuracy one, and that the repair is a projection with a closed form rather than a refit |
 | Cut selection: K inert above 1000, planes in the wrong place | **Part 3a above** — territory / Level 1 / LML1, test of usefulness | That 10× fewer well-chosen cuts perform the same, and that the selection criterion should use the point set you actually evaluate at |
+| Head B: 12-26% flux error, concentrated on secretion and on depleted media | **Part 3d above** — mpLP critical regions; flux cone / principal flux modes; DC3; conserved moieties | That the argmin map is piecewise affine and confined to a ~25-dimensional subspace, so the fix is a reparametrisation (B1), not another loss term |
 | Newton on a Hessian sum of rank ~20 of 365 | Qi & Sun, *A nonsmooth version of Newton's method*, Math. Prog. 1993; active-set / reduced-space methods | That a rank-deficient generalised Hessian is expected for a piecewise-linear value function, and the semismooth machinery built for it |
 | Choosing `T`: accuracy vs smoothness for downstream HMC | LogSumExp near-optimality bound; Higham & Mary on LSE numerics | The exact `T·ln(K)` offset being paid, why it shrinks only logarithmically in K, where float precision stops you |
 | Stage 4 active learning: which acquisition, which pool | Settles' survey; the adaptive-surrogate literature | That pool construction dominates acquisition choice, and that the bound-looseness score is a legitimate cheap alternative to query-by-committee |

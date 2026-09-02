@@ -1665,7 +1665,11 @@ applied to the *trained* head (`value_p4_nc`), same 3 draws, same 10 communities
    with `dc_rel_median` 0.878 — Head B is implicated there too. Run E1 on that
    medium before choosing anything.
 `n1_bench.py`, `n1_decompose.py`, `repair_at.py`, `holdout_score.py` (§7.3
-diagnostics for an existing checkpoint, no retrain), `lowT.sh`.
+diagnostics for an existing checkpoint, no retrain), `lowT.sh`, and the §8.6f
+Head B pass — `bound_binding.py` (complementary slackness on the labels),
+`gate_check.py`, `flux_rank.py` (SVD rank and the oracle basis error) and
+`offmanifold.py` (how far off the label manifold the head goes at trajectory
+states) — none of which solve an LP.
 
 ### The trial pool is saturated, and 6 cuts per organism are enough — 2026-09-01/02
 
@@ -1822,10 +1826,19 @@ relative-error re-anchoring; each was compensating for that lift.
    the inference-time `mu_floor` — and removing that floor improves `dc_rel` 2.7x
    while making the trajectory 30x worse. Attribution across two community sets
    says to rank **metabolites** (Spearman +0.879) and per-genome *difficulty*
-   (+0.719), never a genome's share of the pool error (+0.413). Next is either
-   dropping sub-floor rows at *training* time (rather than flooring them) or
-   re-stating M5 over depletion depth, since only 42 of 780 benchmark
-   member-states reach the failing regime at all.
+   (+0.719), never a genome's share of the pool error (+0.413). Next is the ranked
+   series in **design spec §8.6f**, the literature pass on Head B (reading map
+   **Part 3d**). Measured there, no solves: the label flux set is **rank 12-39 of
+   138-259 exchanges** and that basis reconstructs held-out truth to **0.1-0.5%**
+   against the head's own 9-26%, so **B1, a low-rank basis head** (`z/mu = w . V`)
+   leads, ahead of dropping sub-floor rows at *training* time and re-stating M5
+   over depletion depth (only 42 of 780 benchmark member-states reach the failing
+   regime). Two candidates were refuted in minutes and are on file: the
+   complementarity gate — `dual => flux on the MM bound` is 0.996-1.000 on the
+   labels, but `mu_and_z`'s clamp already lands there (relative error **0.000**)
+   and the tight set carries only 1-10% of the squared error — and the post-hoc
+   subspace projection (0.1238 -> 0.1228). **48-69% of the error is on
+   secretion**, which no bound constrains.
 2. **The two remaining bad cells are §8.5's class, not §8.6b's.** n=21 draw 200
    (0.318) has `mu_rel_worst_member` = GCA_000151225.1 at **+0.254** with
    `mu_true` = 11.7 — a *mid-`mu`* over-prediction — and `dc_rel` 0.878, so both
