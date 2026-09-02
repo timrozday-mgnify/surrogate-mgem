@@ -50,7 +50,13 @@
 > medians: the median metabolite's limiting media **143 → 174**, metabolites with
 > ≥50 media 15 → 17, the top metabolite's share 0.58 → 0.55. The run dir holds
 > `make_scales.py` (labels → `scales.json`), `check_coverage.py` (the number that
-> predicts the gate), `run_labels.sh` + `one_organism.sh` (21-way local fan-out —
+> predicts the gate), the analysis scripts this file's later sections cite —
+> `e1_cutting_plane.py` (§8.5's label-vs-head check), `repair_posthoc.py`
+> (`--gm-repair` applied to an existing checkpoint, no refit), `make_trial_pool.py`
+> and `make_traj_pool.py` (Level 1 point sets, no LP solves), `titrate_n1.py` +
+> `titrate_n1b.py` (the n=1 low-`mu` characterisation), `analyse_n15.py` and
+> `agg.py` (per-size medians over replicates) — `run_labels.sh` +
+> `one_organism.sh` (21-way local fan-out —
 > **not** nextflow: the `0.1.2` data image predated the band code and would have
 > silently regenerated the old design. Fixed at `0.1.3` — the image rebuilds from
 > `src/`, and `GENERATE_LABELS` now passes the band flags via
@@ -1528,6 +1534,77 @@ the *value* rather than the gradient.
 one offset divided by how starved the member is. The `mu0/mu_scale < 2` threshold
 is where `0.0105/f` crosses ~0.5%. Solutions are not attempted here — this section
 is the characterisation only.
+
+### The trial pool is saturated, and 6 cuts per organism are enough — 2026-09-01/02
+
+Two extremes of the Level 1 point set, both on top of the frozen (`--epochs 0`)
+seeded head plus `--gm-repair`, 3 medium draws x the same 10 communities:
+
+| trial point set | cuts kept/organism | n=2 | n=3 | n=5 | n=10 | n=21 | A1 med / p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 2 000 community-regime draws | 45-103 | 0.006 | 0.007 | 0.009 | 0.060 | **0.175** | 0.00033 / 0.218 |
+| 20 000 draws | 108-268 | 0.007 | 0.007 | 0.009 | 0.053 | 0.169 | 0.00041 / 0.216 |
+| **200 000 draws** | — | 0.007 | 0.007 | 0.009 | 0.050 | **0.175** | — |
+| **1 010 dFBA trajectory states** | **3-10 (med 6)** | 0.006 | 0.007 | 0.009 | 0.064 | 0.178 | 0.00033 / 0.232 |
+| 202 trajectory states | 3-10 (identical) | 0.006 | 0.007 | 0.009 | 0.064 | 0.178 | 0.00033 / 0.232 |
+
+1. **100x more points buys nothing, and the "improvement" at 20k was one draw.**
+   Paired per draw at n=21: 0.1748/0.0229/0.3429 -> 0.1686/0.0232/0.3431. The
+   median *is* draw 0. 200k returns to 0.175 exactly. **Quote paired draws, never
+   the median of three.**
+2. **Trajectory states are SDDP's forward pass, taken literally, and they are the
+   cheapest point set that works.** `c_true` from any `cfs community` run is the
+   sequence of media the integrator actually visits — the initial-draw pool only
+   ever contains `t = 0`. 1010 of them keep **3-10 cuts** (median 6) against
+   45-103, and reproduce the bigger model cell for cell (n=21 0.178 vs 0.175, A1
+   median identical). Subsampling 5x selects the *same* cuts, because consecutive
+   states are near-duplicates. `20hm_bands/make_traj_pool.py`.
+3. **So the useful cut count is single digits per organism** — against a budget of
+   K=1000, three orders of magnitude. With "~90% of tangents never bind" and
+   "K 1000 -> 2000 is inert", the whole selection axis is closed from both ends.
+   The payoff is in §8.4, where the head is evaluated inside every Newton step.
+4. Building a pool costs **no LP solves** — `train._trial_points` reads `media`
+   and `exchanges` only, never `mu` (`20hm_bands/make_trial_pool.py`, 20 000 media
+   in ~4 min). Test any future selection idea this way first.
+
+### `--w-prox`: a stability centre at the seeded tangents, refuted — 2026-09-02
+
+`cfs train-value --w-prox W` penalises the first layer's slopes for leaving the
+tangents `--gm-init labels` seeded them with (proximal / level bundle methods —
+Lemarechal, Nemirovskii & Nesterov 1995; Kiwiel). Motivated by measurement, not a
+guess: frozen cuts win the n=21 tail while gradient training wins the bulk, so how
+far the slopes may move looked like the remaining lever. It is not.
+
+**First it was inert, and the reason is a trap worth keeping.** The original
+normalisation was one global `mean(d^2)/mean(a0^2)`. Label slopes span **five
+decades**, so that denominator is set by a handful of enormous planes and the
+ratio is ~0 for any drift the rest have: `w_prox` 0 -> 10 gave *bit-identical*
+composition to three decimals. **A "scale-free" normalisation over a heavy-tailed
+quantity is not scale-free.** It also made a derived diagnostic lie — a normalised
+"slope drift" of 0.0000 while 2.47 million of 9.32 million slope entries had in
+fact moved, by up to 3.2 absolute. Now normalised **per plane**, with the
+denominator floored on the organism's own median so an all-zero tangent does not
+get weight 1e12.
+
+**With the term actually binding it is monotonically harmful.** All at
+`--gm-reanchor 0`, level1 selection, repaired, 3 draws x 10 communities:
+
+| `w_prox` | n=2 | n=3 | n=5 | n=10 | n=21 | overall |
+| --- | --- | --- | --- | --- | --- | --- |
+| **0 (control)** | 0.008 | 0.007 | 0.008 | 0.080 | **0.337** | 0.011 |
+| 10 | 0.007 | 0.008 | 0.008 | 0.080 | 0.343 | 0.011 |
+| 100 | 0.007 | 0.008 | 0.012 | 0.059 | 0.360 | 0.013 |
+| 1000 | 0.007 | 0.008 | 0.012 | 0.059 | 0.364 | 0.013 |
+
+Kept in the code, default 0, because the negative result is worth being able to
+re-derive — but do not reach for it again without a new reason.
+
+**The 2x2 that produced it also found `--gm-reanchor` is what hurts this
+configuration**: at `w_prox` 0, n=21 is **0.427** with `--gm-reanchor 3` and
+**0.337** without, against **0.175** for no training at all. Less intervention on
+the planes is monotonically better here, which is the same "select, don't fit"
+ordering. `reanchor` remains the right tool for the dead-plane failure it was
+built for; it is not right on top of Level 1 selection.
 
 ### E1, run twice, gives opposite answers — and both are right
 

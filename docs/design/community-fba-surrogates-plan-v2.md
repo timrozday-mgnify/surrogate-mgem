@@ -1652,9 +1652,16 @@ for a frozen head** — untrained cuts have never absorbed the softmin's
 worse (n=2 0.058) until the uniform shift fixes it. **Training still buys the
 middle** — n=3/n=5 stay better trained, `overall` 0.007 vs 0.013.
 
-**And the selection axis is now closed.** A 10x trial pool (20 000
+**And the selection axis is now closed, from both ends.** A 10x trial pool (20 000
 community-regime media, free of solves — `_trial_points` never reads `mu`) keeps
-2.4x more cuts and moves n=21 by 0.006 (0.175 -> 0.169). With "~90% of tangents
+2.4x more cuts and moves n=21 by 0.006 (0.175 -> 0.169) — which is one medium draw
+wobbling, not a trend: paired per draw it is 0.1748/0.0229/0.3429 ->
+0.1686/0.0232/0.3431, and 200 000 points returns to 0.175 exactly. In the other
+direction, **1010 dFBA trajectory states** — `c_true`, i.e. SDDP's forward pass
+taken literally, and already on disk from any `cfs community` run — keep just
+**3-10 cuts per organism (median 6)** and reproduce the 45-103-cut model cell for
+cell (n=21 0.178, A1 median identical). Subsampling those states 5x selects the
+same cuts. **The useful cut count is single digits**, against a K=1000 budget. With "~90% of tangents
 never bind" and "K 1000 -> 2000 is inert" already on file, more points, more
 budget and better ranking are all exhausted. What remains is the cuts themselves.
 
@@ -1666,6 +1673,55 @@ the slopes may move. **That is the next arm, and unlike every previous guess it
 has a measured trade-off behind it.** The cheap ML shorthand is a
 `||a_j - a_j^0||^2` penalty in `_loss`; the principled version is the bundle
 method proper.
+
+#### §8.6b — what n=21 actually was, and what the error actually is
+
+**n=21 was structurally n=1** — one full roster — so it could never separate
+"large community" from "this medium". 16 distinct **15-member** subsets x 2 medium
+draws do, and they settle the M5 tail:
+
+1. **The composition metric reduces exactly to Head A.** Over 480 (community,
+   member) points, `logX_err = |mu_rel| x that member's true growth` at
+   correlation **0.9935**, median residual 0.0000. The integrator, Head B and the
+   pool sum contribute nothing.
+2. **The failing regime is a member below ~2x its own `mu_scale`**: median
+   `|mu_rel|` 0.072 (<1) and 0.041 (1-2) against **0.0004** above 2.
+3. **So the n=21 cell is a medium draw.** The same community scores **0.023** on
+   draw 100 (0 of 21 members scarce), 0.175 on draw 0 (21 of 21) and 0.343 on
+   draw 200 (20 of 21). Every head-side fix in §8.6/§8.6a failed on n=21 because
+   the failure was the draw.
+4. **Size and scarcity are confounded by the benchmark.** `community_medium`
+   draws one §4.3 medium over the *union* of the members' active subspaces and
+   §4.3 bands a fixed *fraction* of it, so a larger union starves every member.
+   Fraction of members below 2x `mu_scale` runs 0.13 / 0.33 / 0.33 / 0.67 / 0.65
+   over sizes 2/3/5/10/21 — while n=15 on a replete draw scores 0.0185, like a
+   3-member community. **Match `mu0/mu_scale` before comparing sizes**; both "error
+   does not grow with size" and "n=21 is the whole remaining failure" were reading
+   this confound.
+
+**And the error itself is one number.** Contriving the regime at n=1
+(`titrate_n1b.py`: hold everything replete, titrate one metabolite, 46 limiting
+pairs, 1288 rows, `mu/mu_scale` to 1.2e-6):
+
+- it is a **constant additive over-prediction of ~0.0105 `mu_scale`**, flat across
+  five decades of `mu` and falling to 0.0006 only above 2x. The relative error
+  explodes solely because the denominator vanishes — **it is not a low-`mu`
+  accuracy problem**, which is why `--w-rel`, `--w-under` and `--w-tau` all failed
+  on it;
+- the offset **is the head's floor**: it never predicts below 0.005-0.015
+  `mu_scale`, and on deeply starved rows offset and floor agree to **7e-5**
+  (corr 0.894 over 18 organisms). A min of planes with no tangent anchored near
+  `mu = 0` cannot descend. **100.0% of 1288 rows are over-predictions**;
+- **7.1x spread across genomes** (worst: GCA_000007325.1, the organism that led the
+  n=21 failures), and a *larger* spread across limiters within one genome —
+  ABFX02 maltose **0.0002** vs chloride 0.0159, **75x**. Carbon sources cheap, ions
+  expensive, **O2 worst** (0.0246). Same ranking the gradient cosine has always
+  shown for mg2/cl/ca2, now on the value.
+
+So `logX_err = (0.0105 * mu_scale / mu_true) x growth`, and the `mu0/mu_scale < 2`
+boundary is where that crosses ~0.5%. `mu0/mu_scale` needs no LP, so it is a
+**runtime** predictor of a 100x error and belongs in `cfs community` / `simulate`
+output. Solutions are deliberately not proposed here.
 
 #### §8.6 — the under-prediction branch, in priority order
 
