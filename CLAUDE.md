@@ -1463,6 +1463,70 @@ is the low-`mu` band, with a measured threshold and a measured amplification
 (x that member's growth). (c) Re-state M5's gate over media matched on scarcity,
 or it is measuring the draw.
 
+### The low-`mu` error characterised at n=1: a fixed additive floor — 2026-09-02
+
+`20hm_bands/titrate_n1{,b}.py`: hold every metabolite at the design's rich level
+and titrate **one** down a log grid, per organism. That contrives the scarce
+regime with a single known limiter and no community, so the error is attributable
+to (organism, metabolite) instead of to a medium draw. Pass 1 (21 organisms x 8
+random active metabolites x 11 dilutions) found only **46 of 168 pairs limit at
+all** — 93% of rows never leave the plateau even at 1e-5 of rich. Pass 2 sweeps
+those 46 pairs over 28 points down to 1e-9 of rich: 1288 rows, `mu/mu_scale` from
+2.8 down to **1.2e-6**, `value_p4_frozen_l1_rep`.
+
+**1. The error is a constant additive over-prediction, not a varying one.** In
+`mu_scale` units it is flat at **~0.0105 across five decades** of `mu`:
+
+| `mu/mu_scale` | n | med true | med predicted | **med abs err** | med rel err |
+| --- | --- | --- | --- | --- | --- |
+| 0.000-0.001 | 225 | 0.00012 | 0.01030 | **0.00998** | +11.3 |
+| 0.001-0.01 | 127 | 0.00333 | 0.01439 | **0.01053** | +0.14 |
+| 0.01-0.05 | 90 | 0.02238 | 0.03407 | **0.01046** | +0.06 |
+| 0.05-0.25 | 91 | 0.11330 | 0.12532 | **0.01053** | +0.028 |
+| 0.25-1 | 77 | 0.51168 | 0.52084 | **0.01053** | +0.014 |
+| 1-2 | 125 | 1.67732 | 1.68730 | 0.01287 | +0.007 |
+| 2-9 | 553 | 2.49197 | 2.50553 | **0.00064** | +0.0003 |
+
+The relative error explodes only because the denominator goes to zero. **The
+"low-`mu` problem" is not a low-`mu` problem** — it is one fixed offset, visible
+everywhere, that only *matters* where `mu` is small.
+
+**2. The offset IS the head's floor.** Per organism the head never predicts below
+0.005-0.015 `mu_scale` while the truth reaches 1e-6. On deeply starved rows
+(`mu < 0.01 mu_scale`) the median offset and that floor agree to **7e-5**
+(correlation 0.894 over 18 organisms). Mechanistically this is what a max-affine
+upper bound must do: with no tangent anchored at a near-zero-`mu` row, the min of
+the remaining planes cannot descend, so it flattens out. **100.0% of all 1288 rows
+are over-predictions** — the one-sided structure again, with no exception.
+
+**3. It does NOT affect all genomes equally: 7.1x spread** (ABCC02 0.0054 ->
+GCA_000007325.1 0.0159, and CP027002.1 0.0387 which never went below 1.77x
+`mu_scale`). GCA_000007325.1 having the worst floor is the same organism that led
+the n=21 community failures.
+
+**4. Nor is it the same whichever metabolite limits — and that axis is the larger
+one.** Within a *single* organism, holding the genome fixed:
+
+| organism | offset by limiter (`mu_scale` units) |
+| --- | --- |
+| ABFX02 | malt **0.0002** / ca2 0.0152 / cl 0.0159 — **75x** |
+| CP000139.1 | acnam 0.0058 / k 0.0073 / mg2 0.0097 / cl 0.0130 / o2 **0.0246** |
+| CP009913.1 | k 0.0063 / ca2 0.0153 |
+| AAXE02 | k 0.0057 / mg2 0.0102 / cl 0.0102 / ca2 0.0104 |
+| GCA_000007325.1 | leu 0.0124 / lys 0.0140 / tyr 0.0159 / k 0.0180 / cl 0.0183 |
+
+Consistently: **carbon sources are cheap to get right** (maltose 0.0002, acnam
+0.0058), **the ions are the expensive ones** (ca2 0.0115, cl 0.0116, mg2 0.0102),
+and **O2 is the single worst** (0.0246). That is the same ranking the gradient
+cosine has always shown for `EX_mg2_e` / `EX_cl_e` / `EX_ca2_e`, now measured on
+the *value* rather than the gradient.
+
+**What this means for the composition.** `logX_err = |mu_rel| x growth` and
+`mu_rel = 0.0105 * mu_scale / mu_true`, so every §8.1 number in this file is that
+one offset divided by how starved the member is. The `mu0/mu_scale < 2` threshold
+is where `0.0105/f` crosses ~0.5%. Solutions are not attempted here — this section
+is the characterisation only.
+
 ### E1, run twice, gives opposite answers — and both are right
 
 §8.5's cutting-plane check scores the parameter-free `min_j` model over a root's
