@@ -1945,6 +1945,55 @@ Reproduce: `make_label_pool.py label_pool_n15.npz 5 community_n15_s0
 community_n15_s100`, then `cfs generate --media label_pool_n15.npz --round 2`
 per organism (`one_organism_media.sh`), then `r2.sh`.
 
+### Head B, attributed: the metabolite axis reproduces, the genome axis is biomass — 2026-09-02
+
+`titrate_n1.py` attributed Head A's error to (organism, limiter). The Head B
+analogue is `attribute_b.py` + `attrib_report.py`: every cell of every run given,
+at 5 states along the **true** path, one FBA per (cell, state, member), aggregating
+the pool-derivative error `X_i (z_hat - z_true)` by organism and by exchange. Two
+independent community sets — the 10 benchmark communities x 3 draws (780
+member-states) and the 16 n=15 communities x 2 draws (2400) — so every claim below
+is a cross-set reproduction, not one run. ~90 s and ~6 min respectively.
+
+| axis, benchmark set vs n=15 set | Spearman |
+| --- | --- |
+| per-**metabolite** share of squared pool error | **+0.879** (p=3e-144) |
+| per-**genome** median relative flux error | **+0.719** (p=2.4e-4) |
+| per-**genome** share of squared pool error | +0.413 (p=0.06) |
+
+1. **Attribute by metabolite; do not attribute by genome share.** A member's share
+   of the pool error is its difficulty *times* how much biomass it happened to
+   reach in that community, so it barely reproduces — `CP001820.1` is 54% of the
+   benchmark set's error and 15% of the n=15 set's, and `GCA_000151225.1` is 7%
+   and 35%. Genome *difficulty* (median relative error) does reproduce. This is
+   the same confound as "n=21 is medium scarcity, not size", one level down.
+2. **The metabolites are not Head A's.** `EX_h2o_e`, `EX_h_e`, `EX_akg_e`,
+   `EX_succ_e`, `EX_acald_e`, `EX_nh4_e`, `EX_glyc_e`, `EX_glyald_e` — central
+   carbon and by-product exchanges, where Head A's error has always been led by
+   `EX_mg2_e` / `EX_cl_e` / `EX_ca2_e`. The two heads fail on **different
+   metabolites**, so a shared coverage fix aimed at Head A's ions would not have
+   touched this. Concentration is moderate: top 3 exchanges 25%, top 10 62%,
+   top 20 81%.
+3. **The regime is the same as Head A's, though: a starved member.** Unweighted,
+   by that member's own `mu_true` at that state — <0.5: median relative flux error
+   **0.78** (n=33); 0.5-5: 0.31; 5-20: 0.48; >20: **0.077** (n=491). 86% of the
+   *weighted* error sits at the final integration step, but unweighted the step
+   effect is mild (0.154 -> 0.278): the end of a batch is simply where biomass is
+   largest, so a starved member's error is weighted most exactly where it is worst.
+4. **Part of it is the specific-flux reparametrisation's own floor.** Head B emits
+   `z / mu_max` and `dfba` multiplies `mu` back, floored at `data._MU_FLOOR_FRAC`
+   = 5% of the organism's mean `mu` (roster range 0.46-1.66). Below half that
+   floor the median relative error is **1.61**; at 0.5-5x it is ~0.32; above 5x,
+   0.117. So the floor region is the worst, but the degradation starts well above
+   it — the floor is part of the story, not all of it.
+5. **What this does NOT support: an n=1 titration for Head B.** Head A's worked
+   because `mu` is a scalar min over limiters, so "one metabolite scarce, rest
+   replete" is a complete parametrisation of the failure. Head B's failing states
+   are end-of-batch media with much of the pool drawn down **at once**, which that
+   design cannot construct. The analogue that would work is a *depletion sweep* —
+   one organism walked down a true trajectory direction, `z` scored against the LP
+   at each point — which needs no community and no design.
+
 ### M11: the minimal medium is blocked on essentiality, not on the program — 2026-08-30
 
 `cfs minimal-medium` (`src/cfs/science/minimal.py`) is §13.3: minimise `cost . c`
