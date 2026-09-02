@@ -355,3 +355,31 @@ def test_mid_mu_stratum_puts_many_metabolites_just_above_their_50pc_point():
     # Nothing is driven below its own 50% point: going lower is what made the
     # joint `mu` collapse, and starving is the low-`mu` stratum's job anyway.
     assert r.min() >= 1e-4
+
+
+def test_explicit_media_are_labelled_verbatim_and_leave_the_sidecars_alone(tmp_path):
+    """`--media`: label the states §8.1 visits, which no design produces."""
+    pytest.importorskip("highspy")
+    pytest.importorskip("pyarrow")
+    import pandas as pd
+
+    from cfs.sampling.generate import generate_organism
+
+    model = _toy_two_uptakes()
+    cfg = SamplingConfig(n_media=4, alphas=(1.0,), eps_levels=(1e-3,), eps_primary_idx=0, seed=0)
+    base = generate_organism(model, "toy2", "deadbeef", tmp_path, cfg)
+    sidecar = (tmp_path / "toy2.subspace.json").read_text()
+
+    given = [{"EX_a_e": 0.5, "EX_b_e": 1.5}, {"EX_a_e": 2.5, "EX_b_e": 0.25}]
+    round1 = generate_organism(
+        model, "toy2", "deadbeef", tmp_path, cfg, round_idx=1, media=given
+    )
+
+    assert round1.n_media == 2
+    df = pd.read_parquet(round1.paths[0])
+    ex_order = [ex.id for ex in model.exchanges]
+    got = [dict(zip(ex_order, row, strict=True)) for row in df["medium"]]
+    assert [{k: v for k, v in m.items() if k in given[0]} for m in got] == given
+    # The design chose none of this, so it must not rewrite what the base run recorded.
+    assert (tmp_path / "toy2.subspace.json").read_text() == sidecar
+    assert base.paths[0].exists()

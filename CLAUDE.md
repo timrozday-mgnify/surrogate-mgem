@@ -1799,8 +1799,10 @@ relative-error re-anchoring; each was compensating for that lift.
    Spearman **+0.673** (p=4.6e-5) over the 30 cells already on disk — the only
    proxy of eight to clear that bar before a relabel. The fix is to label the media
    §8.1 actually visits: `make_traj_pool.py` extracts them from any `cfs community`
-   run. **Blocked on code, not on solves — `cfs generate` cannot take an explicit
-   media file.** That is the next thing to write.
+   run. **`cfs generate --media <npz> --round N` now labels them** (the npz is
+   `make_traj_pool.py`'s output: `media`, `exchanges`, `index_hash`; the design,
+   the probe and the sidecars are all skipped, so the base run's bands stand).
+   Unblocked; the solves have not been run.
 2. **The two remaining bad cells are §8.5's class, not §8.6b's.** n=21 draw 200
    (0.318) has `mu_rel_worst_member` = GCA_000151225.1 at **+0.254** with
    `mu_true` = 11.7 — a *mid-`mu`* over-prediction — and `dc_rel` 0.878, so both
@@ -1874,8 +1876,8 @@ in `x` to the member's own training media, `dc_rel`) = **+0.673** (p=4.6e-5), an
 1.33-2.63) and the best sit at 0.11. So the fix is coverage of the media §8.1
 actually visits — `make_traj_pool.py` already extracts those states from any
 `cfs community` run, and unlike the Level 1 trial pool, labelling them costs real
-solves. **That needs `cfs generate` to accept an explicit media file, which it
-cannot today; that is the next piece of code, not another loss term.**
+solves. **`cfs generate --media <npz> --round N` takes that pool directly** — it
+skips the design, the probe and the sidecars and labels exactly those states.
 
 ### M11: the minimal medium is blocked on essentiality, not on the program — 2026-08-30
 

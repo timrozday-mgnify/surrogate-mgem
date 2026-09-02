@@ -100,6 +100,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Top-up round index; >0 writes part.round<n>.parquet alongside the "
         "base shards instead of overwriting them.",
     )
+    gen.add_argument(
+        "--media",
+        type=Path,
+        help="NPZ with `media` (n x |exchanges| concentrations), `exchanges` and "
+        "`index_hash` — label exactly these media instead of sampling a design. "
+        "Use with --round N. This is how the media the §8.1 composition actually "
+        "visits get labelled (`make_traj_pool.py`).",
+    )
     gen.add_argument("--seed", type=int, default=0)
 
     tu = sub.add_parser(
@@ -854,6 +862,18 @@ def main(argv: list[str] | None = None) -> int:
             cfg = replace(cfg, frac_mid_mu=args.mid_mu)
         if args.n_media is not None:
             cfg = replace(cfg, n_media=args.n_media)
+        media = None
+        if args.media is not None:
+            import numpy as np
+
+            from cfs.groundtruth.index import index_hash
+
+            npz = np.load(args.media, allow_pickle=True)
+            got, want = str(npz["index_hash"]), index_hash(args.index)
+            if got != want:  # P13: a silent index change must not fuse two designs
+                raise SystemExit(f"--media index_hash {got} != {want} for {args.index}")
+            ex = [str(e) for e in npz["exchanges"]]
+            media = [dict(zip(ex, (float(v) for v in row), strict=True)) for row in npz["media"]]
         scales = json.loads(args.scales.read_text()) if args.scales else None
         focus = json.loads(args.focus_weights.read_text()) if args.focus_weights else None
         shards = generate_roster(
@@ -864,6 +884,7 @@ def main(argv: list[str] | None = None) -> int:
             scales=scales,
             focus_weights=focus,
             round_idx=args.round_idx,
+            media=media,
         )
         print(
             json.dumps(

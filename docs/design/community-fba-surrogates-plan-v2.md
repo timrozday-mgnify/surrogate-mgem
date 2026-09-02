@@ -1916,8 +1916,8 @@ in `x` to the member's own training media, `dc_rel`) = **+0.673** (p=4.6e-5), an
 1.33-2.63) and the best sit at 0.11. So the fix is coverage of the media §8.1
 actually visits — `make_traj_pool.py` already extracts those states from any
 `cfs community` run, and unlike the Level 1 trial pool, labelling them costs real
-solves. **That needs `cfs generate` to accept an explicit media file, which it
-cannot today; that is the next piece of code, not another loss term.**
+solves. **`cfs generate --media <npz> --round N` takes that pool directly** — it
+skips the design, the probe and the sidecars and labels exactly those states.
 
 #### §8.6 — the under-prediction branch, in priority order
 
