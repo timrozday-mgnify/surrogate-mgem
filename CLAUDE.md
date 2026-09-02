@@ -1816,6 +1816,16 @@ relative-error re-anchoring; each was compensating for that lift.
    0.318 outlier exactly where they were. One community's trajectory does not
    reach another's — see "Round 2 labels the trajectory" below for what that
    costs and what would fix it.
+1b. **Head B's error is now localised, and the obvious fix is refuted.** The
+   depletion sweep (21 monocultures, no community, no new code) puts it at
+   **3300x over-predicted flux magnitude** below 10% of starting growth, caused by
+   the inference-time `mu_floor` — and removing that floor improves `dc_rel` 2.7x
+   while making the trajectory 30x worse. Attribution across two community sets
+   says to rank **metabolites** (Spearman +0.879) and per-genome *difficulty*
+   (+0.719), never a genome's share of the pool error (+0.413). Next is either
+   dropping sub-floor rows at *training* time (rather than flooring them) or
+   re-stating M5 over depletion depth, since only 42 of 780 benchmark
+   member-states reach the failing regime at all.
 2. **The two remaining bad cells are §8.5's class, not §8.6b's.** n=21 draw 200
    (0.318) has `mu_rel_worst_member` = GCA_000151225.1 at **+0.254** with
    `mu_true` = 11.7 — a *mid-`mu`* over-prediction — and `dc_rel` 0.878, so both

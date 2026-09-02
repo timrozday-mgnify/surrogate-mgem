@@ -1248,7 +1248,10 @@ gradients are badly conditioned; a one-shot root-find is not.
 > **Implementation status — M5 built; the 1% gate is met at n=2/3/5 and n=21 as
 > of 2026-09-02 (§8.6c), with n=10 at 2.5% and one cell of 30 at 0.318. The
 > paragraphs below record the state at 2026-08-28, when it was not met; read them
-> as history and §8.6c/§8.6d for where it stands.** `src/cfs/compose/dfba.py`, CLI `cfs community`. Both frozen heads
+> as history and §8.6c/§8.6d/§8.6e for where it stands. §8.6e also shows the gate
+> **under-samples its own failure regime** — 42 of 780 member-states reach the
+> depletion depth where Head B is 3300x wrong — so re-state it over depletion
+> depth as well as over scarcity-matched media.** `src/cfs/compose/dfba.py`, CLI `cfs community`. Both frozen heads
 > into the right-hand side above (`inflow = 0`, batch culture), integrated with
 > explicit Euler and the pool clipped at zero. The ground truth is per-organism
 > FBA — `cfs.groundtruth.solve.solve`, the same call that made the labels — at
@@ -2305,6 +2308,99 @@ as a *proxy* for which regimes occur; Level 1 is the exact version of what that
 proxy approximates, and it wins on held-out cosine, A1 worst organism and the
 composition's worst cell — but it loses at `n=10`, so the evidence does not yet
 justify flipping a default every number on file was measured against.
+
+---
+
+#### §8.6e — the coverage round, the attribution, and the depletion sweep (2026-09-02)
+
+§8.6d ended blocked on code: `cfs generate` could not be told which media to
+label. It can now (`--media <npz> --round N`), and three things followed.
+
+**1. The coverage round ran, and coverage transfers in the bulk only.**
+`label_pool_n15.npz` is 672 forward-pass states from the **16 n=15 communities x 2
+medium draws**, strided 5 — deliberately *not* the 10 benchmark communities, since
+`make_traj_pool.py`'s Level 1 selection pool may reuse them (no label is involved)
+while labelling them would train on the M5 benchmark. 63/63 shards, 158 256 rows,
+100% optimal, one `index_hash`, ~8.5 min/organism. Both heads retrained (P14).
+
+| median log-X, 3 draws x 10 communities | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| frozen l1 + repair, T=1e-4 (§8.6c) | 0.003 | 0.004 | 0.000 | 0.025 | **0.009** | 0.004 | 0.318 |
+| + round 2 | **0.002** | **0.002** | 0.000 | 0.026 | 0.013 | **0.002** | 0.318 |
+
+Paired per draw, **21 of 30 cells improve** and `dc_rel` falls on 21 of 30. The
+mechanism check is the durable part: `nn_proxy.py` measures the distance at **`t=0`
+only** — the one state a design draw already covers — so it barely moves. Measured
+over *every* step (`nn_delta.py`, no solves) the round **halves the typical distance
+and leaves the tail exactly where it was**: median over 30 cells **0.252 -> 0.119**,
+p90 2.108 -> 2.129, max 2.315 -> 2.312. **One community's forward path does not
+reach another's.** Covering the tail needs many more communities in the pool, or a
+benchmark on fresh communities so the visited states can be labelled directly.
+Held-out saw none of it (P24): Head A's worst cosine unchanged to 4 dp, Head B
++0.005 R2, against an overall composition halving.
+
+**2. Attribution: rank metabolites, not genomes.** `attribute_b.py` +
+`attrib_report.py` score Head B at 5 states along the true path of every cell of
+every run given, one FBA per (cell, state, member), aggregating `X_i (z_hat -
+z_true)`. Across two independent community sets — the 10 benchmark communities x 3
+draws (780 member-states) and the 16 n=15 x 2 (2400):
+
+| axis | Spearman between the sets |
+| --- | --- |
+| per-**metabolite** share of squared pool error | **+0.879** (p=3e-144) |
+| per-**genome** median relative flux error | **+0.719** (p=2.4e-4) |
+| per-**genome** share of squared pool error | +0.413 (p=0.06) |
+
+A member's share is its difficulty **times** the biomass it reached in that
+community, so it barely reproduces (`CP001820.1` is 54% of one set and 15% of the
+other). Genome *difficulty* does. Same confound as §8.6b's "n=21 is scarcity, not
+size", one level down. The metabolites are **not Head A's**: `EX_h2o_e`, `EX_h_e`,
+`EX_akg_e`, `EX_succ_e`, `EX_acald_e`, `EX_nh4_e` — by-products and central carbon,
+where Head A is led by `EX_mg2_e`/`EX_cl_e`/`EX_ca2_e`. The two heads fail on
+different metabolites, so a coverage fix aimed at Head A's ions never applied.
+
+**3. The depletion sweep — the Head B analogue of `titrate_n1`.** Head A's n=1
+titration works because `mu` is a scalar min over limiters, so one-scarce-rest-
+replete is a complete parametrisation. Head B's failing states are end-of-batch
+media drawn down **at once**, which that design cannot construct. A **monoculture
+batch is the sweep**: the medium walks down the organism's own consumption
+direction with the true LP defining the path — and it is `cfs community` with 21
+single-member communities, so it needed no new code (`monocultures.txt`,
+`mono.sh`, `monodeep.sh` at 8 doublings, 3 draws each).
+
+| depth (`mu_true` / `mu_true` at t=0) | n | med flux cosine | p05 cosine | med `\|z_hat\|/\|z_true\|` |
+| --- | --- | --- | --- | --- | --- |
+| 0.90-1.0 | 366 | 0.991 | 0.781 | 1.00 |
+| 0.50-0.90 | 135 | 0.903 | 0.519 | 1.01 |
+| 0.10-0.50 | 46 | 0.843 | -0.065 | 1.24 |
+| 0.01-0.10 | 18 | 0.863 | **-0.440** | **3318** |
+
+The cause is arithmetic, in `dfba.Surrogate.mu_and_z`: inference multiplies
+specific flux by `max(mu, mu_floor)`, `mu_floor = _MU_FLOOR_FRAC * mean mu`. At
+those states median `mu_true` is **1.9e-4** against a floor of 0.77 and **89% have
+`mu_hat` below the floor**, so the floor sets the flux. `max(mu_hat, floor)/mu_true`
+= **4172** against `mu_hat/mu_true` = **52** — the floor dominates, Head A's
+residual is the smaller term.
+
+**And removing it is refuted.** One line, same 30 cells: `dc_rel` **2.047 -> 0.747**
+on the worst cell and 0.594 -> 0.428 on another, while their `x_log_err_final` goes
+**0.0041 -> 0.1241** and 0.0676 -> 0.1124; 25 of 30 cells are bit-identical and no
+size median moves. **Third instance of "a strictly better rhs is not a better
+trajectory"** (§8.6d's MM clamp gave two) and the starkest: 2.7x better derivative,
+30x worse endpoint. An over-predicted uptake empties the pool at roughly the right
+*time*; correct it and a starving member keeps the pool alive too long, which
+changes **which metabolite empties first**, and a batch endpoint turns on that.
+Reverted; the floor stays.
+
+**Two things this fixes for future work.** The benchmark **under-samples the
+regime** — only 42 of 780 member-states are below depth 0.1 — so a gate that rarely
+visits the failure cannot reward fixing it; state M5 over scarcity-matched media
+(§8.6b) *and* over depletion depth. And normalise a depleting trajectory by a
+**fixed** scale with dead states dropped: the first pass reported a median relative
+error of **3e31**, the same divide-by-a-dead-culture trap §8.1 already guards
+against. Quote cosine beside it — a fixed denominator flatters the deep end exactly
+as a local one explodes, and the median hides the failure entirely (0.99 -> 0.86)
+where the p05 shows it (0.78 -> -0.44).
 
 ---
 
