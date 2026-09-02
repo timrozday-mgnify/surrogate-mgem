@@ -1532,8 +1532,96 @@ the *value* rather than the gradient.
 **What this means for the composition.** `logX_err = |mu_rel| x growth` and
 `mu_rel = 0.0105 * mu_scale / mu_true`, so every §8.1 number in this file is that
 one offset divided by how starved the member is. The `mu0/mu_scale < 2` threshold
-is where `0.0105/f` crosses ~0.5%. Solutions are not attempted here — this section
-is the characterisation only.
+is where `0.0105/f` crosses ~0.5%.
+
+**The "floor" framing above is superseded by the next section: the tangents that
+would descend are present and exact, and the offset is the softmin's, not the
+label set's.** The characterisation stands; the cause does not.
+
+### The floor IS the smoothing: `--gm-eval-temp` takes n=21 to 0.009 — 2026-09-02
+
+**The n=1 titration is now a harness.** `20hm_bands/n1_bench.py <value_dir>`
+rebuilds the media from `(organism, limiter, dilution)` + the sidecar — **no LP
+solves** — and scores any Head A checkpoint on the same 1288 rows in seconds,
+reporting plateau/ramp signed error, the ramp's **sd**, the local smoothing gap
+`c*T*ln(n_active)` and the softmin support size. Two readings crack it: the ramp sd
+is **0.00000 on 44 of 46 pairs** (one plane active, correct slope, wrong intercept
+— an intercept, not a floor), and the offset tracks **`-T*ln(n_active)`**
+(`n_active` 34 -> 0.0180, 126 -> 0.0054; predicted gap 0.0131 vs 0.0126 observed).
+O2 is the worst limiter *because* `n_active` ~ 3 there.
+
+`n1_decompose.py` splits it. `GCA_000007325.1 / EX_k_e`, `mu_scale` units:
+
+| model | value |
+| --- | --- |
+| hard min over **all 3985** label tangents | **exact to 5 dp at every row**, to `mu` = 5e-6 |
+| the head's hard min over its selected 1000 planes | truth **+0.05330**, constant everywhere |
+| smoothing gap, plateau (`n_active` 34-200) | -0.05313 |
+| smoothing gap, ramp (single plane) | -0.03526 |
+| **net** | plateau **+0.0002**, ramp **+0.0180** |
+
+The `+0.0533` is `repair_intercepts`' **uniform** smoothing lift, sized by the
+**max** local gap over training rows. Per-plane repair is exact (selection error
+1e-5). Wherever fewer planes are active than at that max the lift is uncancelled —
+and a starved medium is the one-plane case. **Selection is not lossy, the labels
+are not insufficient, the frozen head's slopes are fine.**
+
+**`--gm-eval-temp` (new)** ships the head at a colder temperature than it trained
+at: training needs a soft argmax so gradient reaches every plane, inference does
+not. `groupmax.with_temp` before the repair; `gm_temp` in the checkpoint becomes
+the shipped value (`gm_train_temp` records the other) so `train.load` rebuilds what
+was scored. Frozen level-1 head on `p4`, all else identical:
+
+| T | n=1 median ramp | worst | worst cos | med cos | low-`mu` bias | under-rate | A1 med / p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| unrepaired | -0.0041 | 0.037 | 0.9091 | 0.9367 | -0.171 | **1.000** | — |
+| 0.01 (was default) | 0.01074 | 0.0387 | 0.9091 | 0.9352 | +0.0457 | 0.000 | 0.00033 / 0.218 |
+| 0.001 | 0.00103 | 0.0039 | 0.9469 | 0.9767 | +0.0044 | 0.000 | 0.000044 / 0.0223 |
+| **0.0001** | **0.00011** | **0.0004** | **0.9522** | **0.9807** | **+0.0004** | 0.000 | — |
+
+Strictly better on every held-out axis, **no trade** — on a frozen head `T` is pure
+evaluation smoothing. Only cost is curvature -> 0 (P3), which `cfs master-jacobian`
+already showed does not reach §8.4.
+
+3 medium draws x the same 10 communities, uncalibrated throughout:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| frozen l1 + repair, T=0.01 | 0.006 | 0.007 | 0.009 | 0.060 | 0.175 | 0.013 | 0.508 |
+| **T=0.001** | 0.003 | 0.004 | 0.002 | 0.026 | **0.022** | **0.004** | 0.320 |
+| **T=0.0001** | 0.003 | 0.004 | **0.000** | 0.025 | **0.009** | **0.004** | 0.318 |
+| trained `p4` nc | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | 0.007 | 1.698 |
+| `r1` | 0.006 | 0.016 | 0.028 | 0.027 | 0.027 | 0.014 | 0.739 |
+
+1. **Sizes 2/3/5 and n=21 are under M5's 1% gate**; n=10 is 2.5%. Paired at n=21:
+   draw 0 **0.175 -> 0.009**, draw 100 **0.023 -> 0.0008**, draw 200 **0.343 ->
+   0.318, unmoved**. A 100x smaller offset bought 19-29x on the two draws whose
+   members were starved — the n=15 identity confirmed quantitatively.
+2. **Draw 200 is a different failure.** `mu_rel_worst_member` is
+   GCA_000151225.1 at **+0.254** with `mu_true` = 11.7 — a *mid-`mu`*
+   over-prediction, §8.5's class, not this one. Run E1 before choosing a fix.
+3. **`--gm-repair` now forces the identity calibration.** The two corrections
+   fight: the repair guarantees `mu_hat >= mu` on the training rows and
+   `calibrate` is a downward least-squares fit on those same rows, so it pulls the
+   head straight back under them — end to end, `value_under_rate_low_mu` **0.000 ->
+   0.977** on an otherwise-exact head. Third instance of "the calibration is
+   design-dependent", now with a structural reason rather than a measurement.
+4. **The whole low-`mu` branch is retired.** `--w-rel`, `--w-under`, `--w-tau`,
+   the mid-`mu` stratum B2, the output calibration and re-anchoring on relative
+   error were all compensating for this one arithmetic error — the **eighth
+   refuted proxy**, and the cheapest to have avoided.
+5. **What is left is slope drift, and it is now a number.** The same treatment on
+   a *trained* head (`value_p4_nc`, repair at T=1e-4) fixes the median but floors
+   at low-`mu` bias **+0.023 against the frozen head's +0.0004**, n=1 worst ramp
+   **0.027 vs 0.0004**. With the smoothing gone that residual is slope drift alone,
+   per (organism, limiter), in seconds. That is where the proximal/bundle arm
+   belongs.
+
+Reproduce: `cfs train-value --epochs 0 --gm-init labels --gm-select level1
+--gm-trial-media holdout_community/community_holdout.npz --gm-group 1000
+--gm-temp 0.01 --gm-eval-temp 0.0001 --gm-repair --width 1 --depth 1`. Scripts:
+`n1_bench.py`, `n1_decompose.py`, `repair_at.py`, `holdout_score.py` (§7.3
+diagnostics for an existing checkpoint, no retrain), `lowT.sh`.
 
 ### The trial pool is saturated, and 6 cuts per organism are enough — 2026-09-01/02
 

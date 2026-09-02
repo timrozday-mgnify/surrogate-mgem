@@ -768,3 +768,33 @@ def test_prox_holds_slopes_near_the_seeded_tangents():
     # It must not silently apply to an unseeded head, where there is no centre.
     h = train_value_heads(ds, w_prox=1e4, **{**kw, "gm_init": None})
     assert jnp.isfinite(groupmax.batched_value(h, jnp.asarray(ds.x_val))).all()
+
+
+def test_repair_slack_is_proportional_to_the_evaluation_temperature():
+    """The post-repair over-prediction IS the smoothing, so it scales with ``T``.
+
+    ``repair_intercepts`` cancels the softmin's downward gap with ONE uniform
+    lift, sized by the largest gap over the training rows. The gap is
+    ``c*T*ln(n_active)``, so on a row where fewer planes are active the lift is
+    uncancelled and the head reads high by a constant -- which is the low-``mu``
+    floor measured on the n=1 titration (0.0107 / 0.0011 / 0.0001 ``mu_scale``
+    units at T = 1e-2 / 1e-3 / 1e-4). Colder evaluation must therefore be
+    strictly tighter while staying valid.
+    """
+    from cfs.surrogate import groupmax
+
+    ds = _min_affine_dataset(K=5, n=600, M=4)
+    M = ds.x_train.shape[-1]
+    mu = ds.mu_train[0] / ds.mu_scale[0]
+
+    def slack(temp):
+        heads = groupmax.stack_heads(
+            jax.random.PRNGKey(0), 1, M, ds.mask, width=1, depth=1, group=64, temp=temp
+        )
+        fixed = groupmax.repair_intercepts(groupmax.init_from_tangents(heads, ds), ds)
+        r = np.asarray(groupmax.batched_value(fixed, jnp.asarray(ds.x_train)))[0] - mu
+        assert r.min() > -1e-3, (temp, r.min())  # still a valid outer approximation
+        return float(np.median(r))
+
+    hot, cold = slack(1e-2), slack(1e-4)
+    assert cold < hot / 5.0, (hot, cold)

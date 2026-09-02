@@ -197,6 +197,21 @@ def build_parser() -> argparse.ArgumentParser:
         "family. Exact only at --width 1 --depth 1; closed form, no refit.",
     )
     tv.add_argument(
+        "--gm-eval-temp",
+        type=float,
+        default=None,
+        help="Ship the head at this temperature instead of --gm-temp: the soft "
+        "argmax is needed to train (gradient must reach every plane) and not to "
+        "predict. The smoothing sits c*T*ln(n_active) below the hard min, and "
+        "--gm-repair cancels it with one uniform lift sized by the *max* over "
+        "training rows -- so at a starved medium, where a single plane is active, "
+        "the lift is uncancelled and the head reads high by a constant. That "
+        "constant is the low-`mu` floor, and it is proportional to T: on the n=1 "
+        "titration 0.0107 -> 0.0011 -> 0.0001 over T 1e-2/1e-3/1e-4, with worst "
+        "held-out grad cosine 0.909 -> 0.952 and §8.1's n=21 log-X 0.175 -> 0.009. "
+        "Use with --gm-repair; costs curvature (P3), which does not reach §8.4.",
+    )
+    tv.add_argument(
         "--gm-trial-media",
         type=Path,
         default=None,
@@ -566,6 +581,7 @@ def main(argv: list[str] | None = None) -> int:
             gm_reanchor=args.gm_reanchor,
             gm_select=args.gm_select,
             gm_repair=args.gm_repair,
+            gm_eval_temp=args.gm_eval_temp,
             gm_trial_media=args.gm_trial_media,
             gm_temp_final=args.gm_temp_final,
             k_code=args.k_code,

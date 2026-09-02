@@ -829,6 +829,7 @@ def run(
     gm_trial_media=None,
     gm_temp_final: float | None = None,
     gm_repair: bool = False,
+    gm_eval_temp: float | None = None,
     seed: int = 0,
     organisms: list[str] | None = None,
 ) -> dict:
@@ -863,6 +864,20 @@ def run(
         gm_temp_final=gm_temp_final,
         seed=seed,
     )
+    # Training needs a soft argmax for gradient to reach every plane; *inference*
+    # does not, and the smoothing is what the low-`mu` floor is made of. The gap
+    # is `c*T*ln(n_active)`, and `repair_intercepts` compensates it with one
+    # uniform lift = the **max** over training rows, so anywhere fewer planes are
+    # active than at that maximum -- which is exactly a starved medium, where one
+    # plane is active -- the lift is uncancelled and the head reads high by a
+    # constant. Measured on the n=1 titration: the residual is proportional to `T`,
+    # 0.0107 -> 0.0011 -> 0.0001 `mu_scale` units over T 1e-2/1e-3/1e-4, and every
+    # held-out axis improves with it (worst grad cosine 0.909 -> 0.952, low-`mu`
+    # bias +0.046 -> +0.0004, under-rate still 0). Dropping the temperature for
+    # inference costs curvature (P3), which `cfs master-jacobian` already showed
+    # does not reach §8.4 -- the supply term sets the conditioning, not the head.
+    if gm_eval_temp is not None:
+        heads = groupmax.with_temp(heads, gm_eval_temp)
     # Before the calibration is fit, so the fit sees the head it will ship with.
     if gm_repair:
         heads = groupmax.repair_intercepts(heads, ds)
@@ -871,11 +886,21 @@ def run(
     # so it must never be able to discard a finished training run -- which it did
     # once, losing 813 s to an import error inside `calibrate.fit`. On the cluster
     # that would be hours.
-    try:
-        cal = calibrate.fit(np.asarray(mu_tr), ds.mu_train / ds.mu_scale[:, None])
-    except Exception:
-        LOGGER.exception("calibration fit failed — shipping the identity instead")
+    if gm_repair:
+        # The two corrections fight. `repair_intercepts` guarantees `mu_hat >= mu`
+        # on the training rows; `calibrate` is a least-squares fit on those same
+        # rows and its map is downward, so it pulls the head straight back under
+        # them -- measured end to end: `value_under_rate_low_mu` 0.000 -> 0.977 on
+        # an otherwise-exact repaired head. A repaired head is already unbiased
+        # (n=1 titration residual 1e-4 `mu_scale` units), so there is nothing left
+        # for a 1-D output map to buy, and it can only break the invariant.
         cal = _identity_cal(len(ds.genome_ids))
+    else:
+        try:
+            cal = calibrate.fit(np.asarray(mu_tr), ds.mu_train / ds.mu_scale[:, None])
+        except Exception:
+            LOGGER.exception("calibration fit failed — shipping the identity instead")
+            cal = _identity_cal(len(ds.genome_ids))
     diagnostics = evaluate(heads, ds, seed=seed, arch=arch, cal=cal)
     meta = {
         "arch": arch,
@@ -893,7 +918,13 @@ def run(
     }
     if arch == "groupmax-u":
         meta["gm_group"] = gm_group or groupmax.DEFAULT_GROUP
-        meta["gm_temp"] = groupmax.DEFAULT_TEMP if gm_temp is None else gm_temp
+        # The shipped temperature, so `load` reconstructs the head that was scored.
+        meta["gm_temp"] = (
+            gm_eval_temp
+            if gm_eval_temp is not None
+            else (groupmax.DEFAULT_TEMP if gm_temp is None else gm_temp)
+        )
+        meta["gm_train_temp"] = groupmax.DEFAULT_TEMP if gm_temp is None else gm_temp
         meta["gm_init"] = gm_init or "random"
         meta["gm_reanchor"] = gm_reanchor
         meta["gm_select"] = gm_select

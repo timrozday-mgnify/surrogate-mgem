@@ -1723,6 +1723,114 @@ boundary is where that crosses ~0.5%. `mu0/mu_scale` needs no LP, so it is a
 **runtime** predictor of a 100x error and belongs in `cfs community` / `simulate`
 output. Solutions are deliberately not proposed here.
 
+#### §8.6c — the floor IS the smoothing, and `--gm-eval-temp` removes it (2026-09-02)
+
+§8.6b characterised the offset and deliberately proposed nothing. It has a cause,
+it is arithmetic, and it is a one-flag fix.
+
+**The n=1 titration is now a harness, not a measurement.** The media are a
+deterministic function of `(organism, limiter, dilution)` and the sidecar, so
+`20hm_bands/n1_bench.py <value_dir>` rebuilds them with **no LP solves** and scores
+any Head A checkpoint on the same 1288 rows in seconds. It reports the signed error
+on the plateau and on the ramp, the ramp's **sd**, the local smoothing gap
+`c*T*ln(n_active)` and the softmin support size `n_active`. Two readings crack it:
+
+- **the ramp sd is 0.00000 on 44 of 46 pairs** — the offset is constant to five
+  decimals over five decades of `mu`. One plane active, *correct slope*, wrong
+  intercept. Not a floor, an intercept;
+- **the offset tracks `-T*ln(n_active)`**: `n_active` 34 -> offset 0.0180,
+  `n_active` 126 -> 0.0054, predicted difference 0.0131 against 0.0126 observed.
+  O2 is the worst limiter (§8.6b) precisely because `n_active` ~ 3 there.
+
+**`n1_decompose.py` splits it three ways.** `GCA_000007325.1 / EX_k_e`, all 28
+dilutions, `mu_scale` units:
+
+| model | value |
+| --- | --- |
+| hard min over **all 3985** label tangents | **exact to 5 dp at every row**, down to `mu` = 5e-6 |
+| the head's own hard min over its selected 1000 planes | truth **+0.05330**, constant everywhere |
+| smoothing gap, plateau (`n_active` 34-200) | -0.05313 |
+| smoothing gap, ramp (single plane active) | -0.03526 |
+| **net** | plateau **+0.0002**, ramp **+0.0180** |
+
+The `+0.0533` *is* `repair_intercepts`' uniform smoothing lift. Per-plane repair is
+exact (selection error 1e-5); the lift is then sized by the **max** local gap over
+the training rows and applied uniformly, so wherever fewer planes are active than
+at that maximum the lift is uncancelled — and a starved medium is the case with
+*one* plane active, i.e. the smallest gap and the largest residual. **Selection is
+not lossy, the labels are not insufficient, the slopes of the frozen head are
+fine.** Cf. §8.5's E1: the all-tangent model being exact here is E1's "trained-head
+deficit" verdict localised to a single scalar.
+
+**`--gm-eval-temp` (new).** Training needs a soft argmax so gradient reaches every
+plane; *inference* does not. The flag ships the head at a colder temperature —
+`groupmax.with_temp` before the repair, and `gm_temp` in the checkpoint becomes the
+shipped value so `train.load` reconstructs what was scored (`gm_train_temp` records
+the other). Frozen level-1 head on `p4`, identical in every other respect:
+
+| T | n=1 median ramp | worst | worst cos | med cos | low-`mu` bias | under-rate | A1 med / p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| unrepaired | -0.0041 | 0.037 | 0.9091 | 0.9367 | -0.171 | **1.000** | — |
+| 0.01 (was default) | 0.01074 | 0.0387 | 0.9091 | 0.9352 | +0.0457 | 0.000 | 0.00033 / 0.218 |
+| 0.001 | 0.00103 | 0.0039 | 0.9469 | 0.9767 | +0.0044 | 0.000 | 0.000044 / 0.0223 |
+| **0.0001** | **0.00011** | **0.0004** | **0.9522** | **0.9807** | **+0.0004** | 0.000 | — |
+
+**Strictly better on every held-out axis, with no trade** — because on a frozen head
+`T` is pure evaluation smoothing with no optimiser interacting with it. The floor
+falls 100x. The only cost is curvature -> 0 (P3), and `cfs master-jacobian` already
+showed `T` does not reach §8.4: 0.01 -> 0.3 moved the curvature rank 22 -> 13 while
+the supply term sets the conditioning.
+
+**§8.1, 3 medium draws x the same 10 communities, uncalibrated throughout:**
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| frozen l1 + repair, T=0.01 | 0.006 | 0.007 | 0.009 | 0.060 | 0.175 | 0.013 | 0.508 |
+| **T=0.001** | 0.003 | 0.004 | 0.002 | 0.026 | **0.022** | **0.004** | 0.320 |
+| **T=0.0001** | 0.003 | 0.004 | **0.000** | 0.025 | **0.009** | **0.004** | 0.318 |
+| trained `p4` nc (reference) | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | 0.007 | 1.698 |
+| `r1` (reference) | 0.006 | 0.016 | 0.028 | 0.027 | 0.027 | 0.014 | 0.739 |
+
+Paired at n=21: draw 0 **0.175 -> 0.009**, draw 100 **0.023 -> 0.0008**, draw 200
+**0.343 -> 0.318, unmoved**. **Sizes 2/3/5 and n=21 are under M5's 1% gate**; n=10
+is 2.5%. §8.6b's identity is confirmed quantitatively: a 100x smaller offset gave a
+19-29x smaller trajectory error on the two draws whose members were starved.
+
+**Draw 200 is a different failure and the floor fix could not have touched it.**
+`mu_rel_worst_member` is GCA_000151225.1 at **+0.254** with `mu_true` = 11.7 — a
+*mid-`mu`* over-prediction, i.e. §8.5's class (a max-affine head loose where no
+tangent is near), not §8.6b's. `dc_rel_median` is 0.878 there too. Run E1 on it
+before choosing anything.
+
+**`--gm-repair` now forces the identity calibration, and this cost a cycle.** The
+two post-hoc corrections fight: the repair guarantees `mu_hat >= mu` on the
+training rows, and `calibrate` is a least-squares fit on those same rows whose map
+is downward, so it pulls the head straight back under them. End to end on an
+otherwise-exact repaired head, `value_under_rate_low_mu` went **0.000 -> 0.977**.
+A repaired head is already unbiased (n=1 residual 1e-4), so there is nothing for a
+1-D output map to buy. This is a third instance of "the calibration is
+design-dependent" — now with a structural reason to switch it off rather than a
+measurement.
+
+**What this retracts.** §8.6b's "solutions are deliberately not proposed" stands,
+but its framing — a floor set by the absence of tangents near `mu = 0` — is wrong:
+the tangents are there and are exact. And the whole low-`mu` branch is retired.
+`--w-rel`, `--w-under`, `--w-tau`, the mid-`mu` stratum B2, the output calibration
+and re-anchoring on relative error were all compensating for this one arithmetic
+error; that is the **eighth refuted proxy**, and the cheapest to have avoided.
+
+**What is left, measured.** The same treatment on a *trained* head
+(`value_p4_nc`, repair at T=1e-4) fixes the median but floors at low-`mu` bias
+**+0.023 against the frozen head's +0.0004**, n=1 worst ramp **0.027 vs 0.0004**.
+With the smoothing removed that residual is **slope drift alone**, quantified for
+the first time and per (organism, limiter) in seconds. That is where the
+proximal/bundle interpolation belongs — "label tangents win the tail, gradient
+training wins the bulk" now has a target, not a community cell.
+
+Reproduce: `cfs train-value --epochs 0 --gm-init labels --gm-select level1
+--gm-trial-media holdout_community/community_holdout.npz --gm-group 1000
+--gm-temp 0.01 --gm-eval-temp 0.0001 --gm-repair --width 1 --depth 1`.
+
 #### §8.6 — the under-prediction branch, in priority order
 
 An under-prediction is not an accuracy shortfall; it is a **certificate that the
