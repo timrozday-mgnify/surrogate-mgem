@@ -1405,9 +1405,9 @@ separate "large community" from "this medium". 16 distinct **15-member** subsets
 (`communities15.txt`, each organism in 7-15 of them) do separate it, and the
 answer is unambiguous.
 
-**1. The composition metric reduces exactly to Head A.** Over 240 (community,
-member) points, `logX_err = |mu_rel| x that member's true growth` at correlation
-**0.9907**, median residual **0.0000**. The integrator, Head B and the pool sum
+**1. The composition metric reduces exactly to Head A.** Over **480** (community,
+member) points — 16 subsets x 2 medium draws — `logX_err = |mu_rel| x that
+member's true growth` at correlation **0.9935**, median residual **0.0000**. The integrator, Head B and the pool sum
 add nothing: `d(log X)/dt = mu`, and the error is the relative `mu` error
 amplified by how much that member grows. Every §8.1 number in this file is a Head
 A number wearing a trajectory.
@@ -1418,10 +1418,12 @@ far down its own ramp the drawn medium puts it. It is a **step, not a trend**
 
 | member's `mu0 / mu_scale` | n | median &#124;mu_rel&#124; | median logX err |
 | --- | --- | --- | --- |
-| < 2 | 42 | **0.034** | 0.06-0.08 |
-| 2-4 | 198 | **0.0003** | 0.0007 |
+| < 1 | 62 | **0.0718** | 0.065 |
+| 1-2 | 23 | **0.0411** | 0.079 |
+| 2-4 | 395 | **0.0004** | 0.0010 |
 
-**100x**, across a sharp boundary.
+**~100-180x**, across a sharp boundary. Over both draws, 25 of the 32 n=15
+communities are below 0.05 and the median is **0.0175**.
 
 **3. So the n=21 cell is a medium draw, and 2 of its 3 were scarce.** Same head,
 same community, the three draws this file has always averaged:
