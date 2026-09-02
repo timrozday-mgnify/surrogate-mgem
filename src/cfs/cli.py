@@ -325,6 +325,20 @@ def build_parser() -> argparse.ArgumentParser:
         "with individual predictions 13x outside it, so the net is spending "
         "capacity on outputs the LP cannot produce. Default 0 (off).",
     )
+    tb.add_argument(
+        "--basis-var",
+        type=float,
+        default=0.0,
+        help="B1 (§8.6f): emit coordinates in the label flux subspace instead of "
+        "one free flux per exchange. The head's output layer becomes the rank of "
+        "the training specific-flux matrix at this explained-variance cutoff -- "
+        "12-39 of 138-259 exchanges at the default, a basis that reconstructs "
+        "held-out truth to 0.1-0.5%% where the trained head manages 9-26%%. Every "
+        "conservation relation is a zero-variance direction it discards for free. "
+        "**Measured and refuted**: the composition is unchanged at every size and "
+        "held-out worst R2 falls 0.935 -> 0.920, so the default is 0 (off, the "
+        "full-width head). 0.9999 is the cutoff that gives rank 12-39.",
+    )
 
 
     cm = sub.add_parser(
@@ -629,6 +643,7 @@ def main(argv: list[str] | None = None) -> int:
                     batch=args.batch,
                     lr=args.lr,
                     w_mm=args.w_mm,
+                    basis_var=args.basis_var,
                     seed=args.seed,
                     organisms=organisms,
                 )["summary"],

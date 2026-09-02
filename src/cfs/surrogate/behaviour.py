@@ -64,17 +64,21 @@ class BehaviourHead(eqx.Module):
     w: list[Array]
     b: list[Array]
     mask: Array
+    basis: Array | None
 
-    def __init__(self, key, n_in: int, mask, width: int = 256, depth: int = 3):
+    def __init__(self, key, n_in: int, mask, width: int = 256, depth: int = 3, basis=None):
         keys = jax.random.split(key, depth + 1)
-        # +1 input for alpha; the output is the full shared index, masked.
-        sizes = [n_in + 1] + [width] * depth + [n_in]
+        # +1 input for alpha; the output is the full shared index, masked -- or,
+        # with a basis, its `r` coordinates in the label flux subspace (§8.6f).
+        n_out = n_in if basis is None else basis.shape[0]
+        sizes = [n_in + 1] + [width] * depth + [n_out]
         self.w = [
             jax.random.normal(k, (o, i)) * jnp.sqrt(2.0 / i)
             for k, i, o in zip(keys, sizes[:-1], sizes[1:], strict=True)
         ]
         self.b = [jnp.zeros(o) for o in sizes[1:]]
         self.mask = jnp.asarray(mask, dtype=bool)
+        self.basis = None if basis is None else jnp.asarray(basis, dtype=jnp.float32)
 
     def __call__(self, x: Array, alpha: Array) -> Array:
         """Returns ``z / (mu_max * z_scale)`` -- **specific** flux, not mmol/gDW/h.
@@ -92,13 +96,21 @@ class BehaviourHead(eqx.Module):
         h = jnp.concatenate([x * self.mask, jnp.atleast_1d(alpha)])
         for w, b in zip(self.w[:-1], self.b[:-1], strict=True):
             h = jax.nn.softplus(w @ h + b)
-        return (self.w[-1] @ h + self.b[-1]) * self.mask
+        out = self.w[-1] @ h + self.b[-1]
+        return (out if self.basis is None else out @ self.basis) * self.mask
 
 
-def stack_heads(key, n_organisms: int, n_in: int, mask, width: int = 256, depth: int = 3):
+def stack_heads(
+    key, n_organisms: int, n_in: int, mask, width: int = 256, depth: int = 3, basis=None
+):
     keys = jax.random.split(key, n_organisms)
-    make = eqx.filter_vmap(lambda k, m: BehaviourHead(k, n_in, m, width, depth), in_axes=(0, 0))
-    return make(keys, jnp.asarray(mask, dtype=bool))
+    if basis is None:
+        make = eqx.filter_vmap(lambda k, m: BehaviourHead(k, n_in, m, width, depth), in_axes=(0, 0))
+        return make(keys, jnp.asarray(mask, dtype=bool))
+    make = eqx.filter_vmap(
+        lambda k, m, v: BehaviourHead(k, n_in, m, width, depth, v), in_axes=(0, 0, 0)
+    )
+    return make(keys, jnp.asarray(mask, dtype=bool), jnp.asarray(basis, dtype=jnp.float32))
 
 
 @eqx.filter_vmap(in_axes=(0, 0, 0))
@@ -119,6 +131,65 @@ def flux(heads, x: Array, alpha: Array, z_scale: Array, mu: Array | None = None)
 def organism(heads: BehaviourHead, i: int) -> BehaviourHead:
     """Slice organism ``i`` out of the stack (all leaves carry the organism axis)."""
     return jax.tree.map(lambda a: a[i] if eqx.is_array(a) else a, heads)
+
+
+def flux_basis(ds: BehaviourDataset, var: float = 0.9999) -> np.ndarray:
+    """Per-organism basis of the label flux set, in the head's own output units.
+
+    §8.6f: the LP's optimum is a vertex, so ``c -> z`` is piecewise affine over
+    critical regions and every feasible flux is a conical combination of the flux
+    cone's generators. Measured on these labels, the training specific-flux matrix
+    has effective rank **3-12 at 99%** and **12-39 at 99.99%** of variance out of
+    138-259 exchanges, and that basis reconstructs *held-out* truth to a median
+    relative error of 0.001-0.005 -- 30-100x below the trained head's own 0.09-0.26.
+    So a head emitting ~200 free fluxes is spending its output layer on directions
+    the LP cannot produce, and its off-manifold component grows 2.5x at the dFBA
+    states §8.1 actually visits.
+
+    Every *conservation* relation (elemental balance, a conserved moiety) is by
+    construction a direction of zero variance here, so this collects all of them
+    without reading a single metabolite formula.
+
+    **Measured and refuted as an M5 lever; default off** (``--basis-var 0``). Rank
+    12-39 at the default cutoff, held-out worst R2 0.9354 -> 0.9199, and the
+    composition is identical to three decimals at every community size over 3
+    medium draws x 10 communities (overall 0.002, max 0.318 in both arms). It
+    trades as the restriction predicts and the trade nets to nothing: on the 15
+    easy cells ``dc_rel`` 0.079 -> 0.147 (worse on 13), on the 10 hard ones
+    0.920 -> 0.840 (better on 5). Kept because the negative result is worth being
+    able to re-derive, and because the basis itself is a useful object -- it
+    reconstructs held-out truth to 0.001-0.005. See design spec §8.6f.
+
+    **The SVD is taken on the raw specific flux, not on the head's ``z_scale``d
+    coordinate.** ``z_scale`` divides each metabolite by its own std, which
+    equalises the ions with the gases and inflates the rank straight back: 59-101
+    against 12-39 on the same labels. The compression is a property of the flux
+    space the *composition* consumes -- ``dc = sum_i X_i z_i`` is in mmol/gDW/h --
+    so the basis is built there and mapped into the head's units afterwards.
+
+    Rows are then scaled by the training coefficients' own std, so the head emits
+    O(1) numbers -- the same reason ``z_scale`` exists, one coordinate change
+    later. Organisms are padded to the roster's largest rank so the stack vmaps;
+    the padding rows are real singular directions, merely unnecessary ones.
+    """
+    ranks, vts = [], []
+    for i in range(len(ds.genome_ids)):
+        zs = ds.z_train[i] / ds.mu_train[i][:, None] * ds.mask[i]
+        _, sv, vt = np.linalg.svd(zs, full_matrices=False)
+        e = sv**2
+        ranks.append(int(np.searchsorted(np.cumsum(e) / max(e.sum(), 1e-30), var) + 1))
+        vts.append(vt)
+    r = max(ranks)
+    out = np.zeros((len(ds.genome_ids), r, ds.mask.shape[1]), dtype=np.float32)
+    for i, vt in enumerate(vts):
+        # Into the head's output coordinate: it emits z / (mu * z_scale). The rows
+        # stop being orthonormal, which does not matter -- only the span does.
+        v = vt[:r] / ds.z_scale[i]
+        zn = ds.z_train[i] / ds.mu_train[i][:, None] / ds.z_scale[i] * ds.mask[i]
+        coeff = zn @ np.linalg.pinv(v)
+        out[i] = v * np.maximum(coeff.std(axis=0), 1e-12)[:, None]
+    LOGGER.info("Head B basis: rank %d (per organism %s at var=%.4g)", r, ranks, var)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -176,6 +247,7 @@ def train_behaviour_heads(
     batch: int = 512,
     lr: float = 3e-3,
     w_mm: float = 0.0,
+    basis_var: float = 0.0,
     seed: int = 0,
 ) -> eqx.Module:
     x = jnp.asarray(ds.x_train)
@@ -184,8 +256,9 @@ def train_behaviour_heads(
     # Per batch, not precomputed: the full (G, N, M) bound is ~1.2 GB in float32.
     mu_fl = jnp.asarray(ds.mu_train)  # already floored by `data`
     x_scale, z_scale = jnp.asarray(ds.x_scale), jnp.asarray(ds.z_scale)
+    basis = flux_basis(ds, basis_var) if basis_var > 0 else None
     heads = stack_heads(
-        jax.random.PRNGKey(seed), len(ds.genome_ids), x.shape[-1], ds.mask, width, depth
+        jax.random.PRNGKey(seed), len(ds.genome_ids), x.shape[-1], ds.mask, width, depth, basis
     )
     n = x.shape[1]
     steps = max(1, n // batch)
@@ -319,6 +392,7 @@ def load(outdir: Path) -> tuple[eqx.Module, dict]:
     outdir = Path(outdir)
     meta = json.loads((outdir / "behaviour_heads.json").read_text())
     arch = meta.get("arch", {})
+    rank = arch.get("basis_rank")
     like = stack_heads(
         jax.random.PRNGKey(0),
         len(meta["genome_ids"]),
@@ -326,6 +400,10 @@ def load(outdir: Path) -> tuple[eqx.Module, dict]:
         np.array(meta["mask"], dtype=bool),
         arch.get("width", 256),
         arch.get("depth", 3),
+        # Shape only -- `tree_deserialise_leaves` overwrites it, as it does `mask`.
+        None
+        if not rank
+        else np.zeros((len(meta["genome_ids"]), rank, len(meta["exchanges"])), dtype=np.float32),
     )
     return eqx.tree_deserialise_leaves(outdir / "behaviour_heads.eqx", like), meta
 
@@ -342,12 +420,21 @@ def run(
     batch: int = 512,
     lr: float = 3e-3,
     w_mm: float = 0.0,
+    basis_var: float = 0.0,
     seed: int = 0,
     organisms: list[str] | None = None,
 ) -> dict:
     ds = load_behaviour_dataset(labels_dir, index_path, eps=eps, seed=seed, organisms=organisms)
     heads = train_behaviour_heads(
-        ds, width=width, depth=depth, epochs=epochs, batch=batch, lr=lr, w_mm=w_mm, seed=seed
+        ds,
+        width=width,
+        depth=depth,
+        epochs=epochs,
+        batch=batch,
+        lr=lr,
+        w_mm=w_mm,
+        basis_var=basis_var,
+        seed=seed,
     )
     diagnostics = evaluate(heads, ds)
     save(
@@ -360,6 +447,8 @@ def run(
             "epochs": epochs,
             "lr": lr,
             "w_mm": w_mm,
+            "basis_var": basis_var,
+            "basis_rank": None if heads.basis is None else int(heads.basis.shape[1]),
             "eps": eps,
             "seed": seed,
         },

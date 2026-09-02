@@ -2470,6 +2470,73 @@ manifold at all, and its output layer is 10x smaller.
 **Refuted today, on file so nobody re-runs them:** the complementarity gate (1
 above) and the post-hoc subspace projection (2 above).
 
+##### B1 as built — `cfs train-behaviour --basis-var`
+
+`behaviour.flux_basis` takes the SVD of each organism's training specific flux,
+keeps the leading directions to an explained-variance cutoff (`--basis-var`,
+default 0.9999, `0` restoring the old full-width head), and the head's output
+layer emits those coordinates instead of one free flux per exchange. The basis is
+a non-trainable leaf of the module, so it serialises and round-trips with `mask`;
+`arch.basis_rank` is what `load` rebuilds the skeleton at. Everything downstream
+is untouched — the loss, the `--w-mm` hinge, `evaluate`, and `compose.dfba`'s MM
+clamp all still see a full-width `z`.
+
+**The coordinate the SVD is taken in is load-bearing, and the obvious choice is
+the wrong one.** Building the basis in the head's own `z_scale`d units — which is
+where the loss lives, so it looks like the natural place — gives rank **59-101**
+instead of **12-39** on the same labels at the same cutoff. `z_scale` divides each
+metabolite by its own std, which promotes every ion to the same footing as the gas
+exchanges and puts the discarded directions back. The compression is a property of
+the space the *composition* consumes (`dc = sum_i X_i z_i`, in mmol/gDW/h), so the
+basis is built there and mapped into the head's units afterwards, at the cost of
+the rows no longer being orthonormal — which nothing depends on, only the span.
+Same family of error as measuring a gradient cosine in the network's own input
+coordinate (§7.2): a rank is not invariant to a rescaling of the axes.
+
+##### B1 is measured, and it is null — default off (2026-09-02)
+
+`behaviour_p4r2_basis`: rank 12-39 (max 39), 600 epochs, lr 1e-3, seed 0,
+otherwise identical to `behaviour_p4r2`; Head A untouched (`value_p4r2`), so this
+is a clean A/B on the same labels, the same 10 communities and the same 3 medium
+draws.
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `behaviour_p4r2` (control) | 0.002 | 0.002 | 0.000 | 0.026 | 0.013 | **0.002** | 0.318 |
+| **+ B1 basis** | 0.002 | 0.002 | 0.000 | 0.028 | 0.012 | **0.002** | 0.318 |
+
+Held out: worst R2 **0.9354 -> 0.9199**, median 0.9638 -> 0.9564, worst flux
+cosine 0.9826 -> 0.9793.
+
+1. **Null on the trajectory** — identical to three decimals at every size, 11 of
+   30 cells better, `max` unchanged. Not a regression either.
+2. **It trades exactly as the restriction predicts, and the trade nets to
+   nothing.** Paired by cell, on `dc_rel`: the 15 easy cells go **0.079 -> 0.147**
+   (worse on 13 of 15) and the 10 hard ones **0.920 -> 0.840** (better on 5 of
+   10). Discarding 0.01% of the flux variance costs bulk accuracy everywhere and
+   buys a coin flip off-distribution.
+3. **Fourth instance of "a strictly better rhs is not a better trajectory."** The
+   0.318 cell's `dc_cosine` improves 0.9559 -> **0.9745** and its `x_log_err_final`
+   moves by 0.0001.
+4. **Why it could not have been the lever, in hindsight**: §8.6f already measured
+   the off-manifold component at **0.9-8.7%** of the norm at trajectory states.
+   Removing it exactly can at most buy that, against a 12-26% error. The
+   post-hoc-projection refutation was the same number and should have been read as
+   an upper bound on B1's ceiling, not merely as "the projection is not the fix".
+   **A structural constraint is worth at most the violation it removes — measure
+   the violation first.**
+
+Kept in the code, default **0** (off), the discipline `--w-prox`, `--w-mm` and
+`--gm-temp-final` are kept under. The basis object itself is still worth having:
+it reconstructs held-out truth to 0.001-0.005 and is the cheapest available
+statement of what Head B's target actually is.
+
+**What this leaves for Head B**: B2 (weight the loss by what `dc` feels -- the
+error is 48-69% on secretion, and the composition consumes `sum_i X_i z_i`, not a
+per-metabolite MSE), B3 (drop sub-floor rows at training) and B4 (re-state M5 over
+depletion depth). B5 is now firmly subsumed -- conservation relations are inside
+the subspace B1 restricted to, and restricting to it changed nothing.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)

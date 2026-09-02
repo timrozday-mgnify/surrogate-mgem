@@ -43,3 +43,27 @@ def test_mm_hinge_is_silent_on_compliant_rows_and_pays_on_violations():
     assert big > small > plain
     worse = float(B._loss(heads, x, a, zn, jnp.asarray(np.full_like(z, z.max() + 2.0)), 1.0))
     assert worse > small
+
+
+def test_basis_head_output_stays_in_the_span_of_its_basis():
+    """B1 (§8.6f): the head emits coordinates, so it *cannot* leave the flux subspace.
+
+    That is the whole point of the reparametrisation -- the label flux set is rank
+    12-39 of 138-259 exchanges, and an unconstrained head's off-manifold component
+    grows 2.5x at the community states where §8.1 fails.
+    """
+    G, N, M, r = 2, 5, 7, 3
+    rng = np.random.default_rng(0)
+    mask = np.ones((G, M), bool)
+    basis = np.linalg.qr(rng.normal(size=(G, M, r)))[0].transpose(0, 2, 1)  # (G, r, M)
+    heads = B.stack_heads(jax.random.PRNGKey(0), G, M, mask, width=8, depth=2, basis=basis)
+    x = jnp.asarray(rng.uniform(0.1, 0.9, (G, N, M)), jnp.float32)
+    z = np.asarray(B.batched_z(heads, x, jnp.zeros((G, N))))
+    for i in range(G):
+        v = basis[i]
+        perp = z[i] - z[i] @ v.T @ v
+        assert np.abs(perp).max() < 1e-4
+    # ...and a full-width head is unchanged by the new argument.
+    plain = B.stack_heads(jax.random.PRNGKey(0), G, M, mask, width=8, depth=2)
+    assert plain.basis is None
+    assert np.asarray(B.batched_z(plain, x, jnp.zeros((G, N)))).shape == (G, N, M)

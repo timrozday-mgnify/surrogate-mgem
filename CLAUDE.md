@@ -1830,10 +1830,20 @@ relative-error re-anchoring; each was compensating for that lift.
    series in **design spec §8.6f**, the literature pass on Head B (reading map
    **Part 3d**). Measured there, no solves: the label flux set is **rank 12-39 of
    138-259 exchanges** and that basis reconstructs held-out truth to **0.1-0.5%**
-   against the head's own 9-26%, so **B1, a low-rank basis head** (`z/mu = w . V`)
-   leads, ahead of dropping sub-floor rows at *training* time and re-stating M5
-   over depletion depth (only 42 of 780 benchmark member-states reach the failing
-   regime). Two candidates were refuted in minutes and are on file: the
+   against the head's own 9-26%, so **B1, a low-rank basis head** (`z/mu = w . V`,
+   `cfs train-behaviour --basis-var`) was built and is **null**: identical median
+   log-X at every community size over 3 draws x 10 communities (overall 0.002, max
+   0.318 in both arms), held-out worst R2 0.9354 -> 0.9199, `dc_rel` 0.079 ->
+   0.147 on the 15 easy cells and 0.920 -> 0.840 on the 10 hard ones. Default 0
+   (off). **In hindsight its ceiling was already measured**: the off-manifold
+   component is 0.9-8.7% of the norm against a 12-26% error, so a constraint is
+   worth at most the violation it removes — measure the violation first. What is
+   left is **B2** (weight the loss by what `dc` feels: 48-69% of the error is on
+   secretion, and the composition consumes `sum_i X_i z_i`, not a per-metabolite
+   MSE), **B3** (drop sub-floor rows at *training* time) and **B4** (re-state M5
+   over depletion depth — only 42 of 780 benchmark member-states reach the failing
+   regime). B5 (conservation / DC3 completion) is subsumed: those relations live
+   inside the subspace B1 restricted to. Two candidates were refuted in minutes and are on file: the
    complementarity gate — `dual => flux on the MM bound` is 0.996-1.000 on the
    labels, but `mu_and_z`'s clamp already lands there (relative error **0.000**)
    and the tight set carries only 1-10% of the squared error — and the post-hoc
