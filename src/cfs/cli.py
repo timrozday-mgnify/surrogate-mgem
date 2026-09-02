@@ -251,6 +251,17 @@ def build_parser() -> argparse.ArgumentParser:
         "`value_under_rate` in the diagnostics, not from a composition run.",
     )
     tv.add_argument(
+        "--w-prox",
+        type=float,
+        default=0.0,
+        help="Proximal weight anchoring the first-layer slopes to the tangents "
+        "--gm-init labels seeded them with: a stability centre, in the sense of "
+        "level/proximal bundle methods. Needs a seeded groupmax head. Motivated by "
+        "measurement: frozen cuts win the n=21 tail and gradient training wins the "
+        "bulk, and cut selection is exhausted, so how far the slopes may leave the "
+        "duals is the remaining lever.",
+    )
+    tv.add_argument(
         "--gm-temp-final",
         type=float,
         default=None,
@@ -546,6 +557,7 @@ def main(argv: list[str] | None = None) -> int:
             w_rel=args.w_rel,
             w_under=args.w_under,
             w_tau=args.w_tau,
+            w_prox=args.w_prox,
             emb_dim=args.emb_dim,
             phi_hidden=args.phi_hidden,
             gm_group=args.gm_group,

@@ -1398,6 +1398,71 @@ tangents available, not by how many points you score them at.** Combined with
 selection axis is now closed. What is left is the *cuts* — their slopes — or the
 model class.
 
+### n=21 was never a size problem: it is medium scarcity, and the threshold is measured — 2026-09-02
+
+n=21 was structurally **n=1** — there is only one full roster — so it could never
+separate "large community" from "this medium". 16 distinct **15-member** subsets
+(`communities15.txt`, each organism in 7-15 of them) do separate it, and the
+answer is unambiguous.
+
+**1. The composition metric reduces exactly to Head A.** Over 240 (community,
+member) points, `logX_err = |mu_rel| x that member's true growth` at correlation
+**0.9907**, median residual **0.0000**. The integrator, Head B and the pool sum
+add nothing: `d(log X)/dt = mu`, and the error is the relative `mu` error
+amplified by how much that member grows. Every §8.1 number in this file is a Head
+A number wearing a trajectory.
+
+**2. The regime that fails is a member below ~2x its own `mu_scale`** — i.e. how
+far down its own ramp the drawn medium puts it. It is a **step, not a trend**
+(Spearman only -0.227 because of that):
+
+| member's `mu0 / mu_scale` | n | median &#124;mu_rel&#124; | median logX err |
+| --- | --- | --- | --- |
+| < 2 | 42 | **0.034** | 0.06-0.08 |
+| 2-4 | 198 | **0.0003** | 0.0007 |
+
+**100x**, across a sharp boundary.
+
+**3. So the n=21 cell is a medium draw, and 2 of its 3 were scarce.** Same head,
+same community, the three draws this file has always averaged:
+
+| draw | members with `mu0/scale < 2` | n=21 log-X err |
+| --- | --- | --- |
+| 0 | **21 of 21** | 0.175 |
+| **100** | **0 of 21** | **0.023** |
+| 200 | 20 of 21 | 0.343 |
+
+At draw 100 the 21-member community scores **0.023** — in line with n=3 and n=5.
+**There is no size effect to explain.** Every head-side fix this session failed on
+n=21 because they were aimed at a cell whose failure was the medium.
+
+**4. Size and scarcity are confounded *by the benchmark*.** `community_medium`
+draws one §4.3 medium over the **union** of the members' active subspaces, and
+§4.3 puts a fixed *fraction* of the active set into bands — so a bigger union
+means more of each member's own metabolites are scarce at once:
+
+| size | frac of members with `mu0/scale < 2` | median `mu0/scale` | median err |
+| --- | --- | --- | --- |
+| 2 | 0.13 | 2.47 | 0.0065 |
+| 3 / 5 | 0.33 | 2.4 | 0.007 / 0.009 |
+| 10 | 0.67 | 1.00 | 0.060 |
+| **15 (replete draw)** | **0.17** | **2.47** | **0.0185** |
+| 21 | 0.65 | 0.97 | 0.175 |
+
+n=15 is the control that breaks the monotone: a *large* community on a replete
+draw scores like a 3-member one. **Never compare communities of different sizes
+without matching `mu0/mu_scale` first** — the earlier "error does not grow with
+size" and the later "n=21 is the whole remaining failure" were both reading this
+confound.
+
+**What to do with it, in order.** (a) `mu0/mu_scale` is computable from the head
+alone at `t=0`, no LP — it is a *runtime* predictor of a 100x error and belongs in
+`cfs community` / `cfs simulate` output. (b) The fix target is now precise and it
+is not new: Head A's **relative** accuracy for members below 2x `mu_scale`, which
+is the low-`mu` band, with a measured threshold and a measured amplification
+(x that member's growth). (c) Re-state M5's gate over media matched on scarcity,
+or it is measuring the draw.
+
 ### E1, run twice, gives opposite answers — and both are right
 
 §8.5's cutting-plane check scores the parameter-free `min_j` model over a root's

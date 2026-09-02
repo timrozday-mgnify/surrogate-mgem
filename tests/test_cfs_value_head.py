@@ -632,7 +632,9 @@ def test_w_under_penalises_only_under_prediction():
 
     def loss(pred, w_under, w_tau=0.5):
         h = _Fake(jnp.asarray(pred))
-        return float(_loss(h, *args, 0.0, w_under, w_tau, lambda hh, xx: (hh.out, g))[1][0])
+        return float(
+            _loss(h, *args, 0.0, w_under, w_tau, None, 0.0, lambda hh, xx: (hh.out, g))[1][0]
+        )
 
     over, under = [[1.5, 1.5]], [[0.5, 0.5]]
     # Without the hinge the two are symmetric; with it, only under-prediction pays.
@@ -726,3 +728,43 @@ def test_repair_restores_validity_without_loosening_the_fit():
     assert np.allclose(
         np.asarray(groupmax.repair_intercepts(fixed, ds).b[0]), np.asarray(fixed.b[0]), atol=1e-4
     )
+
+
+def test_prox_holds_slopes_near_the_seeded_tangents():
+    """The stability centre binds on the slopes, and only on them.
+
+    `w_prox` exists because frozen label tangents win the composition's tail while
+    trained slopes win its bulk, so the knob has to actually interpolate: at a
+    large weight the slopes must stay put, at zero they must be free to move.
+    """
+    import jax.numpy as jnp
+    import numpy as np
+
+    from cfs.surrogate import groupmax
+    from cfs.surrogate.train import train_value_heads
+
+    ds = _min_affine_dataset(K=5, n=600, M=4)
+    kw = dict(
+        arch="groupmax-u", width=1, depth=1, epochs=40, batch=64, lr=3e-2,
+        gm_group=32, gm_temp=1e-2, gm_init="labels", seed=0,
+    )
+
+    def drift(w_prox):
+        h = train_value_heads(ds, w_prox=w_prox, **kw)
+        seed_h = groupmax.init_from_tangents(
+            groupmax.stack_heads(
+                jax.random.PRNGKey(0), 1, ds.x_train.shape[-1], ds.mask,
+                width=1, depth=1, group=32, temp=1e-2,
+            ),
+            ds,
+        )
+        a = np.asarray(jax.nn.softplus(h.wx[0]))
+        a_seed = np.asarray(jax.nn.softplus(seed_h.wx[0]))
+        return float(np.sqrt(np.mean((a - a_seed) ** 2) / np.mean(a_seed**2)))
+
+    free, held = drift(0.0), drift(1e4)
+    assert held < free / 2, (free, held)
+    assert held < 0.05, held
+    # It must not silently apply to an unseeded head, where there is no centre.
+    h = train_value_heads(ds, w_prox=1e4, **{**kw, "gm_init": None})
+    assert jnp.isfinite(groupmax.batched_value(h, jnp.asarray(ds.x_val))).all()

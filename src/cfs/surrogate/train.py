@@ -152,7 +152,7 @@ def _trial_points(ds, media_npz) -> np.ndarray | None:
     return np.minimum(u[None] / ds.x_scale[:, None, :], groupmax.W_CAP)
 
 
-def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, w_tau, bvg):
+def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, w_tau, a0, w_prox, bvg):
     mu_hat, g_hat = bvg(heads, x)
     # `w_tau` makes the value term an **expectile** (asymmetric least squares, Newey
     # & Powell 1987) rather than a mean: residuals on the under-predicting side get
@@ -219,7 +219,34 @@ def _loss(heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, w_ta
     # of gfloor, was measured across that whole range and moved the synthetic gate
     # by <=0.01 either way — it is not the binding constraint.
     grad = jnp.sum(gvalid * sq / (raw + gfloor[:, None])) / jnp.maximum(jnp.sum(gvalid), 1.0)
-    return value + w_grad * grad, (value, grad)
+    total = value + w_grad * grad
+    # `w_prox` is a stability centre at the seeded label tangents (proximal /
+    # level bundle methods -- Lemarechal, Nemirovskii & Nesterov 1995; Kiwiel).
+    # Measured motivation, not a guess: frozen cuts win the n=21 tail (log-X 0.169
+    # against every trained head's 0.27-0.36) while gradient training wins the bulk
+    # (overall 0.007 vs 0.013), and cut *selection* is exhausted -- 10x the trial
+    # points and 2x the budget both do nothing. So the remaining lever is how far
+    # the slopes are allowed to leave the duals that are exactly right at the tail.
+    #
+    # Normalised **per plane**, and that is not cosmetic: a single global
+    # `mean(d^2)/mean(a0^2)` is what the first version used, and the label slopes
+    # span five decades, so the denominator is set by a handful of enormous planes
+    # and the ratio is ~0 for any drift the rest of them have. Measured: the term
+    # was then bit-for-bit inert over `w_prox` 0 -> 10 (identical composition to
+    # three decimals) while 2.5 million of 9.3 million slope entries had in fact
+    # moved, by up to 3.2 in absolute terms. A "scale-free" normalisation over a
+    # heavy-tailed quantity is not scale-free.
+    if w_prox and a0 is not None:
+        d = jax.nn.softplus(heads.wx[0]) - a0
+        num = jnp.sum(d**2, axis=-1)
+        den = jnp.sum(a0**2, axis=-1)
+        # A tangent whose dual is all-zero (a medium where nothing limits) seeds a
+        # flat plane, so its `den` is 0 and a bare epsilon floor would hand it a
+        # weight of 1e12. Floor on the organism's own median instead, which leaves
+        # every real plane untouched.
+        den = jnp.maximum(den, 0.01 * jnp.median(den, axis=-1, keepdims=True) + 1e-30)
+        total = total + w_prox * jnp.mean(num / den)
+    return total, (value, grad)
 
 
 @eqx.filter_jit
@@ -236,12 +263,14 @@ def _step(
     w_rel,
     w_under,
     w_tau,
+    a0,
+    w_prox,
     optimiser,
     bvg,
 ):
     # `bvg` and `optimiser` are non-arrays, so `filter_jit` holds them static.
     (total, parts), grads = eqx.filter_value_and_grad(_loss, has_aux=True)(
-        heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, w_tau, bvg
+        heads, x, mu, g, gvalid, x_scale, gfloor, w_grad, w_rel, w_under, w_tau, a0, w_prox, bvg
     )
     updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(heads, eqx.is_inexact_array))
     return eqx.apply_updates(heads, updates), opt_state, total, parts
@@ -305,6 +334,7 @@ def train_value_heads(
     w_rel: float = 0.0,
     w_under: float = 0.0,
     w_tau: float = 0.5,
+    w_prox: float = 0.0,
     emb_dim: int = 8,
     phi_hidden: int | None = None,
     k_code: int | None = None,
@@ -358,6 +388,16 @@ def train_value_heads(
             select=gm_select,
             trial_points=_trial_points(ds, gm_trial_media),
         )
+    # The stability centre for `w_prox`: the seeded slopes, in slope space rather
+    # than in the raw parameter, so the penalty means the same thing regardless of
+    # where softplus is being evaluated.
+    a0 = (
+        jax.nn.softplus(heads.wx[0])
+        if w_prox and gm_init == "labels" and arch.startswith("groupmax")
+        else None
+    )
+    if w_prox and a0 is None:
+        LOGGER.warning("--w-prox needs a seeded groupmax head; ignored")
     n = x.shape[1]
     steps_per_epoch = max(1, n // batch)
     # `--epochs 0` is a supported mode, not a degenerate one: with `--gm-init labels`
@@ -366,8 +406,8 @@ def train_value_heads(
     # constructible, and optax rejects zero decay steps.
     optimiser = optax.adam(optax.cosine_decay_schedule(lr, max(1, epochs * steps_per_epoch)))
     opt_state = optimiser.init(eqx.filter(heads, eqx.is_inexact_array))
-    heads, opt_state, x, mu, g, gvalid, x_scale, gfloor = _shard_organisms(
-        len(ds.genome_ids), (heads, opt_state, x, mu, g, gvalid, x_scale, gfloor)
+    heads, opt_state, x, mu, g, gvalid, x_scale, gfloor, a0 = _shard_organisms(
+        len(ds.genome_ids), (heads, opt_state, x, mu, g, gvalid, x_scale, gfloor, a0)
     )
 
     # Evenly spaced over the run, none at the very end: a re-anchored plane needs
@@ -416,6 +456,8 @@ def train_value_heads(
                 w_rel,
                 w_under,
                 w_tau,
+                a0,
+                w_prox,
                 optimiser,
                 bvg,
             )
@@ -444,6 +486,13 @@ def train_value_heads(
                 ),
                 opt_state,
             )
+            if a0 is not None:
+                # A re-anchored plane IS a fresh label tangent, so it becomes its
+                # own centre. Leaving the old anchor would pull the new cut back to
+                # the dead one it replaced -- the two passes would fight.
+                a0 = a0.at[np.arange(len(slots))[:, None], slots].set(
+                    jax.nn.softplus(heads.wx[0])[np.arange(len(slots))[:, None], slots]
+                )
             LOGGER.info("epoch %4d  re-anchored %d planes/organism", epoch, slots.shape[1])
         if epoch % 20 == 0 or epoch == epochs - 1:
             LOGGER.info(
@@ -768,6 +817,7 @@ def run(
     w_rel: float = 0.0,
     w_under: float = 0.0,
     w_tau: float = 0.5,
+    w_prox: float = 0.0,
     emb_dim: int = 8,
     phi_hidden: int | None = None,
     k_code: int | None = None,
@@ -800,6 +850,7 @@ def run(
         w_rel=w_rel,
         w_under=w_under,
         w_tau=w_tau,
+        w_prox=w_prox,
         emb_dim=emb_dim,
         phi_hidden=phi_hidden,
         k_code=k_code,
@@ -836,6 +887,7 @@ def run(
         "w_rel": w_rel,
         "w_under": w_under,
         "w_tau": w_tau,
+        "w_prox": w_prox,
         "eps": eps,
         "seed": seed,
     }
