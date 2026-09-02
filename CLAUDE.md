@@ -68,6 +68,17 @@
 > were the `value/` and `value_v3/softmin_*` weights, whose `diagnostics.json`
 > (the measured record cited below) were kept.
 >
+> **Second cleanup, 2026-09-02** (the disk hit 1.5 GiB free). Same rule: weights
+> go, the measured record stays. Deleted — every `20hm_bands/{value,behaviour}_*`
+> `*heads.eqx` except `value_p4_ncrep_T0.0001`, `value_p4{,_nc}`, `value_r1`,
+> `behaviour_{p4,r1}` (those four cannot be rebuilt once a round moves `x_scale`);
+> the HPC export's per-task `value_heads.eqx` and its `labels_out` 20k-media
+> shards; `hpc_run/sumgem-results.tar.gz` (every file verified present under
+> `export/`); `trial_pool_{20k,200k}.npz` (no solves — `make_trial_pool.py`
+> rebuilds them in ~4 min); and the `community_*.log` stdout, whose metrics live
+> in each run's `community.json`. Every `diagnostics.json`, `value_heads.json` and
+> `community.json` was kept, so nothing in this file lost its source. 1.5 -> 14 GiB.
+>
 > Generating a set costs ~30 MB/organism and ~1 h/organism at 10-way concurrency;
 > it dies mid-shard on a full disk, and the resulting partial shard must be
 > deleted, not resumed.
