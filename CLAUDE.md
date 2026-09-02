@@ -1994,6 +1994,58 @@ is a cross-set reproduction, not one run. ~90 s and ~6 min respectively.
    one organism walked down a true trajectory direction, `z` scored against the LP
    at each point — which needs no community and no design.
 
+### The depletion sweep: the `mu_floor` is a 3300x flux error, and removing it makes M5 worse — 2026-09-02
+
+The Head B analogue of `titrate_n1`. A **monoculture batch is the depletion sweep**:
+the medium walks down that organism's own consumption direction with the true LP
+defining the path, producing the end-of-batch co-depleted states no n=1 titration
+can construct — and it is `cfs community` with 21 single-member communities, so it
+needed no new code. `monocultures.txt`, `mono.sh` (4 doublings) and `monodeep.sh`
+(8), 3 medium draws each; `attribute_b.py` then scores Head B at 11 states per
+trajectory. Depth = that member's `mu_true` over its own `mu_true` at t=0.
+
+| depth | n | med flux cosine | p05 cosine | med `\|z_hat\|/\|z_true\|` |
+| --- | --- | --- | --- | --- |
+| 0.90-1.0 | 366 | 0.991 | 0.781 | 1.00 |
+| 0.50-0.90 | 135 | 0.903 | 0.519 | 1.01 |
+| 0.10-0.50 | 46 | 0.843 | -0.065 | 1.24 |
+| 0.01-0.10 | 18 | 0.863 | **-0.440** | **3318** |
+
+1. **The cause is arithmetic and it is `dfba.Surrogate.mu_and_z`.** Head B emits
+   specific flux and inference multiplies back by `max(mu, mu_floor)`,
+   `mu_floor = _MU_FLOOR_FRAC * mean mu` (roster 0.46-1.66). At those states median
+   `mu_true` is **1.9e-4** against a floor of 0.77, and **89% of them have `mu_hat`
+   below the floor** — so the *floor*, not the growth rate, sets the predicted
+   flux. Median `max(mu_hat, floor)/mu_true` = **4172**, which is the observed 3318
+   to within the spread; `mu_hat/mu_true` alone is only **52**. The floor is the
+   dominant term and Head A's residual is the smaller one.
+2. **Direction fails too, and only the tail shows it.** 13 of 15 organisms lose
+   cosine going deep and `CP002109.1` reaches **-0.42** — reversed. The median
+   barely moves (0.99 -> 0.86); the p05 goes 0.78 -> -0.44. Score this regime on a
+   quantile, never a median.
+3. **Removing the floor at inference fixes the right-hand side and makes the
+   trajectory worse.** Same 10 communities x 3 draws, one-line change: `dc_rel`
+   **2.047 -> 0.747** on the worst cell and 0.594 -> 0.428 on another, while their
+   `x_log_err_final` goes **0.0041 -> 0.1241** and 0.0676 -> 0.1124. 25 of 30 cells
+   are bit-identical, and the size medians do not move at all. **Third instance of
+   "a strictly better rhs is not a better trajectory"** (the MM clamp gave two);
+   this is the starkest — 2.7x better rhs, 30x worse endpoint. The over-predicted
+   uptake makes the surrogate empty the pool at roughly the right *time*; take it
+   away and a starving member keeps the pool alive too long, which changes **which
+   metabolite empties first**, and a batch endpoint turns on that.
+4. **So the floor stays, and it is not the M5 lever** — the reverted experiment is
+   on file so nobody re-runs it. What the sweep did establish is where Head B is
+   actually wrong, and that the benchmark under-samples it: only **42 of 780**
+   benchmark member-states are below depth 0.1, against 18 of 668 in a monoculture
+   at 4 doublings and far more at 8. A gate that never visits the regime cannot
+   reward fixing it.
+5. **Normalise a depleting trajectory by a fixed scale and drop dead states.** The
+   first pass reported a median relative error of **3e31** in the deepest bin:
+   `|z_true| -> 0` is the same divide-by-a-dead-culture trap `dfba` already guards
+   against. `mono_report.py` normalises by `|z|` at t=0 and drops `mu_true == 0`.
+   Cosine is the scale-free companion — quote both, since a fixed denominator
+   flatters the deep end exactly as a local one explodes.
+
 ### M11: the minimal medium is blocked on essentiality, not on the program — 2026-08-30
 
 `cfs minimal-medium` (`src/cfs/science/minimal.py`) is §13.3: minimise `cost . c`
