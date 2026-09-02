@@ -50,6 +50,11 @@ from jax import Array
 
 from cfs.surrogate.data import BehaviourDataset, load_behaviour_dataset
 
+# Every exchange of every CarveMe GEM on the roster has |lower_bound| = 1000, which
+# is what §3.3 scales by saturation to make the uptake bound. `compose.dfba` reads
+# it from here so the training bound and the inference projection cannot drift.
+VMAX = 1000.0
+
 LOGGER = logging.getLogger("cfs.surrogate.behaviour")
 
 
@@ -121,16 +126,43 @@ def organism(heads: BehaviourHead, i: int) -> BehaviourHead:
 # --------------------------------------------------------------------------- #
 
 
-def _loss(heads, x, a, zn):
-    """MSE against the *normalised* target, over the organism's own exchanges."""
+def mm_floor(x, mu, x_scale, z_scale):
+    """§3.3's uptake bound in the head's own *normalised* output units.
+
+    The LP that made the labels cannot take up faster than ``-Vmax_m * u_m``, and
+    every exchange of every roster GEM has ``|lower_bound| = 1000``, so the bound
+    is a constant times the head's own input saturation -- no fit, nothing stored.
+    The head emits specific flux ``z / (mu * z_scale)``, hence the divisor.
+
+    ``u`` is recovered from the input coordinate exactly: ``x = u/(u+s)``.
+    """
+    u = x / jnp.maximum(1.0 - x, 1e-12) * x_scale[:, None, :]
+    return -VMAX * u / (mu[:, :, None] * z_scale[:, None, :])
+
+
+def _loss(heads, x, a, zn, lo, w_mm: float):
+    """MSE against the *normalised* target, over the organism's own exchanges.
+
+    ``w_mm`` adds a one-sided hinge on :func:`mm_floor`. Every label satisfies the
+    bound, so a prediction below it is a **provable violation**, not an accuracy
+    trade -- the same shape as Head A's ``--w-under``, and for the same reason:
+    pay at the violation and stay exactly silent where there is nothing to fix.
+    Measured: the inference-time projection's bite ``|dz|/|z|`` ranks the 10 §8.1
+    communities by their trajectory error (0.000 at the best cell, 0.41 and 0.28
+    at the two worst), with individual predictions 13x outside the bound.
+    """
     w = heads.mask[:, None, :]  # (G, 1, M)
-    sq = w * (batched_z(heads, x, a) - zn) ** 2
-    return jnp.sum(sq) / jnp.maximum(jnp.sum(w) * x.shape[1], 1.0)
+    z = batched_z(heads, x, a)
+    n = jnp.maximum(jnp.sum(w) * x.shape[1], 1.0)
+    loss = jnp.sum(w * (z - zn) ** 2) / n
+    if w_mm:
+        loss = loss + w_mm * jnp.sum(w * jax.nn.relu(lo - z) ** 2) / n
+    return loss
 
 
 @eqx.filter_jit
-def _step(heads, opt_state, x, a, zn, optimiser):
-    loss, grads = eqx.filter_value_and_grad(_loss)(heads, x, a, zn)
+def _step(heads, opt_state, x, a, zn, lo, optimiser, w_mm):
+    loss, grads = eqx.filter_value_and_grad(_loss)(heads, x, a, zn, lo, w_mm)
     updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(heads, eqx.is_inexact_array))
     return eqx.apply_updates(heads, updates), opt_state, loss
 
@@ -143,11 +175,15 @@ def train_behaviour_heads(
     epochs: int = 300,
     batch: int = 512,
     lr: float = 3e-3,
+    w_mm: float = 0.0,
     seed: int = 0,
 ) -> eqx.Module:
     x = jnp.asarray(ds.x_train)
     a = jnp.asarray(ds.a_train)
     zn = jnp.asarray(ds.z_train / ds.mu_train[:, :, None] / ds.z_scale[:, None, :])
+    # Per batch, not precomputed: the full (G, N, M) bound is ~1.2 GB in float32.
+    mu_fl = jnp.asarray(ds.mu_train)  # already floored by `data`
+    x_scale, z_scale = jnp.asarray(ds.x_scale), jnp.asarray(ds.z_scale)
     heads = stack_heads(
         jax.random.PRNGKey(seed), len(ds.genome_ids), x.shape[-1], ds.mask, width, depth
     )
@@ -161,8 +197,10 @@ def train_behaviour_heads(
         perm = rng.permutation(n)
         for s in range(steps):
             idx = jnp.asarray(perm[s * batch : (s + 1) * batch])
+            xb = x[:, idx]
+            lo = mm_floor(xb, mu_fl[:, idx], x_scale, z_scale) if w_mm else 0.0
             heads, opt_state, loss = _step(
-                heads, opt_state, x[:, idx], a[:, idx], zn[:, idx], optimiser
+                heads, opt_state, xb, a[:, idx], zn[:, idx], lo, optimiser, w_mm
             )
         if epoch % 20 == 0 or epoch == epochs - 1:
             LOGGER.info("epoch %4d  loss=%.5f  (%.0fs)", epoch, float(loss), time.time() - t0)
@@ -303,19 +341,28 @@ def run(
     epochs: int = 300,
     batch: int = 512,
     lr: float = 3e-3,
+    w_mm: float = 0.0,
     seed: int = 0,
     organisms: list[str] | None = None,
 ) -> dict:
     ds = load_behaviour_dataset(labels_dir, index_path, eps=eps, seed=seed, organisms=organisms)
     heads = train_behaviour_heads(
-        ds, width=width, depth=depth, epochs=epochs, batch=batch, lr=lr, seed=seed
+        ds, width=width, depth=depth, epochs=epochs, batch=batch, lr=lr, w_mm=w_mm, seed=seed
     )
     diagnostics = evaluate(heads, ds)
     save(
         heads,
         ds,
         outdir,
-        {"width": width, "depth": depth, "epochs": epochs, "lr": lr, "eps": eps, "seed": seed},
+        {
+            "width": width,
+            "depth": depth,
+            "epochs": epochs,
+            "lr": lr,
+            "w_mm": w_mm,
+            "eps": eps,
+            "seed": seed,
+        },
         diagnostics,
     )
     LOGGER.info(

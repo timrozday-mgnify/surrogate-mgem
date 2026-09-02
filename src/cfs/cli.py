@@ -304,6 +304,20 @@ def build_parser() -> argparse.ArgumentParser:
     tb.add_argument("--lr", type=float, default=3e-3)
     tb.add_argument("--seed", type=int, default=0)
     tb.add_argument("--organisms", help="Comma-separated genome_ids (default: every shard).")
+    tb.add_argument(
+        "--w-mm",
+        type=float,
+        default=0.0,
+        help="Weight on a one-sided hinge against §3.3's uptake bound "
+        "`z_m >= -Vmax_m * u_m` (`behaviour.mm_floor`). Every label satisfies it, "
+        "so a prediction below it is a *provable* violation -- same shape and same "
+        "reason as Head A's --w-under. `compose.dfba` already projects onto the "
+        "bound at inference; the projection's bite ranks the 10 §8.1 communities "
+        "by trajectory error (0.000 at the best cell, 0.41/0.28 at the two worst), "
+        "with individual predictions 13x outside it, so the net is spending "
+        "capacity on outputs the LP cannot produce. Default 0 (off).",
+    )
+
 
     cm = sub.add_parser(
         "community", help="M5/§8.1: compose the frozen heads into communities vs the LP."
@@ -606,6 +620,7 @@ def main(argv: list[str] | None = None) -> int:
                     epochs=args.epochs,
                     batch=args.batch,
                     lr=args.lr,
+                    w_mm=args.w_mm,
                     seed=args.seed,
                     organisms=organisms,
                 )["summary"],

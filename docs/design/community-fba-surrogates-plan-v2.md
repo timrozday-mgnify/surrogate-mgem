@@ -1864,6 +1864,59 @@ applied to the *trained* head (`value_p4_nc`), same 3 draws, same 10 communities
    with `dc_rel_median` 0.878 — Head B is implicated there too. Run E1 on that
    medium before choosing anything.
 
+#### §8.6d — with Head A exact, M5's residual is Head B's coverage (2026-09-02)
+
+After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3
+medium draws). §8.6b's identity `logX = |mu_rel| x growth` is therefore retired:
+the term it was built from has gone to zero, and what remains tracks `dc_rel` /
+`dc_cosine`. Per-member flux cosine is 0.9998 on the best cell and **0.74-0.96** on
+the failing ones (`20hm_bands/dc_decompose.py`, which reconstructs the pool sum
+from one FBA per member per state).
+
+**A free predictor, and a refuted fix built on it.** `compose.dfba` projects onto
+§3.3's uptake bound `z_m >= -Vmax_m * u_m` at inference. How hard that projection
+works (`clamp_bite.py`, no LP) ranks the ten communities by trajectory error:
+
+| cell | 4 | 2 | 5 | 7 | 1 | 0 | 6 | 3 | **8** | **9** |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| logX | 0.0001 | 0.0030 | 0.0007 | 0.0005 | 0.0109 | 0.0126 | 0.0258 | 0.0336 | **0.0533** | **0.3181** |
+| `\|dz\|/\|z\|` | 0.000 | 0.000 | 0.004 | 0.011 | 0.011 | 0.033 | 0.082 | 0.237 | **0.412** | **0.279** |
+
+Individual predictions sit **13x** outside a bound every label satisfies, so
+`--w-mm` adds the one-sided hinge on it — same shape and same justification as Head
+A's `--w-under` (`behaviour.mm_floor`; `VMAX` now has one definition, in
+`behaviour`, which `dfba` reads, so the training bound and the inference projection
+cannot drift). **It is refuted, twice over:**
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | Head B worst cos / sign |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `behaviour_p4` | 0.003 | 0.004 | 0.000 | **0.025** | **0.009** | **0.004** | **0.9853 / 0.9629** |
+| `--w-mm 1` | 0.003 | 0.004 | 0.001 | 0.041 | 0.009 | 0.004 | 0.9845 / 0.9613 |
+| `--w-mm 10` | 0.004 | 0.006 | 0.001 | 0.055 | 0.015 | 0.005 | 0.9827 / 0.9557 |
+
+1. **The violation is off-distribution and the loss cannot reach it.** On its own
+   *training* rows Head B violates the bound on **0.053%** of entries (labels
+   0.000%); `--w-mm 1` moves that to 0.046% and `10` to 0.037%. The 13x violations
+   exist only at community-regime media the head never saw.
+2. **Where the hinge did work, the composition did not follow.** At `w=10`, cells
+   0/1/3/6 go bite 0.033 -> 0.0085 and worst ratio 0.12 -> 1.000, with their
+   trajectory error unchanged. That refutes causation independently of (1): the
+   bite is a **symptom of being off-distribution**, which is why it predicts so
+   well, and not a cause.
+
+Kept in the code, default 0, with the negative result on file — the discipline that
+`--w-prox` and `--gm-temp-final` are kept under.
+
+**The coverage proxy passes P25's gate, which none of the seven refuted ones did.**
+`nn_proxy.py`, no LP, on the 30 cells already on disk: Spearman(median NN distance
+in `x` to the member's own training media, `dc_rel`) = **+0.673** (p=4.6e-5), and
+`+0.515` against `logX` itself. The six worst cells are the six farthest (median NN
+1.33-2.63) and the best sit at 0.11. So the fix is coverage of the media §8.1
+actually visits — `make_traj_pool.py` already extracts those states from any
+`cfs community` run, and unlike the Level 1 trial pool, labelling them costs real
+solves. **That needs `cfs generate` to accept an explicit media file, which it
+cannot today; that is the next piece of code, not another loss term.**
+
 #### §8.6 — the under-prediction branch, in priority order
 
 An under-prediction is not an accuracy shortfall; it is a **certificate that the

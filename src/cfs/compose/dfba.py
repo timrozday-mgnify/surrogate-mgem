@@ -52,9 +52,8 @@ LOGGER = logging.getLogger("cfs.compose.dfba")
 # were generated in. Sampling outside that is a fair test of nothing.
 _MEDIUM_SEED_STRIDE = 7919
 
-# Every exchange of every CarveMe GEM on the roster has |lower_bound| = 1000, which
-# is what §3.3 scales by saturation to make the uptake bound.
-_VMAX = 1000.0
+# `cfs.surrogate.behaviour.VMAX` is the one definition: Head B now trains under the
+# same bound this projects onto, and two copies could drift apart silently.
 
 
 @dataclass
@@ -180,7 +179,7 @@ class Surrogate:
         # exactly where the composition went wrong: at the worst M5 community the
         # head predicted `EX_glyc3p_e` uptake of -329 against a physical floor of
         # -14, on 28 of one member's 213 exchanges at once.
-        return mu, np.maximum(z, -_VMAX * (c / (self.km + c))) * self.mask
+        return mu, np.maximum(z, -self._B.VMAX * (c / (self.km + c))) * self.mask
 
 
 def _km_vector(exchanges: list[str]) -> np.ndarray:
