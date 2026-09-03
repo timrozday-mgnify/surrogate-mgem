@@ -2693,6 +2693,61 @@ in 4 above, or B6 (the piecewise-affine / active-set head) -- and B6 is the only
 remaining candidate that could improve *extrapolation* rather than coverage, which
 is what the deep gate is actually testing.
 
+##### B6 is refuted before it was built — the active set is not the missing variable
+
+mpLP says `c -> z` is affine on critical regions, and complementary slackness makes
+the region label free (§8.6f: `dual => flux on the bound` at 0.996-1.000, and Head A
+predicts that gradient at cosine 0.95). B6 would condition Head B on it. Two
+premise checks, both cheap, both negative.
+
+**(a) The active set at the failing states is not novel.** Head A's own predicted
+limiting set at the 208 deep (`depth < 0.5`) member-states of the 8-doubling
+benchmark, against every training row's limiting set (`deep_active_set.py`, no
+solves): mean `|A_pred|` = **1.1**, and the Hamming distance to the nearest
+training active set has **median 0.0 and p90 0.0 at every community size**. Every
+deep state's limiting set is one the design already produced. On held-out design
+media the same is true (mean Hamming 0.1-0.3) and the novelty-vs-error correlation
+is weak -- Spearman **+0.364** median, +0.136 to +0.564
+(`active_set_novelty.py`), nowhere near the +0.673 that earned §8.6d its relabel.
+**The failure is extrapolation *inside* a known region** -- the medium is 4-8 away
+in `x` (§8.6f, round 3) with the same limiting metabolite -- **not a question of
+which region it is in.**
+
+**(b) A limiting set is not a critical region, so the affine structure is not
+resolvable from these labels.** Inside each organism's commonest (train ∩ val)
+limiting-set bucket, a standardised ridge affine fit of `z` (`affine_coord.py`):
+
+| | in-sample R2 | held-out R2 |
+| --- | --- | --- |
+| affine in `u` | **0.921** | 0.589 |
+| affine in `x` | 0.867 | 0.497 |
+
+A genuine critical region would fit *exactly*; 0.92 in-sample says the bucket is
+not one. And the existing MLP scores median held-out R2 **0.964** on all rows, so
+a per-bucket affine model is far worse than what is already there. `u` beats `x`
+on both axes and `x` throws wild negatives (-44, -7911) where `u` does not, so
+there is a mild coordinate signal -- but nothing like §7.2's decisive one for
+Head A, and it does not motivate a rebuild.
+
+**Why (b) is a limit of the labels, not of the theory.** A critical region is
+determined by the LP's full optimal basis, internal reactions included; the shards
+record only the exchange duals. Testing mpLP structure properly means storing the
+basis in `groundtruth.solve` and relabelling the roster -- a large spend with, as
+of (a), no evidence behind it. **That is what would reopen B6.**
+
+Incidentally measured: the biggest *training* active-set buckets have **zero**
+held-out rows, because rounds 1-3 go to train only and occupy patterns the round-0
+design never produces. P24 again, in a new instrument.
+
+**The ranked list is now closed.** B1 built and null (twice), B2 refuted from the
+labels, B3 re-diagnosed and its coverage form null, B4 done and the most
+informative, B5 subsumed, B6 refuted on both legs. Head B's residual is
+**extrapolation at states 40-70x farther from the design than anything the
+held-out protocol contains**, and nothing on this list addresses that. The honest
+options are: label the regime properly (the 16 n=15 sets at `--doublings 8`, a
+large spend), state M5 at a horizon the design actually covers, or accept the deep
+gate as an extrapolation benchmark and report it as such.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)

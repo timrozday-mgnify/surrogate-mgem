@@ -1859,9 +1859,18 @@ relative-error re-anchoring; each was compensating for that lift.
    pool is **5.57 against 5.22** to the existing training set, i.e. *no closer*. A
    monoculture's depletion path does not reach a community's. Those distances are
    4.1-7.7 where §8.6d's held-out median is 0.10, so the 8-doubling gate is an
-   **extrapolation** test, not a coverage one, and only **B6** (a piecewise-affine
-   / active-set head) or a far larger label spend (the 16 n=15 sets re-run at 8
-   doublings and labelled) addresses it. `dc_rel` improved on 21/30 deep cells
+   **extrapolation** test, not a coverage one, **B6 is refuted before building, on both legs**: Head A's
+   predicted limiting set at the 208 deep failing states has Hamming distance
+   **median 0.0 and p90 0.0** to the training active sets (so conditioning on it
+   adds nothing where the failure is), and a ridge affine fit inside the commonest
+   limiting-set bucket reaches only **0.921 in-sample** (0.589 held out) where the
+   existing MLP is 0.964 held out — a limiting set is not a critical region,
+   because the shards record exchange duals and not the LP's optimal basis.
+   Storing the basis and relabelling is what would reopen it. `u` beats `x` in
+   that fit (0.921/0.589 vs 0.867/0.497) — a mild coordinate signal, not §7.2's.
+   **So the ranked list is closed** and what is left is a large label spend (the
+   16 n=15 sets at 8 doublings), stating M5 at a horizon the design covers, or
+   reporting the deep gate as the extrapolation benchmark it is. `dc_rel` improved on 21/30 deep cells
    while the endpoint did not follow — the fifth instance of that. Two candidates were refuted in minutes and are on file: the
    complementarity gate — `dual => flux on the MM bound` is 0.996-1.000 on the
    labels, but `mu_and_z`'s clamp already lands there (relative error **0.000**)
