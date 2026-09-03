@@ -2640,6 +2640,53 @@ one, so the basis head was re-run on it: overall **0.041 -> 0.039**, sizes
 median *worse* (0.556 -> 0.736). The refutation was not an artifact of a benchmark
 that never visited the failure regime.
 
+##### The depletion coverage round (round 3) is null, and the reach is why
+
+B3's re-diagnosis pointed at coverage of *co-depleted* media: the head extrapolates
+the above-floor relation into states §4.3's low-`mu` strata cannot build, because
+they starve one or a few metabolites while a batch endpoint draws the whole pool
+down at once. Round 2 covered the community regime at `t ~ 0`; this covers depth.
+
+`make_depl_pool.py` takes the states an **8-doubling monoculture batch** visits
+below depth 0.5 -- the only construction that reaches them without a community,
+and disjoint from the M5 benchmark, so nothing trains on what it scores. 567 media,
+`cfs generate --media label_pool_depl.npz --round 3`, 63/63 shards, both heads
+retrained (P14).
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 4 doublings, round 2 | 0.002 | 0.002 | 0.000 | 0.026 | 0.013 | 0.002 | 0.318 |
+| 4 doublings, **+ round 3** | 0.003 | 0.002 | 0.000 | 0.036 | 0.015 | 0.002 | 0.415 |
+| 8 doublings, round 2 | 0.031 | 0.135 | 0.041 | 0.053 | 0.054 | 0.041 | 0.572 |
+| 8 doublings, **+ round 3** | 0.044 | 0.107 | 0.038 | 0.078 | 0.061 | 0.043 | 0.576 |
+
+Held-out Head B is unchanged (worst R2 0.9354 -> 0.9346, median 0.9638 -> 0.9649).
+
+1. **Null on the trajectory at both horizons**, 10/30 and 8/30 cells better.
+2. **And a fifth instance of "a strictly better rhs is not a better trajectory":**
+   `dc_rel` improves on **21 of 30** cells at 8 doublings (median 0.556 -> 0.504)
+   while the endpoint does not follow.
+3. **The reach is the reason, and it is measured** (`depl_reach.py`, no solves).
+   Median NN distance in `x` from the benchmark's own deep community states to
+   the round-3 pool is **5.57**, against **5.22** to the existing training set --
+   the new labels are *no closer*, and slightly farther. **A monoculture's
+   depletion path does not reach a community's**, which is §8.6d's "one
+   community's forward path does not reach another's" one regime deeper.
+4. **The scale of the gap is the real finding.** Those NN distances are 4.1 (n=2)
+   to 7.7 (n=21), where §8.6d's held-out median is **0.10** and its worst cells
+   sit at 1.33-2.63. At 8 doublings the benchmark is 40-70x farther from the design
+   than anything measured before, so a 567-medium round was never going to close
+   it. Covering that regime needs community trajectories at depth -- the 16 n=15
+   sets re-run at `--doublings 8` and labelled, a far larger spend -- or the deep
+   gate accepted as an extrapolation test rather than a coverage one.
+
+**Ranked list status: B1 built and null, B2 refuted, B3 re-diagnosed and its
+coverage form measured and null, B4 done and the most informative of the four,
+B5 subsumed, B6 untried.** What is left for Head B is either the large label spend
+in 4 above, or B6 (the piecewise-affine / active-set head) -- and B6 is the only
+remaining candidate that could improve *extrapolation* rather than coverage, which
+is what the deep gate is actually testing.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)

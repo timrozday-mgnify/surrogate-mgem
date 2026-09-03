@@ -1852,7 +1852,17 @@ relative-error re-anchoring; each was compensating for that lift.
    both trajectories have stopped growing), and B1 re-tested on the deeper gate is
    **still null** (12/30 cells, `dc_rel` worse). B5 (conservation / DC3
    completion) is subsumed: those relations live inside the subspace B1 restricted
-   to. Two candidates were refuted in minutes and are on file: the
+   to. **The depletion coverage round (round 3, 567 co-depleted media from
+   8-doubling monoculture batches) is also null** — 10/30 and 8/30 cells better at
+   the two horizons, held-out Head B unchanged — and `depl_reach.py` says why:
+   median NN distance in `x` from the benchmark's deep community states to the new
+   pool is **5.57 against 5.22** to the existing training set, i.e. *no closer*. A
+   monoculture's depletion path does not reach a community's. Those distances are
+   4.1-7.7 where §8.6d's held-out median is 0.10, so the 8-doubling gate is an
+   **extrapolation** test, not a coverage one, and only **B6** (a piecewise-affine
+   / active-set head) or a far larger label spend (the 16 n=15 sets re-run at 8
+   doublings and labelled) addresses it. `dc_rel` improved on 21/30 deep cells
+   while the endpoint did not follow — the fifth instance of that. Two candidates were refuted in minutes and are on file: the
    complementarity gate — `dual => flux on the MM bound` is 0.996-1.000 on the
    labels, but `mu_and_z`'s clamp already lands there (relative error **0.000**)
    and the tight set carries only 1-10% of the squared error — and the post-hoc
