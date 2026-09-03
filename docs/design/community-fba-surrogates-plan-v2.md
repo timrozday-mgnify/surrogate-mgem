@@ -2951,6 +2951,94 @@ as every round has been (P24).
 - And if a coverage round *is* run, run it the cheap way: generate free, subsample
   by farthest point, label ~25 per composition across many compositions.
 
+#### §8.6g — Head B, stock-take (2026-09-03)
+
+Head B is accurate on its own distribution -- held-out worst R2 **0.929-0.935**,
+median 0.964, worst flux cosine 0.983, sign agreement 0.961 -- and every §8.1
+failure is somewhere else. Five distinct problems, in the order they bind.
+
+**1. It is an extrapolation failure, not a fit failure.** The residual lives at
+states whose NN distance in `x` is **4-8**, where held-out media sit at **0.10**.
+Everything aimed at the model was null: the low-rank basis (B1, twice, including
+on the sensitive gate), the loss reweighting (B2, refuted from the labels), the MM
+hinge (`--w-mm`), and the active-set conditioning (B6, Hamming 0.0 at the failing
+states). The only thing that ever moved the metric it was aimed at is coverage.
+
+**2. There is no structure to degrade into.** Head A is concave, monotone and
+one-sided *by construction*, so off-distribution it fails predictably and
+`--gm-repair` restores the invariant in closed form. Head B has exactly one
+constraint available -- §3.3's uptake bound -- and it binds on the wrong side:
+**48-69% of the squared error is on secretion**, positive and unbounded above. The
+subspace constraint that does exist is worth at most the violation it removes
+(0.9-8.7% of the norm against a 12-26% error).
+
+**3. The specific-flux floor is self-consistent and not learned.** `z = z_hat *
+max(mu_hat, floor)` recovers `z` exactly at any depth *if* the head emits the
+floored target; below depth 0.1 it emits the unfloored one, giving **3318x**
+magnitude error and p05 cosine **−0.44**. Removing the floor makes the derivative
+2.7x better and the trajectory 30x worse, so the error is load-bearing.
+
+**4. The metric is not the objective.** Six instances of "a strictly better rhs is
+not a better trajectory", the last of them predicted in advance and confirmed on
+its own metric. A batch endpoint turns on **which metabolite empties first**.
+
+**5. The benchmark was hiding all of it.** M5 passes at 4 doublings and fails at
+every size at 8; 86% of the shallow gate sits above 0.9 of starting growth; and
+depletion is confounded with size, since a 15-member community barely depletes at
+all (94.8% above 0.9 even at 8 doublings).
+
+##### What looks promising, ranked
+
+1. **Ship the runtime predictors.** Per member per step, free: the reach proxy
+   (NN distance in `x`) and predicted depletion depth `mu_hat(t)/mu_hat(0)`. The
+   first is a *per-cell* accuracy predictor (Spearman +0.673 on `dc_rel`) and
+   **must not** be used per step (measured: lift 0.9x, worse than random); the
+   second is the per-step one (lift 3.0x). Together they make the output honest
+   and give §13.6 its missing nonconformity score.
+2. **A secretion-side bound — the last untested structural constraint, and it sits
+   on the 48-69%.** You cannot secrete more carbon, nitrogen or electrons than you
+   took up: `E z <= 0` element-wise against the biomass drain, a *provable*
+   one-sided inequality on the unbounded side, the analogue of the MM bound on the
+   uptake side. **It is not subsumed by B1**, which removed zero-variance
+   directions, not inequality faces. Mandatory premise check first, per
+   [[constraint-worth-at-most-the-violation]]: measure the violation on the
+   labels (should be ~0) and on the failing predictions. If the violation is
+   small, it is dead like B1.
+3. **Trajectory-level training.** Backprop the endpoint through the integrator
+   instead of fitting `z` per state -- the only idea that optimises what the gate
+   measures, and the only one that can see which metabolite empties first. The
+   stack has the pieces (JAX; `integrate` is an explicit Euler map).
+4. **The LP fallback at `depth < 0.9`**, self-labelling (§8.6f above): 24% of
+   member-steps, 72% of the error, with the four recorded traps.
+5. **Application-scoped coverage**, run the cheap way -- generate free from
+   `c_surr`, farthest-point subsample, label ~25 per composition across many
+   compositions. On round 4's evidence this buys `dc` and structure, not the
+   endpoint.
+
+##### What the literature says, and where it does not help
+
+* **The framing** is amortized optimization (Amos 2023) and the argmin map of a
+  parametric LP (mpLP; Borrelli/Bemporad/Morari). B6 measured that the active set
+  does not discriminate the failure, and testing mpLP structure properly needs the
+  LP's **optimal basis** stored at label time, which the shards do not record.
+  That is the one change that would reopen it.
+* **The offline-MBO conservatism literature points the wrong way here.** It exists
+  for surrogates being *optimised against*; Head B is being *integrated*. Nothing
+  in it addresses keeping an unconstrained estimator honest along a trajectory.
+* **The right neighbours are hybrid and fallback methods.** Basis reuse in
+  community dFBA (bioRxiv 2020) is the non-ML baseline any speed claim must
+  acknowledge and the natural fallback in (4).
+* **For the secretion bound**: elemental balancing and conserved moieties (Famili
+  & Palsson 2003; Haraldsdottir & Fleming 2016) give the constraint, DC3 gives the
+  completion/correction mechanism -- and this project's own measured lesson is
+  that DC3's *correction* bought the composition (§8.6d's clamp) while its
+  *projection* bought 0.001 (§8.6f's B1).
+* **For (3)**: neural ODEs and differentiable simulators. The nearest applied
+  precedent, the reactive-transport ANN (Sci Rep 2025), does **not** do it, and its
+  own error analysis is about this same near-depletion regime.
+* **For §13.6**: conformal prediction with a distance-aware nonconformity score,
+  calibrated on community-regime states.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)
@@ -3329,6 +3417,20 @@ the hardest downstream use, and most uses need less.
 | §13.4 steady state | `mu` level + Jacobian | `mu` rel err <= 3%; `J` rank-deficient | needs M6 + preconditioning |
 | §13.5 interaction | `z` magnitude | worst R² 0.907 | exploratory |
 | §13.6 posterior | a calibrated error model | none exists | blocked until one does |
+
+**Revised 2026-09-03, after §8.6f.** Head A is now exact where §8.1 evaluates it
+(`mu_rel_median <= 5e-4` on all 30 cells, 3e-5 at both horizons), so every row
+below is a Head B statement, and two things changed the verdicts:
+
+| Use case | Head B in the loop? | Revised verdict |
+|---|---|---|
+| §13.2 growth maximisation | **no** — `Surrogate(behaviour_dir=None)` | **unaffected by all of §8.6f.** 17/20 true improvements, median optimism 0.3% |
+| §13.3 minimal medium | **no** | unaffected; V6 is blocked on essentiality, not on Head B |
+| §13.1 structure, ordering, cross-feeding | yes | **safe at a 4-doubling horizon** — recall 1.00, median flux cosine 0.995. **Not** safe per link in a starved culture: p05 cosine reaches **−0.44** below depth 0.1 |
+| §13.1 quantitative yield / batch endpoint | yes | **not safe at a long horizon** — 4.1% overall at 8 doublings, worst cell 0.70 — and §8.6f's round 4 shows **more Head B accuracy does not fix it** |
+| **§13.4 steady state / SteadyCom / §8.4** | yes | **the most exposed use case, and the next milestone.** A steady state *is* a drawn-down medium — the regime where Head B is worst — evaluated inside every Newton iteration. M5's shallow numbers must not be assumed to transfer; measure at the equilibrium |
+| §13.5 interaction magnitude | yes | exploratory, unchanged |
+| §13.6 posterior | yes | still blocked, but the error model now has a candidate: the reach proxy as a distance-aware nonconformity score, calibrated on community-regime states (never on held-out design media) |
 
 ### 13.8 New pitfalls
 

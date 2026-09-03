@@ -1905,8 +1905,17 @@ relative-error re-anchoring; each was compensating for that lift.
    motivation left, and `--w-prox` was already refuted directly.
 5. **Do not** re-run `cfs topup` against held-out media from the design being
    changed; that is the naive Stage 4 and it has failed twice.
-6. **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
-   touching cut selection again.
+6. **Head B stock-take: design spec §8.6g** — the five issues, the revised
+   per-use-case verdicts (§13.7), the ranked solutions and what the literature
+   does and does not offer. The two convex design programs (§13.2, §13.3) use
+   Head A alone and **none of the Head B findings touch them**; §13.4 steady state
+   is the most exposed, because an equilibrium *is* a drawn-down medium. Top
+   untested idea: the **secretion-side bound** `E z <= 0` (elemental balance as a
+   provable one-sided inequality, where 48-69% of the error is) — premise-check
+   the violation before building it. Then trajectory-level training, then the LP
+   fallback at `depth < 0.9`.
+7. **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
+   touching cut selection again, and Part 3d before touching Head B.
 
 **Caveat that affects all of it:** `x = u/(u+s)` takes `s` from the training
 rows, so every relabel silently changes the input coordinate and two label roots

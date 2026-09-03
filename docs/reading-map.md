@@ -249,9 +249,22 @@ exchanges at 99.99% of variance, and `dual ⇒ flux on the bound` at **0.996–1
 
 **The measured verdict, in one line.** The uptake side is already handled by a
 projection (§8.6d's clamp) and complementary slackness adds nothing on top of it;
-the error lives on the **secretion** side (48–69% of it), which is unbounded above,
-and the only structure that constrains it is the flux subspace and the conservation
-relations inside it. That is why B1 leads the ranked list in §8.6f.
+the error lives on the **secretion** side (48–69% of it), which is unbounded above.
+
+**Updated 2026-09-03, after B1–B6 all ran.** The subspace (B1) was built and is
+null at both horizons; the active set (B6) does not discriminate the failing states
+(Hamming 0.0); coverage (rounds 2–4) improves `dc_rel` exactly as the reach proxy
+predicts and does not reach the batch endpoint. So the open question moved from
+*which class* to *what to do about extrapolation and about a discrete endpoint*,
+and the reading below is the part of the literature that speaks to that.
+
+| Reference | Why it matters here |
+| --- | --- |
+| Chen, Rubanova, Bettencourt, Duvenaud, **Neural Ordinary Differential Equations**, NeurIPS 2018; the differentiable-simulator literature generally | §8.6g's solution 3, and the only one that optimises what the gate measures. Six times now a better `dc` has not bought the endpoint, because *when* a batch stops turns on which metabolite empties first; a loss on the trajectory sees that and a per-state MSE cannot. `compose.dfba.integrate` is already an explicit Euler map in JAX, so the adjoint is available. |
+| **Minimizing the Number of Optimizations for Efficient Community dFBA**, [bioRxiv 2020](https://www.biorxiv.org/content/10.1101/2020.03.12.988592) (also Part 4) | The non-ML baseline *and* the shape of the fallback in §8.6g's solution 4: reuse/short-circuit the LP where it is cheap, solve it where it is not. Our trigger is predicted depletion depth (24% of member-steps carry 72% of the error); theirs is basis validity. Any speed claim has to be stated against this, not against a cold LP. |
+| Settles, **Active Learning Literature Survey** (also 3b) | Read again for the *self-labelling* loop: the failure it documents is acquisition over a pool drawn from the training distribution. The fallback avoids it structurally — the pool is the trajectory, which is the shifted distribution — and the remaining risk is the covariate shift the loop induces in itself, which is why every label is kept and the trajectory re-run after each retrain (Guigues's store-and-select, 3a). |
+| Vovk, Gammerman & Shafer (also 3c); Angelopoulos & Bates, **A Gentle Introduction to Conformal Prediction** | §13.6's missing error model. The nonconformity score is available and measured: NN distance in `x` predicts `dc_rel` at Spearman +0.673 **across cells**. The caveat is now measured too — the same quantity is *anti*-correlated with error **within** a trajectory (lift 0.9x), so calibrate per run, not per step. |
+| Famili & Palsson 2003; Haraldsdóttir & Fleming 2016; Donti et al., **DC3** (all above) | Re-read for §8.6g's solution 2, the secretion-side inequality `E z <= 0`. Note which half of DC3 has paid here: the *correction* (the MM clamp) bought the composition, the *projection* (B1) bought 0.001. |
 
 ---
 
