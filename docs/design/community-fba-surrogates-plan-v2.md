@@ -2856,6 +2856,53 @@ then the culture is dying and both trajectories have stopped growing (B4 point 3
 4. **Score the fallback on the endpoint, not on `dc`.** The two disagree, five
    times over.
 
+##### Depletion states can be explored pre-emptively, and generating them needs no LP
+
+The fallback above spends LP solves online. Most of that is avoidable, because
+**generating** a depletion state costs nothing -- only labelling one does. A
+depleted medium is `c0` minus a conical combination of the members' consumption
+vectors, and a surrogate that is *wrong* about those vectors can still land in the
+right region: a generator does not have to be accurate, only to be in-distribution
+for the target.
+
+**Measured, and it holds exactly.** `cfs community` stores `c_surr` beside
+`c_true`, so the two pools can be compared for free. Building the round-4 pool from
+the **surrogate's own** n=15 paths instead of the LP truth's (`make_depl_pool.py
+... surr <runs>`), then scoring reach against the benchmark's deep states:
+
+| size | pool from LP-truth paths | pool from surrogate paths |
+| --- | --- | --- |
+| 5 | 4.427 | 4.428 |
+| 10 | 3.540 | 3.532 |
+| 21 | 3.068 | **3.058** |
+| all | 3.872 | **3.808** |
+
+Identical to three decimals. **The 48 000 LP solves behind the n=15 truth runs were
+needed only to score them, not to build the pool** -- `cfs simulate` (§13.1,
+surrogate-only, no LP) generates the same states for free.
+
+**And the pool is ~24x redundant.** Median NN distance *within* round 4's 598
+media is **0.006**, against 3.9 to the states they are meant to cover; a
+farthest-point cover at radius 1.0 needs **25 of the 598**. Consecutive
+integration steps are near-duplicates -- the same finding as the Level 1 trial
+pool, where 5x subsampling selected the identical cuts.
+
+**So the label budget should be spent the other way round.** Generate massively and
+for free (thousands of surrogate-only communities, `cfs simulate`), filter by
+predicted depth, **farthest-point subsample to a coverage radius**, and only then
+label. At 25 points per composition, round 4's 598 solves would have covered ~24
+different community compositions instead of two, which is exactly the axis §8.6d
+found to be the limit ("one community's forward path does not reach another's").
+The online fallback then handles what pre-emption misses, and its fire rate is the
+measurement that says whether pre-emption worked.
+
+**Cold start.** A genome with no head yet cannot run this. The analytic version
+needs no integrator and no head: step `c <- c0 - lambda * sum_i X_i z_i` using the
+organisms' *label* `z` vectors, over a ladder of `lambda` and random member
+subsets, clipped at zero -- a one-step Euler cone through the same region. That
+preserves §4.7's property that a new GEM anchors itself, and it belongs in
+`design.sample_media` as a depletion stratum rather than as a separate pool.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)
