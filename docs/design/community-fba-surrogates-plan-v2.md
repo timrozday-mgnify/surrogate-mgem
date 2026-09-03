@@ -2662,7 +2662,13 @@ retrained (P14).
 
 Held-out Head B is unchanged (worst R2 0.9354 -> 0.9346, median 0.9638 -> 0.9649).
 
-1. **Null on the trajectory at both horizons**, 10/30 and 8/30 cells better.
+1. **Null on the trajectory at both horizons**, 10/30 and 8/30 cells better --
+   and by depth it is mildly *worse* in every band, the depleted ones it was built
+   for included. The true trajectories are identical between arms, so the depth
+   distribution is too and the bands compare directly: median log-X 0.0101 ->
+   0.0120 (0.5-0.9), **0.0304 -> 0.0348** (0.1-0.5), 0.0160 -> 0.0269 (0.01-0.1),
+   0.0034 -> 0.0141 (dead). A round is not free: it moves `x_scale`, so the whole
+   input coordinate shifts for labels that bought nothing.
 2. **And a fifth instance of "a strictly better rhs is not a better trajectory":**
    `dc_rel` improves on **21 of 30** cells at 8 doublings (median 0.556 -> 0.504)
    while the endpoint does not follow.
