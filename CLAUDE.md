@@ -1943,8 +1943,21 @@ relative-error re-anchoring; each was compensating for that lift.
    run read as null — check the fire rate against the measured violation rate
    before believing a projection did nothing (`20hm_bands/proj_size.py`, which
    also gives the honest premise number: the violation is 8-11% of *element
-   turnover* but a median **2.8% of `||z||`**). Next: trajectory-level training,
-   then the LP fallback at `depth < 0.9`.
+   turnover* but a median **2.8% of `||z||`**).
+   **Trajectory-level training passed its premise check** (2026-09-03,
+   `20hm_bands/traj_sens{,2}.py`, no solves): the endpoint is smooth and monotone
+   in `z` on **20/20 cells** — no threshold blocking gradients — and **17 of 20
+   could close their whole endpoint error with a <= 10% relative move in `z`**,
+   with the linearisation holding (`||g||` at eps 0.01 vs 0.03 agrees within 5% on
+   15 cells, within 1.6x on the rest). The load-bearing number: the endpoint is
+   **~3 orders more sensitive to the *direction* of the `z` error than to its
+   magnitude** (`||g||` 0.067 uniform vs 272 full-space on one cell) — the
+   mechanism behind six instances of [[rhs-accuracy-does-not-buy-the-endpoint]],
+   since a `z_scale`d per-state loss spends itself on magnitude. It cannot reach
+   the n=21 draw-200 cell (`||g||` 0.198 against an error of 0.318), as expected:
+   that one is Head A's mid-`mu` over-prediction. Gradients reach ~300 through 40
+   Euler steps, so clip and prefer a whole-trajectory loss to an endpoint-only
+   one. Then the LP fallback at `depth < 0.9`.
 7. **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
    touching cut selection again, and Part 3d before touching Head B.
 

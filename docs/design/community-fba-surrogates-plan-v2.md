@@ -3088,7 +3088,37 @@ all (94.8% above 0.9 even at 8 doublings).
    [[constraint-worth-at-most-the-violation]]: measure the violation on the
    labels (should be ~0) and on the failing predictions. If the violation is
    small, it is dead like B1.
-3. **Trajectory-level training.** Backprop the endpoint through the integrator
+3. **Trajectory-level training — premise check passed, 2026-09-03, and it is the
+   strongest positive signal Head B work has had.** `20hm_bands/traj_sens.py` and
+   `traj_sens2.py` perturb one member's `z` and re-integrate the surrogate from
+   the run's own initial state (no LP solves), over 20 cells:
+
+   * **Smooth and monotone on 20/20 cells.** The feared threshold — the endpoint
+     turns on which metabolite empties first, so gradients might be blocked — does
+     not appear in the response. `integrate` clips the pool at zero, and that
+     clipping is a subgradient, not a wall.
+   * **The gradient is ample.** Estimating `||g||` by random probing
+     (`E|g.u| = ||g|| sqrt(2/pi/d)`), **17 of 20 cells could close their entire
+     endpoint error with a <= 10% relative move in `z`**, and the linearisation is
+     real: `||g||` measured at eps 0.01 and 0.03 agrees within 5% on 15 cells and
+     within 1.6x on the rest — nonlinear where the sensitivity is huge, never a
+     staircase.
+   * **The endpoint is ~3 orders more sensitive to *direction* than to
+     magnitude.** Uniform scaling of a member's `z` gives `||g||` 0.067 where the
+     full-space estimate is 272 (n=10, draw 200). That is the mechanism behind six
+     instances of "a better rhs is not a better trajectory": a per-state loss
+     weighted by `z_scale` spends itself on magnitude, and the endpoint does not
+     care about magnitude.
+   * **It cannot reach the worst cell, and should not be expected to.** n=21 draw
+     200 (error 0.318) has `||g||` 0.198, an order of magnitude short — consistent
+     with its own diagnosis, Head A's mid-`mu` over-prediction (`mu_rel` 0.0388),
+     not Head B's.
+
+   **Design constraint the check hands over:** `||g||` reaches ~300 through 40
+   Euler steps, so the training gradients will be stiff. Clip, and prefer a loss
+   over the whole trajectory to an endpoint-only one.
+
+   The original entry: Backprop the endpoint through the integrator
    instead of fitting `z` per state -- the only idea that optimises what the gate
    measures, and the only one that can see which metabolite empties first. The
    stack has the pieces (JAX; `integrate` is an explicit Euler map).
