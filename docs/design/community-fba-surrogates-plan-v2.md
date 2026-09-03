@@ -2789,6 +2789,73 @@ no closer anywhere (6.50 against 6.28), which is exactly why it was null. This i
 the §8.6d proxy -- the one predictor of eight to clear P25's bar -- used as a gate
 *before* the spend rather than as a post-mortem after it.
 
+##### The LP-fallback / self-labelling hybrid, and the trigger it needs
+
+The combination worth building is a fallback that pays for itself: at each dFBA
+step, score each member with a **runtime** trigger (no LP); above threshold, call
+`solve()` for that member at that state, use the true `z` for the step **and keep
+the row as a label**; retrain periodically. It is SDDP's forward pass with a
+stopping rule -- the framing already adopted for Head A's cut selection -- and it
+is explicitly **not** the Stage-4 active-learning failure (§8.5, Settles), whose
+defect was an acquisition pool drawn from the training distribution. Here the pool
+*is* the shifted distribution, because the trajectory chooses it.
+
+Two numbers decide it and both are measurable on trajectories already on disk
+(`fallback_roc.py`, no solves): the **fire rate** (cost) and the share of the
+accumulated `|d log X|` landing on fired steps (benefit).
+
+**The §8.6d reach proxy does not work as the trigger.** It is a *per-cell*
+predictor -- median NN distance over a whole path, Spearman +0.673 across 30 cells
+-- and it does not transfer to a per-step decision. At 8 doublings every community
+step is far (distances 3-8 throughout), so any threshold below 4 fires on 100% of
+steps, and the thresholds that do discriminate are **anti**-correlated with error:
+
+| NN threshold | fire rate | error captured | lift |
+| --- | --- | --- | --- |
+| <= 3.0 | 1.000 | 1.000 | 1.0x |
+| 4.0 | 0.915 | 0.823 | **0.9x** |
+| 6.0 | 0.654 | 0.420 | **0.6x** |
+
+Worse than random. The distance is set by where the *medium* is, which is far at
+every step; the error accrues where the *member* is depleting, and a depleting
+member can be closer to the design's low-`mu` media, not farther. **A proxy
+validated across cells is not thereby a proxy within one.**
+
+**Predicted depletion depth is the trigger.** `mu_hat(t) / mu_hat(0)` per member,
+surrogate-only, free -- and B4 measured the error rising monotonically as it falls:
+
+| depth < | fire rate | error captured | lift | (4 doublings) |
+| --- | --- | --- | --- | --- |
+| 0.99 | 0.447 | 0.807 | 1.8x | 0.329 / 0.412 |
+| 0.95 | 0.309 | 0.769 | 2.5x | 0.191 / 0.354 |
+| **0.90** | **0.239** | **0.719** | **3.0x** | 0.122 / 0.289 |
+| 0.75 | 0.163 | 0.602 | 3.7x | 0.041 / 0.124 |
+| 0.50 | 0.100 | 0.283 | 2.8x | 0.016 / 0.052 |
+
+At `depth < 0.9` the fallback solves **24%** of member-steps -- a 4x saving against
+the full LP before any retraining -- and those steps carry **72%** of the error.
+The knee is 0.75-0.9; below 0.5 the rate falls faster than the error, because by
+then the culture is dying and both trajectories have stopped growing (B4 point 3).
+
+**Four things to get right, all of them already measured traps.**
+
+1. **Pin `x_scale`.** A round moves it (P14) and every relabel silently changes the
+   input coordinate, so incremental rounds are not comparable and both heads must
+   be rebuilt. Freeze it at round 0 and pass it in; this is a change to
+   `data._stack`, and it is the prerequisite for any online loop.
+2. **Expect a discrete endpoint flip, not a smooth interpolation.** Substituting
+   truth at the fired steps changes *which metabolite empties first*, and that is
+   the mechanism behind five separate "a better rhs is not a better trajectory"
+   results. The hybrid's error will not interpolate between surrogate and truth as
+   the threshold moves; measure it, do not assume it.
+3. **No validity guarantee, so store and re-run.** Head A's cuts are valid by
+   construction and SDDP's convergence follows; Head B has no such property, so
+   the loop can oscillate as retraining moves the visited set. Keep every label
+   (Guigues's store-and-select), and re-run the trajectory after each retrain
+   rather than trusting the old one.
+4. **Score the fallback on the endpoint, not on `dc`.** The two disagree, five
+   times over.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)
