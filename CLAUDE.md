@@ -1868,7 +1868,19 @@ relative-error re-anchoring; each was compensating for that lift.
    because the shards record exchange duals and not the LP's optimal basis.
    Storing the basis and relabelling is what would reopen it. `u` beats `x` in
    that fit (0.921/0.589 vs 0.867/0.497) — a mild coordinate signal, not §7.2's.
-   **So the ranked list is closed** and what is left is a large label spend (the
+   **Round 4 then ran the large spend** — the 16 n=15 communities at 8
+   doublings, 598 labelled states, a pool whose reach to the benchmark's deep
+   states is 3.87 against the training set's 6.28. It **confirms the chain
+   `reach -> dc_rel`** (21/30 cells better, median 0.556 -> 0.482; per size
+   exactly where reach improved) **and does not reach the endpoint** (log-X 12/30,
+   median flat). Sixth and decisive instance of "a better rhs is not a better
+   trajectory". **Head B's accuracy is no longer the binding constraint on the
+   batch endpoint**; the endpoint turns on which metabolite empties first, which
+   no norm on `dc` sees. Also measured: generating depletion states needs **no
+   LP** (a pool built from `c_surr` reaches identically to one from `c_true`), and
+   the pool is 24x redundant (farthest-point cover at radius 1.0 = 25 of 598), so
+   a coverage round should generate free, subsample, and label ~25 per composition
+   across many compositions. **So the ranked list is closed** and what is left is a large label spend (the
    16 n=15 sets at 8 doublings), stating M5 at a horizon the design covers, or
    reporting the deep gate as the extrapolation benchmark it is. `dc_rel` improved on 21/30 deep cells
    while the endpoint did not follow — the fifth instance of that. Two candidates were refuted in minutes and are on file: the

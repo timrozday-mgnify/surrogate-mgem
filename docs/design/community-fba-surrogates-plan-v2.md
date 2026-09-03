@@ -2903,6 +2903,54 @@ subsets, clipped at zero -- a one-step Euler cone through the same region. That
 preserves §4.7's property that a new GEM anchors itself, and it belongs in
 `design.sample_media` as a depletion stratum rather than as a separate pool.
 
+##### Round 4's verdict: the coverage chain is real, and it stops at the endpoint
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 4 doublings, round 2 | 0.002 | 0.002 | 0.000 | 0.026 | 0.013 | 0.002 | 0.318 |
+| 4 doublings, **+ round 4** | 0.004 | 0.002 | 0.000 | **0.018** | 0.015 | 0.003 | 0.318 |
+| 8 doublings, round 2 | 0.031 | 0.135 | 0.041 | 0.053 | 0.054 | 0.041 | 0.572 |
+| 8 doublings, **+ round 4** | 0.049 | 0.137 | 0.039 | **0.027** | 0.063 | 0.042 | 0.699 |
+
+Head B held out: worst R2 0.9354 -> 0.9294, median 0.9638 -> 0.9641 -- unchanged,
+as every round has been (P24).
+
+1. **The chain `reach -> dc_rel` is confirmed, and this is the first time it was
+   predicted before the spend rather than fitted after it.** `dc_rel` improves on
+   **21 of 30** cells (median 0.556 -> 0.482 at 8 doublings) and per size it tracks
+   exactly where reach improved: n=5 0.362 -> 0.284, n=10 2.816 -> 2.484, n=21
+   2.771 -> 2.481. The sizes whose reach got *worse* (n=2, n=3 -- a 15-member draw
+   is much richer than a 2-member one) are the sizes whose `dc_rel` did not move.
+   §8.6d's proxy has now earned its keep twice.
+2. **And it stops there.** log-X is better on 12 of 30 and its median is flat
+   (0.0411 -> 0.0417). n=10 halves (0.053 -> 0.027); n=21 *worsens* (0.054 ->
+   0.063) on the largest reach gain in the set. **Sixth instance of "a strictly
+   better rhs is not a better trajectory", and the decisive one**: the mechanism
+   was stated in advance, the money was spent, the predicted metric moved, and the
+   endpoint did not.
+3. **So Head B's accuracy is no longer the binding constraint on the batch
+   endpoint.** Two more coverage rounds would buy more `dc_rel` and, on this
+   evidence, no log-X. What is left is the endpoint's own sensitivity: `d(log X)`
+   integrates `mu`, but *when* the culture stops turns on **which metabolite
+   empties first**, a discrete outcome that no norm on `dc` can see and no
+   improvement in `dc` reliably fixes.
+
+**What this redirects the work to**, in order:
+
+- **Report what the heads are good at.** §13.7 already says "rates only; prefer
+  §13.4" for quantitative yield. That is now measured rather than cautious:
+  structure, ordering, cross-feeding recall and `dc` are all strong and improving;
+  the batch endpoint is not, and is not the metric to tune on.
+- **Trajectory-level training** (§8.6f solution 3) is the only remaining idea that
+  optimises what the endpoint measures -- backprop the endpoint through the
+  integrator instead of fitting `z` per state. Everything else on the list
+  optimises `dc`, and `dc` has now been shown six times not to carry.
+- **The LP fallback** at `depth < 0.9` (24% of member-steps, 72% of the error),
+  which sidesteps the question by substituting truth exactly where the discrete
+  flips happen.
+- And if a coverage round *is* run, run it the cheap way: generate free, subsample
+  by farthest point, label ~25 per composition across many compositions.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)
