@@ -1920,11 +1920,20 @@ relative-error re-anchoring; each was compensating for that lift.
    per-use-case verdicts (§13.7), the ranked solutions and what the literature
    does and does not offer. The two convex design programs (§13.2, §13.3) use
    Head A alone and **none of the Head B findings touch them**; §13.4 steady state
-   is the most exposed, because an equilibrium *is* a drawn-down medium. Top
-   untested idea: the **secretion-side bound** `E z <= 0` (elemental balance as a
-   provable one-sided inequality, where 48-69% of the error is) — premise-check
-   the violation before building it. Then trajectory-level training, then the LP
-   fallback at `depth < 0.9`.
+   is the most exposed, because an equilibrium *is* a drawn-down medium.
+   **The secretion-side bound `E z <= 0` passed its premise check (2026-09-03,
+   `20hm_bands/element_bound.py`, no solves) — the first constraint to.** The
+   labels satisfy it *exactly* (violation rate 0.0000 on C/N/P/S over 21k rows,
+   dust rows dropped); Head B violates it on **39/37/34/43%** of held-out label
+   media and on **53% for carbon** at the states in failing cells, where the
+   median net carbon flux is *positive* — more carbon out than in. The excess is
+   **8-11% of that element's turnover** against Head B's own 12-26% error, so it
+   clears [[constraint-worth-at-most-the-violation]] by a wide margin (B1's was
+   0.9-8.7%). And unlike `--w-mm` it is **reachable in-distribution**, so a
+   training hinge is possible as well as an inference-time correction — build the
+   correction first (§8.6d's clamp bought the composition, §8.6f's projection
+   bought 0.001) and score it on the **endpoint**, not on `dc_rel`. Then
+   trajectory-level training, then the LP fallback at `depth < 0.9`.
 7. **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
    touching cut selection again, and Part 3d before touching Head B.
 

@@ -3007,7 +3007,37 @@ all (94.8% above 0.9 even at 8 doublings).
    **must not** be used per step (measured: lift 0.9x, worse than random); the
    second is the per-step one (lift 3.0x). Together they make the output honest
    and give §13.6 its missing nonconformity score.
-2. **A secretion-side bound — the last untested structural constraint, and it sits
+2. **A secretion-side bound — premise check passed, 2026-09-03, and it is the
+   first constraint to do so.** `20hm_bands/element_bound.py` (no LP solves; the
+   elemental matrix is read off the GEMs' formulas, 444/444 exchanges covered)
+   measures `E z <= 0` for C, N, P, S. Rows whose gross uptake of an element is
+   dust are dropped — they have no bound to violate and divide by ~0, which is
+   where a spurious 1e7 came from on the first pass.
+
+   | violation rate | C | N | P | S | excess / element turnover (C) |
+   | --- | --- | --- | --- | --- | --- |
+   | **labels** (the LP's own `z`, 21k rows) | **0.0000** | 0.0000 | 0.0000 | 0.0000 | 0.000 |
+   | Head B, 4200 held-out label media | 0.391 | 0.371 | 0.344 | 0.429 | 0.085 (p95 0.181) |
+   | Head B, 936 trajectory member-states | 0.209 | 0.099 | 0.169 | 0.125 | 0.056 |
+   | **Head B, the 198 states in cells with log-X > 0.05** | **0.532** | 0.180 | 0.279 | 0.398 | **0.110** (p95 0.356) |
+
+   Both legs pass. The labels satisfy it **exactly**, so it is provable and not an
+   approximation; and the excess is **8-11% of that element's turnover** against
+   Head B's own 12-26% relative error, where B1's off-manifold component was
+   0.9-8.7%. On the failing cells the median net carbon flux goes *positive*
+   (+0.022 of gross uptake, p95 +1.11) — half those states secrete more carbon
+   than they took up.
+
+   **Unlike `--w-mm`, it is reachable in-distribution.** The MM hinge failed
+   because the violation was 0.053% on training rows and the loss had nothing to
+   grip; here 34-43% of *held-out label media* violate. So both mechanisms are
+   available — a hinge in training and a DC3-style correction at inference — and
+   this project's own measurement says to build the **correction** first (§8.6d's
+   clamp bought the composition; §8.6f's projection bought 0.001). The trap to
+   respect is [[better-rhs-is-not-a-better-trajectory]]: score it on the endpoint
+   over 3 draws x 10 communities, not on `dc_rel`.
+
+   The original entry: **the last untested structural constraint, and it sits
    on the 48-69%.** You cannot secrete more carbon, nitrogen or electrons than you
    took up: `E z <= 0` element-wise against the biomass drain, a *provable*
    one-sided inequality on the unbounded side, the analogue of the MM bound on the
