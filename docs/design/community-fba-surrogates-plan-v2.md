@@ -2531,11 +2531,114 @@ Kept in the code, default **0** (off), the discipline `--w-prox`, `--w-mm` and
 it reconstructs held-out truth to 0.001-0.005 and is the cheapest available
 statement of what Head B's target actually is.
 
-**What this leaves for Head B**: B2 (weight the loss by what `dc` feels -- the
-error is 48-69% on secretion, and the composition consumes `sum_i X_i z_i`, not a
-per-metabolite MSE), B3 (drop sub-floor rows at training) and B4 (re-state M5 over
-depletion depth). B5 is now firmly subsumed -- conservation relations are inside
-the subspace B1 restricted to, and restricting to it changed nothing.
+**What this leaves for Head B**: B2, B3 and B4, taken in that order below. B5 is
+now firmly subsumed -- conservation relations are inside the subspace B1 restricted
+to, and restricting to it changed nothing.
+
+##### B2 is refuted before it was built — the relative error is flat in flux scale
+
+The premise was that the loss divides every metabolite by its own std (`z_scale`),
+so a 1e-3 ion counts as much as a 400 mmol/gDW/h gas, while `dc = sum_i X_i z_i`
+is consumed in raw units where the gases dominate -- and §8.6e's attribution found
+the error on exactly those (`EX_h2o_e`, `EX_h_e`, `EX_akg_e`, `EX_succ_e`).
+
+**The attribution was reading a scale effect.** Raw squared error is dominated by
+big fluxes whatever the model does, so the question is whether the *relative*
+error is worse there. Held out, per (organism, metabolite), 2272 cells
+(`20hm_bands/loss_alloc.py`, no solves):
+
+| `z_scale` quintile | median `z_scale` | median relative error | share of raw squared error |
+| --- | --- | --- | --- |
+| 1 | 2.5e-4 | 0.034 | 0.000 |
+| 2 | 0.020 | 0.662 | 0.000 |
+| 3 | 0.076 | 0.311 | 0.002 |
+| 4 | 0.388 | 0.688 | 0.093 |
+| 5 | 3.5 | 0.219 | **0.905** |
+
+**Spearman(`z_scale`, relative error) = +0.018.** 90.5% of the raw error sits in
+the top quintile purely because those fluxes are ~1e4x bigger. Re-weighting toward
+raw units would chase error that is already proportionally as accurate as the
+rest, and would sell the small metabolites -- which are the ones that decide *which
+metabolite empties first*, and a batch endpoint turns on that. Not built. This is
+the check that would have saved B1, applied first this time.
+
+##### B3 is the wrong sign — the floor is self-consistent, and it is not learned
+
+The premise was that flooring `mu` corrupts the target. **It does not.** Training
+divides by `max(mu_label, floor)` and `compose.dfba` multiplies by
+`max(mu_hat, floor)`, so the reparametrisation is consistent end to end: with the
+head right and `mu_hat ~ mu_label`, `z` is recovered exactly however far below the
+floor the state is. Dropping those rows would remove the only supervision the
+floored regime has -- and there is real supervision to remove: **12% of training
+rows (9-20% per organism) are sub-floor**, carrying 3% of the squared target
+(`20hm_bands/floor_rows.py`). The p4 design is bottom-heavy after `probe_lo = -12`,
+so this is far more than the "1% of media" the original note assumed.
+
+**What §8.6e actually measured, re-read.** At the depletion-sweep states
+`|z_hat| / |z_true|` = 3318 and `max(mu_hat, floor) / mu_true` = 4172. Those agree
+only if the head is emitting `z_true / mu_true` -- the **un**floored specific flux
+-- where its training target at such `mu` is `z_true / floor`. So the head
+extrapolates the above-floor relation into the sub-floor region instead of the
+floored one it was trained on. Not a shortage of sub-floor rows: a shortage of
+sub-floor rows *at co-depleted media*, since §4.3's low-`mu` strata starve one or
+a few metabolites while a batch endpoint draws the whole pool down at once. That
+is §8.6d's coverage finding again, one regime deeper -- and it makes B4 the
+prerequisite, not the afterthought.
+
+##### B4: M5's gate was a property of the horizon (2026-09-03)
+
+`20hm_bands/depth_gate.py` conditions the trajectory error on **depletion depth**
+-- a member's true growth rate over its own rate at `t = 0` -- with **no LP
+solves**: `integrate` advances biomass as `X * exp(dt * mu)`, so `mu_true` is
+recoverable from the stored `x_true` exactly. Over the 30 benchmark cells at the
+default 4 doublings, 15 446 member-steps:
+
+| member depth | share of steps | median log-X err | p90 |
+| --- | --- | --- | --- |
+| 0.9-1.0 | **0.862** | 0.0000 | 0.0028 |
+| 0.5-0.9 | 0.110 | 0.0058 | 0.0119 |
+| 0.1-0.5 | 0.014 | 0.0084 | 0.0167 |
+| 0.01-0.1 | **0.001** | 0.0672 | 0.0675 |
+| < 0.01 (dead) | 0.003 | 0.0012 | 0.0023 |
+
+**86% of the benchmark is spent within 10% of maximum growth, and 0.4% below
+depth 0.1** -- 51 steps of 15 446, all of them in 2-member communities; sizes 3,
+5, 10 and 21 never go below 0.1 at all. §8.6e's "42 of 780 member-states" was
+right, and this is the same number at 20x the sample, for free.
+
+Re-running the identical 10 communities and 3 draws at `--doublings 8`:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 4 doublings (the gate as stated) | 0.002 | 0.002 | 0.000 | 0.026 | 0.013 | **0.002** | 0.318 |
+| **8 doublings** | 0.031 | 0.135 | 0.041 | 0.053 | 0.054 | **0.041** | 0.572 |
+
+1. **"M5 met at n=2/3/5 and n=21" was a statement about the horizon.** Doubling it
+   costs 20x overall and **every size fails the 1% gate**, by 3-13x. Nothing about
+   the heads changed. The share of member-steps below depth 0.1 goes 0.017 -> 0.185
+   at n=2 and 0.000 -> 0.146 at n=3.
+2. **It is entirely Head B.** `mu_rel_median` is **3e-5 in both** and its max
+   0.0387 in both -- the same single §8.5-class cell. `dc_rel` median goes
+   0.190 -> **0.556** and max 2.05 -> **6.49**. V5 still does not bite
+   (`overgrowth` max +0.071).
+3. **The error peaks in the *transition*, not at the bottom.** Median log-X by
+   depth at 8 doublings: 0.0001 (>0.9), 0.0101, **0.0304** (0.1-0.5), 0.0160
+   (0.01-0.1), 0.0034 (dead). Once a member is fully starved both trajectories
+   stop growing and the error freezes at whatever it accumulated on the way down,
+   so the deepest bins flatter the model. **Quote the 0.1-0.5 band.** This refines
+   §8.6e: its flux-magnitude blow-up is real, but it lands where `d(log X)/dt` has
+   already gone to zero.
+4. **State the gate with its horizon.** A batch community has two clocks (§8.1),
+   and the inoculum is solved so the pool empties at the end of the horizon --
+   which fixes *when* starvation happens but not how long the culture spends in
+   it. Quote M5 at both 4 and 8 doublings, or with its depth distribution; a
+   single number is a statement about the integration window.
+
+**And B1 gets its fair test, and is still null.** The deeper gate is the sensitive
+one, so the basis head was re-run on it: overall **0.041 -> 0.039**, sizes
+0.024 / 0.160 / 0.040 / 0.057 / 0.051, better on **12 of 30** cells, `dc_rel`
+median *worse* (0.556 -> 0.736). The refutation was not an artifact of a benchmark
+that never visited the failure regime.
 
 ---
 

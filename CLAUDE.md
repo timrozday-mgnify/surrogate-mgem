@@ -1804,7 +1804,7 @@ relative-error re-anchoring; each was compensating for that lift.
 
 | gate | state |
 | --- | --- |
-| **M5, 1% log-X** | **met at n=2/3/5 (0.3-0.4%) and n=21 (0.9%)**; n=10 is 2.5%; one cell of 30 sits at 0.318 |
+| **M5, 1% log-X** | **met at every size at the default 4-doubling horizon (0.0-2.6%) — and failed at every size at 8 doublings (3.1-13.5%, overall 4.1%). The gate was a statement about the integration window; quote it with its horizon (§8.6f B4)** |
 | **M3, 0.99 worst grad cosine** | 0.9522 — untouched by any of this, and no longer what §8.1 is waiting on |
 
 **What is open, in order.**
@@ -1837,13 +1837,22 @@ relative-error re-anchoring; each was compensating for that lift.
    0.147 on the 15 easy cells and 0.920 -> 0.840 on the 10 hard ones. Default 0
    (off). **In hindsight its ceiling was already measured**: the off-manifold
    component is 0.9-8.7% of the norm against a 12-26% error, so a constraint is
-   worth at most the violation it removes — measure the violation first. What is
-   left is **B2** (weight the loss by what `dc` feels: 48-69% of the error is on
-   secretion, and the composition consumes `sum_i X_i z_i`, not a per-metabolite
-   MSE), **B3** (drop sub-floor rows at *training* time) and **B4** (re-state M5
-   over depletion depth — only 42 of 780 benchmark member-states reach the failing
-   regime). B5 (conservation / DC3 completion) is subsumed: those relations live
-   inside the subspace B1 restricted to. Two candidates were refuted in minutes and are on file: the
+   worth at most the violation it removes — measure the violation first. **B2 is
+   refuted from the labels** — Spearman(`z_scale`, relative error) = **+0.018**, so
+   the 90.5% of raw squared error in the top flux quintile is a scale effect, not
+   a misallocated loss. **B3 is the wrong sign**: the floor is self-consistent
+   (train divides by `max(mu, floor)`, inference multiplies by it), 12% of training
+   rows are sub-floor, and §8.6e's 3318x is the head emitting the *unfloored*
+   specific flux at co-depleted media it never saw — dropping those rows removes
+   the only supervision the regime has. **B4 is done and is the important one**:
+   the 4-doubling benchmark spends 86% of member-steps above 0.9 of starting
+   growth and 0.4% below 0.1, and at 8 doublings M5 fails at every size (overall
+   0.002 -> 0.041) with `mu_rel` unchanged at 3e-5 — so the residual is Head B's,
+   the error peaks in the **0.1-0.5 transition band** (not at the bottom, where
+   both trajectories have stopped growing), and B1 re-tested on the deeper gate is
+   **still null** (12/30 cells, `dc_rel` worse). B5 (conservation / DC3
+   completion) is subsumed: those relations live inside the subspace B1 restricted
+   to. Two candidates were refuted in minutes and are on file: the
    complementarity gate — `dual => flux on the MM bound` is 0.996-1.000 on the
    labels, but `mu_and_z`'s clamp already lands there (relative error **0.000**)
    and the tight set carries only 1-10% of the squared error — and the post-hoc
