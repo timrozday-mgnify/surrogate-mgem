@@ -2989,7 +2989,19 @@ all (94.8% above 0.9 even at 8 doublings).
 
 ##### What looks promising, ranked
 
-1. **Ship the runtime predictors.** Per member per step, free: the reach proxy
+1. **Ship the runtime predictors — done 2026-09-03.** `cfs simulate`'s report now
+   carries `reach` (per member, at `t = 0`), `depth_final` and
+   `frac_steps_below_depth_0.9`, all surrogate-only and all free. The reach proxy
+   needs the training media at runtime, which only the checkpoint can supply, so
+   `behaviour.save` writes **`reference_x.npz`** — 512 strided training rows per
+   organism in `x`, 1.3 MB compressed. A checkpoint without it reports
+   `reach: null`; `20hm_bands/ref_posthoc.py` adds one to an existing checkpoint
+   with no refit. The subsample reads **5-11% above** the exact NN distance
+   (2.61 vs 2.475, 1.63 vs 1.469 on benchmark cell 0), so read it against the
+   thresholds — held-out media ~0.10, Head B's failures at 4-8 — and not against
+   `nn_proxy.py` to three decimals. The original entry:
+
+   Per member per step, free: the reach proxy
    (NN distance in `x`) and predicted depletion depth `mu_hat(t)/mu_hat(0)`. The
    first is a *per-cell* accuracy predictor (Spearman +0.673 on `dc_rel`) and
    **must not** be used per step (measured: lift 0.9x, worse than random); the

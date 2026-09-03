@@ -134,6 +134,12 @@ class Surrogate:
         self.mu_floor = (
             np.asarray(bmeta["mu_floor"], dtype=np.float64) if "mu_floor" in bmeta else None
         )
+        # §8.6g(1): the reach proxy's reference set, written by `behaviour.save`.
+        # Absent from a pre-2026-09-03 checkpoint, in which case `reach` is None.
+        ref = None if behaviour_dir is None else Path(behaviour_dir) / "reference_x.npz"
+        self.ref_x = (
+            np.load(ref)["x"].astype(np.float32) if ref is not None and ref.exists() else None
+        )
         self.km = _km_vector(self.exchanges)
         self._jnp = jnp
         self.members = (
@@ -180,6 +186,28 @@ class Surrogate:
         # head predicted `EX_glyc3p_e` uptake of -329 against a physical floor of
         # -14, on 28 of one member's 213 exchanges at once.
         return mu, np.maximum(z, -self._B.VMAX * (c / (self.km + c))) * self.mask
+
+    def reach(self, c: np.ndarray) -> np.ndarray | None:
+        """NN distance in `x` from medium ``c`` to each member's own training media.
+
+        §8.6g(1). A *per-cell* accuracy predictor -- Spearman +0.673 against
+        `dc_rel` over the 30 §8.1 cells -- and measured **not** to work per step
+        (lift 0.9x, worse than random). Held-out media sit at ~0.10; the states
+        where Head B fails are at 4-8. `depth` is the per-step instrument.
+
+        The reference set is 512 strided training media, not all ~32000, so this
+        reads 5-11% *above* the exact distance (measured). Compare it against the
+        thresholds above, not against `nn_proxy.py`'s numbers to three decimals.
+        """
+        if self.ref_x is None:
+            return None
+        xq = self._x(c)[:, 0]
+        return np.array(
+            [
+                np.linalg.norm((self.ref_x[k] - xq[k])[:, self.mask[k]], axis=1).min()
+                for k in self.members
+            ]
+        )
 
 
 def _km_vector(exchanges: list[str]) -> np.ndarray:
@@ -662,6 +690,7 @@ def simulate(
     x0 = biomass * share
 
     traj = integrate(rhs, c0, x0, hours / steps, steps)
+    reach = sur.reach(c0)
     Path(out).mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         Path(out) / "trajectory.npz",
@@ -690,6 +719,15 @@ def simulate(
             [g for g, m in zip(organisms, traj.mu[-1], strict=True) if m <= 0]
             if dilution > 0
             else None
+        ),
+        # §8.6g(1)'s two runtime predictors, both free and both surrogate-only.
+        # Depth is `mu_hat(t)/mu_hat(0)` per member: B4 measured the error rising
+        # monotonically as it falls, and a fallback at depth < 0.9 captures 72% of
+        # the trajectory error on 24% of the member-steps.
+        "reach": None if reach is None else reach.tolist(),
+        "depth_final": (traj.mu[-1] / np.where(mu0 > 0, mu0, np.nan)).tolist(),
+        "frac_steps_below_depth_0.9": float(
+            np.mean(traj.mu / np.where(mu0 > 0, mu0, np.nan) < 0.9)
         ),
         "t_exhausted": _exhausted(traj),
         "first_empty": _first_empty(traj, sur.exchanges),

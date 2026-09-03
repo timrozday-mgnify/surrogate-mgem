@@ -1905,6 +1905,17 @@ relative-error re-anchoring; each was compensating for that lift.
    motivation left, and `--w-prox` was already refuted directly.
 5. **Do not** re-run `cfs topup` against held-out media from the design being
    changed; that is the naive Stage 4 and it has failed twice.
+5b. **The runtime predictors are shipped (2026-09-03, §8.6g's item 1).**
+   `cfs simulate` reports `reach` per member at `t = 0`, plus `depth_final` and
+   `frac_steps_below_depth_0.9`; nothing solves an LP. `reach` needs the training
+   media at runtime, so `train-behaviour` now writes **`reference_x.npz`** beside
+   the head (512 strided rows per organism, 1.3 MB) and
+   `20hm_bands/ref_posthoc.py` back-fills an old checkpoint. A checkpoint without
+   it reports `reach: null` rather than failing. The subsample reads 5-11% high
+   against the exact distance — read it against the thresholds (held-out ~0.10,
+   Head B's failures at 4-8), not against `nn_proxy.py`. **`reach` is per cell
+   only**: per step it is worse than random (lift 0.9x); `depth` is the per-step
+   instrument (lift 3.0x, and it is the LP fallback's trigger).
 6. **Head B stock-take: design spec §8.6g** — the five issues, the revised
    per-use-case verdicts (§13.7), the ranked solutions and what the literature
    does and does not offer. The two convex design programs (§13.2, §13.3) use

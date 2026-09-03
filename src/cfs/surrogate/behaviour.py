@@ -362,6 +362,14 @@ def save(heads, ds: BehaviourDataset, outdir: Path, arch: dict, diagnostics: dic
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     eqx.tree_serialise_leaves(outdir / "behaviour_heads.eqx", heads)
+    # §8.6g(1): the reach proxy (NN distance in `x` to this organism's own training
+    # media) is the one measured per-cell predictor of `dc_rel` (Spearman +0.673),
+    # and `cfs simulate` has nothing but the checkpoint to compute it from. Strided
+    # rather than deduplicated: a repeated row cannot change a nearest neighbour.
+    stride = max(1, ds.x_train.shape[1] // 512)
+    np.savez_compressed(
+        outdir / "reference_x.npz", x=ds.x_train[:, ::stride][:, :512].astype(np.float16)
+    )
     (outdir / "behaviour_heads.json").write_text(
         json.dumps(
             {
