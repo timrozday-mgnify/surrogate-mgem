@@ -2748,6 +2748,47 @@ options are: label the regime properly (the 16 n=15 sets at `--doublings 8`, a
 large spend), state M5 at a horizon the design actually covers, or accept the deep
 gate as an extrapolation benchmark and report it as such.
 
+##### Round 4: the n=15 sets at 8 doublings, and the first coverage pool that reaches
+
+The large label spend, run. The 16 n=15 communities (disjoint from the M5
+benchmark) re-integrated at `--doublings 8`, 2 medium draws, ~65 min of LP truth.
+Two things had to be learned before a single medium could be chosen.
+
+**1. A 15-member community barely depletes, even at 8 doublings.** By
+`depth_gate.py`, **94.8%** of its 48 000 member-steps sit above 0.9 of starting
+growth, 1.2% in 0.1-0.5 and **0.1%** below 0.1 -- against the benchmark's 73.5% /
+5.9% / 1.0% at the same horizon. The medium is drawn over the *union* of 15 active
+subspaces, so it is rich, and the horizon ends on the fastest member's clock while
+the slow ones are still growing. **Depletion is not something a large community
+does; it is something a small one does** -- the same confound §8.6b found for
+scarcity, one clock later. It also explains the deep gate's own shape: sizes 10
+and 21 never go below depth 0.1 there either, so their 5-6% log-X error accrues
+from many steps in the 0.5-0.9 and 0.1-0.5 bands, not from a starved tail.
+
+Consequently the selection rule had to move from "the median member is below 0.5"
+(**48** states over 32 trajectories) to "**any** member has left its starting rate"
+(`max_depth 0.99`, stride 2, **598** states) -- `make_depl_pool.py` now selects on
+the *slowest* member, since the state is hard for the member that is starving.
+
+**2. It reaches, where round 3 did not.** Median NN distance in `x` from the
+benchmark's own deep states (`depth < 0.9`) to each candidate pool
+(`depl_reach.py`, no solves):
+
+| size | to the training set | to the **n=15 deep pool** | to round 3's monoculture pool |
+| --- | --- | --- | --- |
+| 2 | 4.14 | 6.23 | — |
+| 3 | 4.77 | 5.95 | — |
+| 5 | 6.10 | **4.43** | — |
+| 10 | 7.01 | **3.54** | 6.95 |
+| 21 | 7.78 | **3.07** | 7.50 |
+| all | 6.28 | **3.87** | 6.50 |
+
+The new pool **halves** the distance at n >= 5 and is farther only for n=2/3,
+whose media are much leaner than a 15-member draw. Round 3's monoculture pool was
+no closer anywhere (6.50 against 6.28), which is exactly why it was null. This is
+the §8.6d proxy -- the one predictor of eight to clear P25's bar -- used as a gate
+*before* the spend rather than as a post-mortem after it.
+
 ---
 
 ## 9. Phase 6 — minimal medium (D9)
