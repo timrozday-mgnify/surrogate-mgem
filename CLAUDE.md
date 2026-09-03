@@ -1930,10 +1930,21 @@ relative-error re-anchoring; each was compensating for that lift.
    **8-11% of that element's turnover** against Head B's own 12-26% error, so it
    clears [[constraint-worth-at-most-the-violation]] by a wide margin (B1's was
    0.9-8.7%). And unlike `--w-mm` it is **reachable in-distribution**, so a
-   training hinge is possible as well as an inference-time correction — build the
-   correction first (§8.6d's clamp bought the composition, §8.6f's projection
-   bought 0.001) and score it on the **endpoint**, not on `dc_rel`. Then
-   trajectory-level training, then the LP fallback at `depth < 0.9`.
+   training hinge is possible as well as an inference-time correction. **The
+   correction is built and on by default** (`dfba.Surrogate._element_balance`):
+   the weighted minimum-norm projection in the `z_scale` metric, a 4-D dual NNLS
+   by active-set enumeration. Paired over 3 draws x 10 communities it is
+   **14 cells better / 4 worse** on the endpoint, median 0.0023 -> 0.0019, size
+   medians and `max` unchanged, `mu_rel` and cross-feeding bit-identical. Two
+   traps it cost: a **uniform shrink** of the secretions satisfies the same
+   inequalities, is *not* a projection, and made `dc_rel` worse on 10 of the 11
+   cells it moved; and the dual's feasibility test was **sign-inverted**, so the
+   projection fired on 1.9% of states against a ~30% violation rate and the first
+   run read as null — check the fire rate against the measured violation rate
+   before believing a projection did nothing (`20hm_bands/proj_size.py`, which
+   also gives the honest premise number: the violation is 8-11% of *element
+   turnover* but a median **2.8% of `||z||`**). Next: trajectory-level training,
+   then the LP fallback at `depth < 0.9`.
 7. **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
    touching cut selection again, and Part 3d before touching Head B.
 

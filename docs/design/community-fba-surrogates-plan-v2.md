@@ -3037,6 +3037,48 @@ all (94.8% above 0.9 even at 8 doublings).
    respect is [[better-rhs-is-not-a-better-trajectory]]: score it on the endpoint
    over 3 draws x 10 communities, not on `dc_rel`.
 
+   **Built and kept, on by default (`dfba.Surrogate._element_balance`).** It is
+   the weighted **minimum-norm projection** onto `E z <= 0`, in the head's own
+   `z_scale` metric; four constraints, so the dual is a 4-D non-negative least
+   squares whose active set is found by enumerating the 15 non-empty subsets. Same
+   10 communities x 3 draws, only `mu_and_z` differing:
+
+   | paired over 30 cells | better | worse | same | median | max |
+   | --- | --- | --- | --- | --- | --- |
+   | log-X endpoint | **14** | 4 | 12 | 0.0023 -> **0.0019** | 0.318 -> 0.318 |
+   | `dc_rel` | 7 | 4 | 19 | 0.1898 -> 0.1896 | unchanged |
+   | `dc_cos` | 8 | 2 | 20 | — | — |
+   | `mu_rel`, cross-feeding | 0 | 0 | 30 | bit-identical | — |
+
+   Modest and free: size medians do not move (0.002/0.002/0.000/0.026/0.013), the
+   paired endpoint median falls 18%, and several small cells halve. The two bad
+   cells are untouched, as they should be — they are §8.5's mid-`mu`
+   over-prediction, which this bound says nothing about.
+
+   **Three things this cost, worth not repeating.**
+
+   1. **Enforcing a constraint is not projecting onto it.** The first build was a
+      uniform shrink of the secretions — one scalar per organism, provably
+      satisfying all four inequalities, ten lines. It left the endpoint unchanged
+      (9 cells better, 4 worse) and made `dc_rel` **worse on 10 of the 11 cells
+      that moved**, because it also shrinks the fluxes that were not implicated.
+      Only a projection inherits §3.3's guarantee that a set containing the truth
+      cannot increase the error.
+   2. **Measure the violation in the norm the consumer uses.** 8-11% of *element
+      turnover* sounds large; the same violation is a median **2.8% of `||z||`**
+      where it fires and 0 over all states, which is the size of effect the
+      composition then shows. `20hm_bands/proj_size.py` measures it directly, and
+      is the honest premise number for any future projection.
+   3. **A sign error in a feasibility test reads exactly like a null result.** The
+      dual's primal-feasibility check was inverted, so the projection fired on
+      **1.9%** of member-states against a measured ~30% violation rate, and the
+      first composition run came back null. The diagnostic that caught it is the
+      fire rate against the independently measured violation rate — always compare
+      those two before believing a projection did nothing. The regression test
+      checks the result against a brute-force `scipy.optimize.minimize`
+      projection with **two** elements binding: a one-element case passes with the
+      sign either way, because the identity is feasible for every subset.
+
    The original entry: **the last untested structural constraint, and it sits
    on the 48-69%.** You cannot secrete more carbon, nitrogen or electrons than you
    took up: `E z <= 0` element-wise against the biomass drain, a *provable*

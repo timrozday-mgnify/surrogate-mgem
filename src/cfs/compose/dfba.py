@@ -141,6 +141,8 @@ class Surrogate:
             np.load(ref)["x"].astype(np.float32) if ref is not None and ref.exists() else None
         )
         self.km = _km_vector(self.exchanges)
+        self._E = _element_matrix(self.exchanges)  # (4, M), the §8.6g(2) bound
+        self._bears = (self._E > 0).any(0) if self._E is not None else None
         self._jnp = jnp
         self.members = (
             list(range(len(self.genome_ids)))
@@ -185,29 +187,116 @@ class Surrogate:
         # exactly where the composition went wrong: at the worst M5 community the
         # head predicted `EX_glyc3p_e` uptake of -329 against a physical floor of
         # -14, on 28 of one member's 213 exchanges at once.
-        return mu, np.maximum(z, -self._B.VMAX * (c / (self.km + c))) * self.mask
+        z = np.maximum(z, -self._B.VMAX * (c / (self.km + c))) * self.mask
+        return mu, self._element_balance(z)
 
-    def reach(self, c: np.ndarray) -> np.ndarray | None:
-        """NN distance in `x` from medium ``c`` to each member's own training media.
+    def _raw_z(self, c: np.ndarray) -> np.ndarray:
+        """``z`` after §3.3's clamp but *before* the elemental projection.
 
-        §8.6g(1). A *per-cell* accuracy predictor -- Spearman +0.673 against
-        `dc_rel` over the 30 §8.1 cells -- and measured **not** to work per step
-        (lift 0.9x, worse than random). Held-out media sit at ~0.10; the states
-        where Head B fails are at 4-8. `depth` is the per-step instrument.
-
-        The reference set is 512 strided training media, not all ~32000, so this
-        reads 5-11% *above* the exact distance (measured). Compare it against the
-        thresholds above, not against `nn_proxy.py`'s numbers to three decimals.
+        Only for measuring how large that projection is (`20hm_bands/proj_size.py`).
         """
-        if self.ref_x is None:
-            return None
-        xq = self._x(c)[:, 0]
-        return np.array(
-            [
-                np.linalg.norm((self.ref_x[k] - xq[k])[:, self.mask[k]], axis=1).min()
-                for k in self.members
-            ]
+        mu, _ = self.mu_and_z(c, np.ones(len(self.genome_ids), dtype=np.float32))
+        jnp = self._jnp
+        x = jnp.asarray(self._x(c))
+        a = jnp.asarray(np.ones((len(self.genome_ids), 1)), dtype=jnp.float32)
+        zmu = (
+            None
+            if self.mu_floor is None
+            else jnp.asarray(np.maximum(mu, self.mu_floor)[:, None], dtype=jnp.float32)
         )
+        z = np.asarray(self._B.flux(self._bheads, x, a, jnp.asarray(self.z_scale), zmu))[:, 0]
+        return np.maximum(z, -self._B.VMAX * (c / (self.km + c))) * self.mask
+
+    def _element_balance(self, z: np.ndarray) -> np.ndarray:
+        """§8.6g(2): project onto `E z <= 0` for C, N, P and S.
+
+        You cannot secrete more of an element than you took up. The LP that made
+        the labels could not: violation rate **0.0000** on all four elements over
+        21k label rows. Head B has no such constraint and breaks it on 34-43% of
+        held-out media and on **53% (carbon) of the states in the communities whose
+        endpoint fails**, where the median net carbon flux is positive -- more
+        carbon out than in -- by 11% of that element's turnover, against the head's
+        own 12-26% relative error (`20hm_bands/element_bound.py`).
+
+        It is the **minimum-norm** projection, in the head's own `z_scale` metric,
+        onto a convex set the true `z` is already inside -- so like §3.3's uptake
+        clamp it cannot increase the distance to the truth. A cheaper uniform
+        shrink of the secretions enforces the same four inequalities and is *not* a
+        projection: measured, it left the endpoint unchanged (9 cells of 30 better,
+        4 worse) while making `dc_rel` worse on 10 of the 11 cells that moved,
+        because it also shrinks the fluxes that were not implicated.
+
+        Four constraints, so the dual is a 4-dimensional non-negative least squares
+        and its active set is found by enumerating the 15 non-empty subsets --
+        exact, and cheaper than an iterative solver at this size.
+        """
+        if self._E is None:
+            return z
+        out = z.copy()
+        w = self.z_scale.astype(np.float64) ** 2  # (G, M), the metric
+        for k in range(z.shape[0]):
+            E = self._E * self.mask[k]
+            g = E @ z[k]  # net export per element; > 0 is the violation
+            if (g <= 1e-12).all():
+                continue
+            lam = _dual_nnls((E * w[k]) @ E.T, g)
+            out[k] = z[k] - w[k] * (E.T @ lam)
+        return out
+
+
+_ELEMENTS = ("C", "N", "P", "S")
+
+
+def _dual_nnls(Q: np.ndarray, g: np.ndarray) -> np.ndarray:
+    """``argmin_{lam >= 0} 0.5 lam' Q lam - lam' g`` by active-set enumeration.
+
+    The dual of the projection above. ``Q`` is 4x4 and PSD (possibly singular when
+    an element carries no flux), so ``lstsq`` rather than ``solve``.
+    """
+    from itertools import combinations
+
+    best, best_val = np.zeros(len(g)), 0.0
+    for r in range(1, len(g) + 1):
+        for S in combinations(range(len(g)), r):
+            idx = list(S)
+            lam_s = np.linalg.lstsq(Q[np.ix_(idx, idx)], g[idx], rcond=None)[0]
+            if (lam_s < -1e-12).any():
+                continue
+            lam = np.zeros(len(g))
+            lam[idx] = lam_s
+            # Feasibility of the primal: `E z' = g - Q lam <= 0`.
+            if (Q @ lam - g < -1e-9).any():
+                continue
+            val = 0.5 * lam @ Q @ lam - lam @ g
+            if val < best_val:
+                best, best_val = lam, val
+    return best
+
+
+def _element_matrix(exchanges: list[str]) -> np.ndarray | None:
+    """(4, M) atoms per mmol from ``config/exchange_elements.csv``. Absent = 0."""
+    import csv
+
+    path = Path(__file__).resolve().parents[1] / "config" / "exchange_elements.csv"
+    if not path.exists():
+        return None
+    col = {ex: j for j, ex in enumerate(exchanges)}
+    E = np.zeros((len(_ELEMENTS), len(exchanges)))
+    seen = 0
+    with path.open() as fh:
+        for row in csv.DictReader(line for line in fh if not line.startswith("#")):
+            j = col.get(row["exchange_id"])
+            if j is None:
+                continue
+            E[:, j] = [float(row[e]) for e in _ELEMENTS]
+            seen += 1
+    if seen < len(exchanges):
+        LOGGER.info(
+            "elemental formulas for %d/%d exchanges; the rest are unconstrained (§8.6g)",
+            seen,
+            len(exchanges),
+        )
+    return E
 
 
 def _km_vector(exchanges: list[str]) -> np.ndarray:

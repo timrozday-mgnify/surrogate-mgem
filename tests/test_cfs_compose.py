@@ -210,3 +210,61 @@ def test_chemostat_pool_relaxes_to_the_feed():
     traj = integrate(with_chemostat(base, 1.0, feed), np.zeros(1), np.ones(1), 0.01, 1000)
     assert np.isclose(traj.c[-1, 0], 3.0, atol=1e-3)
     assert np.isclose(traj.c[100, 0], 3.0 * (1 - np.exp(-1.0)), atol=1e-2)
+
+
+def test_element_balance_projects_onto_the_secretion_bound():
+    # §8.6g(2). You cannot secrete more carbon than you took up. The point of the
+    # projection (over a uniform shrink, which also satisfies the constraint) is
+    # that it cannot move `z` away from a point already inside the set.
+    from cfs.compose.dfba import Surrogate
+
+    sur = Surrogate.__new__(Surrogate)
+    sur._E = np.array([[1.0, 6.0, 0.0], [0.0, 0.0, 0.0]])  # C, N atoms per mmol
+    sur.mask = np.ones((2, 3), dtype=bool)
+    sur.z_scale = np.ones((2, 3), dtype=np.float32)
+
+    z = np.array([[10.0, -1.0, 5.0], [2.0, -3.0, 5.0]])  # row 0 secretes 10 C on 6
+    out = Surrogate._element_balance(sur, z)
+    assert (out @ sur._E.T <= 1e-9).all()
+    assert np.allclose(out[1], z[1])  # a compliant row is not touched at all
+
+    truth = np.array([3.0, -1.0, 4.0])  # some feasible z: 3 C out against 6 in
+    assert (sur._E @ truth <= 0).all()
+    assert np.linalg.norm(out[0] - truth) < np.linalg.norm(z[0] - truth)
+
+
+def test_element_balance_matches_a_brute_force_projection():
+    # Two elements binding at once, which is what the dual's active-set enumeration
+    # is for -- and what a sign error in its feasibility test hides: the identity
+    # is feasible for every subset when only one row of E is non-zero, so a
+    # one-element case passes either way.
+    from scipy.optimize import minimize
+
+    from cfs.compose.dfba import Surrogate
+
+    rng = np.random.default_rng(0)
+    E = np.array([[1.0, 6.0, 2.0, 0.0], [1.0, 0.0, 3.0, 1.0]])  # C and N per mmol
+    for _ in range(20):
+        z = rng.normal(size=4) * np.array([5.0, 1.0, 3.0, 2.0])
+        if (E @ z <= 0).all():
+            continue
+        sur = Surrogate.__new__(Surrogate)
+        sur._E, sur.mask = E, np.ones((1, 4), dtype=bool)
+        sur.z_scale = np.full((1, 4), 1.0, dtype=np.float32)
+        out = Surrogate._element_balance(sur, z[None])[0]
+        ref = minimize(
+            lambda y, z=z: ((y - z) ** 2).sum(),
+            z,
+            constraints=[{"type": "ineq", "fun": lambda y, e=e: -e @ y} for e in E],
+        ).x
+        assert (E @ out <= 1e-8).all()
+        assert np.allclose(out, ref, atol=1e-5)
+
+
+def test_element_balance_is_the_identity_without_a_table():
+    from cfs.compose.dfba import Surrogate
+
+    sur = Surrogate.__new__(Surrogate)
+    sur._E = None
+    z = np.array([[1.0, -2.0]])
+    assert np.allclose(Surrogate._element_balance(sur, z), z)
