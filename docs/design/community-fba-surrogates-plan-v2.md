@@ -3832,6 +3832,74 @@ is firing on the right members.)
 label clamps (non-binding duals, and the O(1e-14) dust that is half the non-zero
 ones), and that a stale dual cache returns NaN rather than a silently wrong row.
 
+##### The globalisation pass — 2026-09-04. Both arms are cell-dependent, neither is a default
+
+Job 1 of the list below was skipped in favour of the solver work, and the solver
+work answered half of it anyway. Two globalisations, both off by default so every
+number above reproduces bit for bit. Same five cells, same warm starts,
+`--fd-check 10`, `value_p4r2`/`behaviour_p4r2`:
+
+| cell | baseline | `--ptc 1e-3` (trust region) | `--d-steps 8` (continuation) |
+| --- | --- | --- | --- |
+| 1 | **1.5e-8**, 11 it | **1.5e-8**, 11 it | **2.3e-8, 5 it**, V4 1.7e-6 |
+| 2 | 10.0, 100 it | 9.8, 100 it | 2.7e+02 |
+| 3 | 10.0, 14 it | 10.0, 20 it | **4.5e-05** |
+| 4 | **5.3e-8**, 30 it | **1.5e-7**, 31 it | 2.8e-01 |
+| 5 | 1.2e-6, 13 it | 1.2e-6, 13 it | **1.2e-6, 11 it** |
+
+**1. `--ptc`, a Levenberg-Marquardt trust region, is null -- and that is the
+informative half.** When backtracking exhausts, it escalates the damping and takes
+a *different* direction rather than returning "no descent". It fires on cells 2
+and 3 (cell 3 goes 14 -> 20 iterations) and changes nothing: residual still
+exactly 10.0. **So the failure diagnosed above -- "a damped line search is not
+enough globalisation" -- is wrong.** Backtracking was not rejecting a good step
+for being too long, and no reachable direction from that iterate helps. The
+remaining failures are not the step.
+
+Two dampings that look equivalent and are not, both measured on the Monod toy and
+both now in the docstring. `A + damp I` **after** the row equilibration perturbs a
+rank-deficient non-symmetric matrix arbitrarily and returns a step **4x larger**
+than the undamped one. True pseudo-transient continuation, `A + damp diag(rscale)`
+with no line search, is unbounded -- `X` reaches 1e80 -- because the damping alone
+does not cap a step whose abundance column scaling is multiplicative. The
+normal-equation form `(A^T A + damp I) w = A^T r` is the one that works: symmetric
+positive definite for any `damp > 0`, so the step is always a descent direction
+for `||r||^2` and shrinks monotonically in `damp`.
+
+**2. `--d-steps`, natural-parameter continuation in `D`, is the first thing to
+move cells 2 and 3 -- and it breaks a cell that was converging.** `D -> mu_max` at
+the feed is the transcritical end, where the fixed point is known exactly
+(`c = c_feed`, `X = 0`); the ladder walks `D` down from there, warm-starting each
+rung on the last. It **halves cell 1** (11 -> 5 Newton iterations, V4 still
+passing) and takes **cell 3 from the collapsed-pool 10.0 to 4.5e-5** -- five orders,
+and just outside the 1e-6 tolerance. It also takes cell 4 from converged (5.3e-8)
+to 2.8e-1 and cell 2 from 10.0 to 2.7e+02.
+
+**3. Cell 3 nearly converging is the free half of Job 1.** A state at a scaled
+residual of 4.5e-5 is *almost* a fixed point, which is evidence cell 3 has one and
+that its old failure was the warm start, not the model. Cell 2's ladder, by
+contrast, converges only on its **top** rung and fails on all eight below, ending
+worse than where it started -- the top rung's answer is `X ~ 0` by construction, so
+the ladder there is carrying a degenerate state down. Re-seeding the abundances at
+each rung (the NNLS the single-`D` warm start already does) is the obvious next
+variant and is untested.
+
+**4. A free structural scan, and a negative result worth keeping.**
+`branch_scan.py` walks the same partially-scaled feed the warm start bisects and
+asks the two fixed-point conditions separately -- can `mu` reach `D`, can the pool
+balance close with `X >= 0` -- in ~60 right-hand-side calls and no LP. On cells 2
+and 3 `max mu / D` does cross 1 (at `theta` 4.6e-4 and 2.2e-4), so the growth
+condition is satisfiable. But the pool residual is **10-16 at every `theta` on all
+three cells scanned, including cell 1, which converges**. So the warm start's path
+never closes the pool balance even where the solve succeeds: `c*` is not a uniform
+scaling of the feed, and this scan cannot decide existence. It is cheap enough to
+run before any future warm-start idea.
+
+**Neither flag defaults on.** Like `--jac-temp`, both win some cells and lose
+others, and the converged count over the five is 2 (baseline), 2 (`--ptc`), 1
+(`--d-steps`). The per-cell decision is now three flags wide, which is itself a
+finding: this solver has no single setting.
+
 ##### What is next, in order
 
 | # | Job | Why here |

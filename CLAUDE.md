@@ -2169,10 +2169,40 @@ trigger fires on **54%** of that cell's members against 0%, and the solve takes
 **5 iterations against 23**; and regression tests for
 the dual chain rule and the stale-cache NaN fallback.
 
-**Next:** (1) find out whether cells 2 and 3 have a fixed point *at all* — every
-method now fails on them and integration is the cheap discriminator; (2) the M12
-gate over the roster, quoted per cell with `reach`; (3) a per-cell `--jac-temp`
-decision; (4) keystone leave-one-out, which needs no code.
+**The globalisation pass, 2026-09-04 — both arms cell-dependent, neither a
+default.** `--ptc` (Levenberg-Marquardt trust region: escalate the damping and
+take a *different* direction when backtracking exhausts) is **null** — it fires
+on cells 2/3 and leaves the residual at exactly 10.0, so "a damped line search is
+not enough globalisation" is **retracted**: no reachable direction from that
+iterate helps. `--d-steps` (natural-parameter continuation in `D`, walked down
+from the transcritical end where `c = c_feed, X = 0` exactly) is the first thing
+to move those cells — cell 1 **11 -> 5** Newton iterations with V4 still passing,
+cell 3 **10.0 -> 4.5e-5** — and it breaks cell 4 (5.3e-8 -> 0.28) and cell 2
+(10.0 -> 270). Converged over the five: 2 / 2 / 1. **This solver has no single
+setting**; the per-cell decision is now three flags wide with `--jac-temp`.
+
+Cell 3 nearly converging is the free half of the "do cells 2/3 have a fixed
+point" question: a scaled residual of 4.5e-5 is almost one, so its old failure
+was the warm start. Cell 2's ladder converges only on its **top** rung, whose
+answer is `X ~ 0` by construction, and carries that degenerate state down —
+re-seeding abundances per rung is the untested variant.
+
+Two dampings that look equivalent and are not (both on the Monod toy, both in the
+docstring): `A + damp I` **after** row equilibration gives a step **4x larger**
+than the undamped one, and true pseudo-transient continuation without a line
+search is unbounded (`X` reaches 1e80). Only the normal-equation form
+`(A^T A + damp I) w = A^T r` is symmetric PSD and therefore always descent.
+
+`20hm_bands/branch_scan.py` (no LP, ~60 rhs calls) asks the two fixed-point
+conditions separately along the warm start's own path. `max mu / D` does cross 1
+on cells 2 and 3, but the **pool residual is 10-16 at every point on all three
+cells scanned, cell 1 included** — so that path never closes the pool balance even
+where the solve succeeds, and the scan cannot decide existence. Run it before any
+future warm-start idea.
+
+**Next:** (1) the M12 gate over the roster, quoted per cell with `reach`; (2) a
+per-cell `--jac-temp` / `--d-steps` decision; (3) keystone leave-one-out, which
+needs no code; (4) re-seeding abundances per continuation rung.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

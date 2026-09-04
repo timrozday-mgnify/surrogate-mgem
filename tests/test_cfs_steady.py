@@ -99,3 +99,22 @@ def test_a_stale_dual_cache_is_not_silently_reused():
     assert np.isfinite(_mixed_mu_rows(st, ex, km, np.array([1.0]), 1)).all()
     # NaN means "keep the finite difference", which is the safe fallback.
     assert np.isnan(_mixed_mu_rows(st, ex, km, np.array([2.0]), 1)).all()
+
+
+def test_pseudo_transient_continuation_finds_the_same_root():
+    """PTC is globalisation, not a different problem: same root, still not washout.
+
+    The damping is what a line search cannot supply -- it changes the *direction*,
+    not just its length -- so the invariant worth testing is that it does not buy
+    that by landing somewhere else. The trivial `X = 0, c = c_feed` state is a
+    genuine root and is what every scipy method converges to here (§13.4).
+    """
+    feed = np.array([FEED, 3.0])
+    free = np.array([True, False])
+    scale = np.array([K, K])
+    sol = solve_steady(_rhs, feed, D, free, scale, feed.copy(), np.array([1.0, 1.0]), ptc=1.0)
+
+    c_star = K * D / (MUMAX[0] - D)
+    assert sol["converged"]
+    assert np.isclose(sol["c"][0], c_star, rtol=1e-6)
+    assert np.isclose(sol["X"][0], YIELD * (FEED - c_star), rtol=1e-6)

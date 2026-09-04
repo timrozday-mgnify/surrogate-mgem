@@ -647,6 +647,23 @@ def build_parser() -> argparse.ArgumentParser:
         "them knows X > 0, so they converge on the trivial washout root.",
     )
     ss.add_argument(
+        "--ptc",
+        type=float,
+        default=0.0,
+        help="Levenberg-Marquardt trust region: initial damping, escalated when "
+        "backtracking fails. 0 = plain Newton, bit for bit. The globalisation a "
+        "line search cannot supply — backtracking shortens a bad direction, it "
+        "does not replace one.",
+    )
+    ss.add_argument(
+        "--d-steps",
+        type=int,
+        default=0,
+        help="Continuation rungs in D, walked down from the transcritical end "
+        "(D = mu_max at the feed, where c = c_feed and X = 0 exactly). 0 = the "
+        "bisection warm start alone.",
+    )
+    ss.add_argument(
         "--fd-check",
         type=int,
         default=20,
@@ -913,6 +930,8 @@ def main(argv: list[str] | None = None) -> int:
             mix_z_rel=args.mix_z_rel,
             jac_temp=args.jac_temp,
             solver=args.solver,
+            ptc=args.ptc,
+            d_steps=args.d_steps,
             seed=args.seed,
             scales=args.scales,
             fd_check=args.fd_check,

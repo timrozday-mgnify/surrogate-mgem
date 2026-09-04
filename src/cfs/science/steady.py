@@ -48,6 +48,10 @@ LOGGER = logging.getLogger("cfs.science.steady")
 _LOG_X_FLOOR = 69.0
 
 
+# Trust-region escalations per Newton iteration before declaring no descent.
+_LM_ESCALATIONS = 8
+
+
 def solve_steady(
     rhs,
     feed: np.ndarray,
@@ -63,6 +67,7 @@ def solve_steady(
     iters: int = 100,
     backtracks: int = 40,
     solver: str = "newton",
+    ptc: float = 0.0,
 ) -> dict:
     """Newton + active set on the chemostat fixed point.
 
@@ -140,6 +145,7 @@ def solve_steady(
                 iters,
                 backtracks,
                 dmu_dc,
+                ptc,
             )
         info["newton_iters"] += n_it
         if not ok and alive.sum() > 1:
@@ -249,51 +255,88 @@ def _root(residual, idx, scale, rscale, c, X, alive, tol, iters, method):
 
 
 def _newton(
-    residual, residual_jac, rhs_jac, idx, scale, rscale, c, X, alive, tol, iters, bt, dmu_dc=None
+    residual,
+    residual_jac,
+    rhs_jac,
+    idx,
+    scale,
+    rscale,
+    c,
+    X,
+    alive,
+    tol,
+    iters,
+    bt,
+    dmu_dc=None,
+    ptc=0.0,
 ):
-    """Damped Newton on the square system over ``idx`` and the live members."""
+    """Damped Newton on the square system over ``idx`` and the live members.
+
+    ``ptc`` turns on the **Levenberg-Marquardt trust region**: when backtracking
+    fails, escalate the damping and take a *different* direction rather than give
+    up. It is the globalisation §13.4's failing cells ask for and a line search
+    cannot give -- backtracking only shortens a direction, and the measured failure
+    is a *direction* that collapses the whole pool to ``c ~ 0``, including
+    metabolites the community secretes, where the clip at zero then holds it.
+
+    ``ptc`` is the initial damping and ``0`` disables the escalation entirely, so
+    every number measured before this reproduces bit for bit: the escalation can
+    only fire where plain Newton already returns "no descent direction".
+    """
     J = None
+    lam = 0.0
     for it in range(iters):
         r, _ = residual(c, X)
         rn = float((np.abs(r) / rscale).max())
         if rn < tol:
             return c, X, J, True, it
         J = _jacobian(residual_jac, rhs_jac, idx, scale, c, X, alive, dmu_dc)
-        step = _lstsq_step(J, -r, scale[idx], np.maximum(np.abs(X[alive]), 1e-12))
-        dc = np.zeros_like(c)
-        dc[idx] = step[: len(idx)]
-        dX = step[len(idx) :]
-        # Fraction to the boundary, as an interior-point method does: never let a
-        # step take an abundance through zero. Without it one Newton overshoot
-        # early on reads as washout, the member is dropped, and -- with the
-        # anti-cycling ban -- can never come back; the solve then converges to the
-        # trivial `X = 0, c = c_feed` state, which is a fixed point and the wrong
-        # one. A member that really is washing out reaches zero geometrically
-        # instead, and is dropped on the relative test below.
-        neg = dX < 0
-        t = 1.0
-        if neg.any():
-            t = min(1.0, 0.99 * float((-X[alive][neg] / dX[neg]).min()))
-        # A matching rule on the *other* boundary is **refuted**, and it looked
-        # obvious: the measured failure is a step collapsing the pool to `c ~ 0`,
-        # so capping `c`'s move at 0.9 of the distance to zero should stop it.
-        # Measured, it takes cell 1 from converged (1.8e-8, 11 iterations) to
-        # failed (20.0, 21) and cell 5 from 7.8e-6 to 14. A concentration
-        # legitimately goes to zero -- a metabolite absent from the steady state
-        # is a normal outcome, where an abundance of exactly zero is a change of
-        # active set -- so the two boundaries are not symmetric and only `X` gets
-        # the rule.
-        # Backtrack on the residual norm, with the pool clipped at zero the way
-        # `integrate` clips it.
-        for _ in range(bt):
-            c_t, X_t = np.maximum(c + t * dc, 0.0), X.copy()
-            X_t[alive] = X[alive] + t * dX
-            if float((np.abs(residual(c_t, X_t)[0]) / rscale).max()) < rn:
+        accepted = False
+        for _ in range(_LM_ESCALATIONS if ptc > 0.0 else 1):
+            step = _lstsq_step(J, -r, scale[idx], np.maximum(np.abs(X[alive]), 1e-12), lam)
+            dc = np.zeros_like(c)
+            dc[idx] = step[: len(idx)]
+            dX = step[len(idx) :]
+            # Fraction to the boundary, as an interior-point method does: never
+            # let a step take an abundance through zero. Without it one Newton
+            # overshoot early on reads as washout, the member is dropped, and --
+            # with the anti-cycling ban -- can never come back; the solve then
+            # converges to the trivial `X = 0, c = c_feed` state, which is a fixed
+            # point and the wrong one. A member that really is washing out reaches
+            # zero geometrically instead, and is dropped on the relative test in
+            # `solve_steady`.
+            #
+            # A matching rule on the *other* boundary is **refuted**, and it looked
+            # obvious: the measured failure is a step collapsing the pool to
+            # `c ~ 0`, so capping `c`'s move at 0.9 of the distance to zero should
+            # stop it. Measured, it takes cell 1 from converged (1.8e-8, 11
+            # iterations) to failed (20.0, 21) and cell 5 from 7.8e-6 to 14. A
+            # concentration legitimately goes to zero -- a metabolite absent from
+            # the steady state is a normal outcome, where an abundance of exactly
+            # zero is a change of active set -- so the two boundaries are not
+            # symmetric and only `X` gets the rule.
+            neg = dX < 0
+            t = 1.0
+            if neg.any():
+                t = min(1.0, 0.99 * float((-X[alive][neg] / dX[neg]).min()))
+            # Backtrack on the residual norm, with the pool clipped at zero the
+            # way `integrate` clips it.
+            for _ in range(bt):
+                c_t, X_t = np.maximum(c + t * dc, 0.0), X.copy()
+                X_t[alive] = X[alive] + t * dX
+                if float((np.abs(residual(c_t, X_t)[0]) / rscale).max()) < rn:
+                    accepted = True
+                    break
+                t *= 0.5
+            if accepted:
                 break
-            t *= 0.5
-        else:
+            # Backtracking exhausted: the *direction* is wrong, not its length.
+            # Tighten the trust region and ask for a different one.
+            lam = max(ptc, lam * 10.0)
+        if not accepted:
             return c, X, J, False, it  # no descent direction — report it, P9
         c, X = c_t, X_t
+        lam = 0.0 if lam <= ptc else lam / 10.0
     return c, X, J, float((np.abs(residual(c, X)[0]) / rscale).max()) < tol, iters
 
 
@@ -346,17 +389,34 @@ def _jacobian(residual, rhs, idx, scale, c, X, alive, dmu_dc=None):
     return np.hstack([Jc, Jx])
 
 
-def _lstsq_step(J, r, col_c, col_x):
+def _lstsq_step(J, r, col_c, col_x, damp=0.0):
     """§13.4: diagonally precondition, then least-squares. Rank deficiency is normal.
 
     Columns are scaled to the variables' own units (Km for a concentration, the
     member's own biomass for an abundance) and rows to their largest entry, which
     is what keeps `lstsq`'s `rcond` cut meaningful across five decades of `x_scale`.
+
+    ``damp`` is the Levenberg-Marquardt trust-region parameter: the step solves
+    ``(A^T A + damp I) w = A^T r`` in the scaled coordinates instead of ``A w = r``.
+    ``damp = 0`` is the plain least-squares step, bit for bit. The normal-equation
+    form is the load-bearing detail -- it is symmetric positive definite for any
+    ``damp > 0``, so the step is *always* a descent direction for ``||r||^2`` and
+    shrinks monotonically as ``damp`` grows. Two cheaper-looking dampings were
+    tried on the Monod toy and both are wrong: ``A + damp I`` after row scaling
+    perturbs a rank-deficient non-symmetric matrix arbitrarily and returns a step
+    **4x larger** than the undamped one, and the pseudo-transient ``A + damp
+    diag(rscale)`` is unbounded without a line search (``X`` reaches 1e80).
     """
     dc = np.concatenate([col_c, col_x])
     A = J * dc
     dr = np.maximum(np.abs(A).max(1), 1e-30)
-    w = np.linalg.lstsq(A / dr[:, None], r / dr, rcond=1e-10)[0]
+    A, r = A / dr[:, None], r / dr
+    if damp > 0.0:
+        AtA = A.T @ A
+        w = np.linalg.lstsq(AtA + damp * np.trace(AtA) / len(AtA) * np.eye(len(AtA)),
+                            A.T @ r, rcond=1e-10)[0]
+    else:
+        w = np.linalg.lstsq(A, r, rcond=1e-10)[0]
     return w * dc
 
 
@@ -568,6 +628,8 @@ def run(
     mix_z_rel: float | None = None,
     jac_temp: float | None = None,
     solver: str = "newton",
+    ptc: float = 0.0,
+    d_steps: int = 0,
     seed: int = 0,
     scales: Path | None = None,
     fd_check: int = 20,
@@ -672,18 +734,40 @@ def run(
         x0 = np.full(len(organisms), 1e-6)
     LOGGER.info("warm start: theta %.3e, X %s", hi, np.array2string(x0))
 
-    sol = solve_steady(
-        rhs_lp or rhs,
-        feed,
-        D,
-        free,
-        sur.km,
-        c0,
-        x0,
-        rhs_jac=rhs if rhs_lp else None,
-        dmu_dc=dmu_dc,
-        solver=solver,
-    )
+    # Natural-parameter continuation in `D`, off by default. The measured failure
+    # is not a bad Newton direction -- a Levenberg-Marquardt trust region fires on
+    # cells 2 and 3 and changes nothing -- it is that the warm start is nowhere
+    # near the answer: the solver has to get from `mu ~ 0.6` to `mu = D = 11.5` in
+    # one solve and instead collapses the pool.
+    #
+    # `D -> mu_max(feed)` is the transcritical end, where the answer is known
+    # exactly: `c = feed`, `X = 0`. Walking `D` down from there keeps every step a
+    # small perturbation of the last converged fixed point, which is the one thing
+    # a warm start can be asked for.
+    ladder = [D]
+    if d_steps > 0:
+        hi = 0.999 * float(mu_feed.max())
+        if hi > D:
+            ladder = list(D * (hi / D) ** (np.arange(d_steps, -1, -1) / d_steps))
+            c0, x0 = feed.copy(), np.full(len(organisms), 1e-9)
+    for Dk in ladder:
+        sol = solve_steady(
+            rhs_lp or rhs,
+            feed,
+            Dk,
+            free,
+            sur.km,
+            c0,
+            x0,
+            rhs_jac=rhs if rhs_lp else None,
+            dmu_dc=dmu_dc,
+            solver=solver,
+            ptc=ptc,
+        )
+        LOGGER.info("continuation: D %.4g converged=%s", Dk, sol["converged"])
+        # A failed rung is not fatal: its iterate is still closer to the next
+        # rung's answer than the feed is, and the last rung is the one that counts.
+        c0, x0 = sol["c"], np.maximum(sol["X"], 1e-12)
     c, X, alive, J = sol["c"], sol["X"], sol["alive"], sol["J"]
 
     # The full (c, X) Jacobian: d(X_i (mu_i - D))/dc = X_i dmu_i/dc, and its X
@@ -705,6 +789,8 @@ def run(
         "dilution": D,
         "residual": ("mixed" if mix else "lp") if rhs_lp else "surrogate",
         "solver": solver,
+        "ptc": ptc,
+        "d_steps": d_steps,
         "jac_temp": jac_temp,
         "residual_max": float(np.abs(_r_used).max()),
         # The dimensionless one the solver actually tests: pool rows over `D*Km`,
