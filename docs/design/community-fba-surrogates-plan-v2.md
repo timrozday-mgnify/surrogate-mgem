@@ -3413,7 +3413,7 @@ mixes beautifully while sampling the wrong thing.
 | M3 | Head A trained, all 20, vmapped | Gradient cosine > 0.99 held-out — **not met, worst 0.952 (2026-09-02), and no longer what §8.1 waits on.** The best head is *frozen* label tangents (`--epochs 0 --gm-init labels --gm-select level1 --gm-repair --gm-eval-temp 1e-4`): median cosine 0.981, median R² 0.9999, low-`mu` bias +0.0004, and `mu_rel_median <= 5e-4` on all 30 §8.1 cells (§8.6c) |
 | M4 | Head B trained, alpha sweep validated | V3 passes — **built 2026-08-28**, worst held-out R² 0.856 / median 0.921; specific-flux target + §3.3 uptake clamp + the §4.3 community-regime round take it to **0.931 / 0.963** on `labels_p4` (§6.3). **Now M5's bottleneck (2026-09-02):** held-out is not the binding number — per-member flux cosine falls to 0.74-0.96 at community media, tracking NN distance to its own training media at Spearman +0.673 against `dc_rel`. `--w-mm`, the hinge on §3.3's bound, is refuted: the violation is off-distribution (§8.6d) |
 | M5 | dFBA composition | Trajectory matches COBRApy dFBA to 1% — **met at n=2/3/5 and n=21; n=10 and one cell of 30 open (2026-09-02).** Median log-X over 3 medium draws x 10 communities, frozen Head A at `--gm-eval-temp 1e-4`: **0.003 / 0.004 / 0.000 / 0.025 / 0.009** at sizes 2/3/5/10/21, overall 0.004, max 0.318 (was 0.006/0.007/0.009/0.060/0.175). The residual is Head B's coverage, not Head A (§8.6c/§8.6d). **State this gate over replicates only** — a single run carries ~6x sampling error on a small community, larger than most model changes measured (§8.1) |
-| M6 | Newton equilibrium + implicit gradients | V4 passes |
+| M6 | Newton equilibrium + implicit gradients | V4 passes — **built 2026-09-04** as `cfs steady-state` (§13.4). Active-set Newton on the chemostat fixed point, `lstsq` after row/column equilibration because the Hessian sum is rank ~10-25 of 365. On the first cell: converged at a scaled residual 9.1e-7 in 13 iterations, and the implicit feed derivative matches a re-solve to a median **2.0e-4** / max 4.9e-3 relative. Roster-wide failure rate not yet stated |
 | M7 | Minimal medium, surrogate vs exact MILP | V5, V6 pass |
 | M8 | SteadyCom / MICOM framings | Agreement with reference implementations |
 
@@ -3628,6 +3628,76 @@ sum is rank ~10–25 of 365, so the supply term is what makes the solve well-pos
 and `J` must be **diagonally preconditioned** whatever the head is. P9's damping
 and `throw=False` apply; log the failure rate.
 
+#### Built — `cfs steady-state`, 2026-09-04
+
+`src/cfs/science/steady.py`. Surrogate only, no LP anywhere in the solve.
+
+    D (c_feed - c) + sum_i X_i z_i(c) = 0        X_i (mu_i(c) - D) = 0
+
+The second family is a complementarity condition, so it is a **square Newton
+system over an assumed survivor set**, wrapped in the usual active-set loop: drop
+a member whose abundance reaches zero, re-admit one whose `mu(c*)` exceeds `D`,
+never re-admit a member already dropped in this solve (Bland's rule, and it is
+needed -- see the traps). Only the metabolites some member exchanges are solved
+for; the rest have `z = 0`, so `c = c_feed` solves their row exactly and carrying
+them would only add rank-deficient directions. `J` is finite-differenced in `c`
+(one residual call per free metabolite) with the `X` columns exact, since
+`d(dc/dt)/dX_i = z_i` is what a unit-biomass probe already returns.
+
+`lstsq` after **row and column equilibration**, per §7's measurement that the
+Hessian sum is rank ~10-25 of 365 and `x_scale` spans five decades: rank
+deficiency is the expected case, not the exceptional one. Everything §13.4
+promised falls out of the same factorisation -- coexistence from the active set,
+stability from the eigenvalues of the full `(c, X)` Jacobian, invasion from
+`mu_j(c*) - D` at no extra cost, and the implicit-function derivative
+`dy*/dc_feed = -J^-1 D I` from one extra solve.
+
+First cell (2 members, `value_p4r2` + `behaviour_p4r2`, `D = 0.2 mu(c_feed)`):
+converged in 13 Newton iterations and 2 active-set passes at a scaled residual of
+**9.1e-7**, one survivor (competitive exclusion), the loser's invasion score
+**-2.5e-4** -- i.e. just below `D`, which is what exclusion looks like when it is
+close -- and a stable fixed point, `max Re(lambda) = -0.147` against `D = 0.154`.
+**V4 in miniature passes**: against a re-solve at a perturbed feed, the implicit
+derivative's median relative error is **2.0e-4** and its max **4.9e-3** over five
+feed components.
+
+**And §13.7's caution is now measured rather than predicted.** `reach` at `c*` is
+**1.72 and 2.67** against a held-out design median of ~0.10 and Head B's known
+failure band of 4-8. An equilibrium really is a long way outside the design, so
+quote a steady state with its `reach`, and use `--fallback-depth`'s per-state LP
+if it is bad: an equilibrium visits **one** state, so truth is cheap at it -- far
+cheaper than the 24.6% of member-steps §8.6g(4) pays along a trajectory.
+
+**Four traps, three of which silently return a wrong fixed point.**
+
+1. **`Surrogate.reach` did not exist.** §8.6g(1) recorded it as shipped and
+   `cfs simulate` called it; the method was never written, so every `simulate`
+   run raised `AttributeError`. Added, restricted to `sur.members`, with the
+   per-cell-only caveat in its docstring.
+2. **Do not warm-start by integrating.** An explicit Euler chemostat clips a fed
+   metabolite at zero, `mu` follows it down, and the run lands on the *spurious
+   extinction* fixed point -- measured, `X ~ 1e-9` on both members. The warm start
+   is instead a **bisection on a scaled feed**: `mu` is non-decreasing in `u`, so
+   ~60 head evaluations put the fastest member exactly at `mu = D`, the fixed
+   point's own defining condition, with no Head B and no ODE. Abundances to match
+   come from one non-negative least squares on the pool balance, whose zeros are
+   the first guess at the active set. It is also ~2x faster.
+3. **Fraction to the boundary, or the ban eats the community.** One Newton
+   overshoot takes an abundance through zero, the member is dropped, the
+   anti-cycling ban stops it coming back, and the solve converges -- cleanly, at
+   residual 1e-13 -- on the trivial `X = 0, c = c_feed` state, which *is* a fixed
+   point and is the wrong one. Cap the step at 0.99 of the distance to zero, as an
+   interior-point method does, and drop on a relative test instead.
+4. **§8.4's `rtol=1e-10` is unreachable, and it is not the solver's fault.** The
+   heads run in float32 and `J` is finite-differenced through them, so the
+   residual floors out near **5e-8** relative. A tighter tolerance only spends
+   Newton iterations to report `converged=False` about a converged state. Default
+   is `1e-6`, dimensionless: pool rows over `D*Km`, growth rows over `D`.
+
+**Not done:** keystone members (leave-one-out is `--organisms` minus one, N runs,
+no new code -- run it when the question comes up), a Newton failure rate over the
+roster, and the community version of §13.2's designer, which this unblocks.
+
 ### 13.5 Maximise metabolic interaction — non-convex, and the weakest use case
 
 Define the interaction rate as the mass actually handed between members:
@@ -3753,7 +3823,7 @@ must budget a matched control.
 | M9 | `cfs simulate`, batch + chemostat | **done 2026-08-30**; agrees with `cfs community`'s surrogate path on `D = 0` |
 | M10 | §13.2 growth maximisation, convex solver | Optimum survives V5 round-trip on 20 cases — **built 2026-08-30; 19/20 at the default trust region, 20/20 at 0.25 and at 1.0 decades.** Median true gain +2.2%, median optimism 0.3%. The one failure is a `mu = 2.0` start medium, the head's known weak band; it is not monotone in the trust radius. **Under an additive trust region 3/20 collapse to `mu_true = 0`, and under none at all 2 of the first 4** — P21, and the mechanism is zeroing an essential trace metabolite |
 | M11 | §13.3 static minimal medium | **built 2026-08-30; the essentiality blocker is closed 2026-08-31, V6 still short.** `cfs minimal-medium`: convex penalty solve + a greedy cardinality prune, one case per medium draw. **Head A cannot represent essentiality** — knocking a trace metal (`EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e`) out of a rich medium takes the true LP to `mu = 0` and moves the head by <1%, 6 of 37 free metabolites on a 3-member community. Unrestricted, the program exploits exactly that: 273 -> **41** components with every surrogate floor satisfied and `mu_true` 55/70/38 -> **0/0/0**. With the lethal singles pinned from the models (`--keep-essential`, default; one FBA per free metabolite, a static property of the GEM), 273 -> 251 and 2 of 3 members clear a 0.5 floor under the LP, the misses being 0.489/0.485 — i.e. ~2% short — and one real failure at 0.334 on the community's slow member (`mu_true` 3.5 against 55 and 70), Head A's known weak low-`mu` band. **The cause is `SamplingConfig.log10_lo = -4`**: the trace metals' limiting regime is at `c/Km ~ 1e-9..1e-6`, outside the probe's bracket, so the probe omits them, `band_scales` defaults them to 1.0, the design never makes them scarce, `_kink_scale` defaults `x_scale` to 1.0 and the head has no resolution left in that coordinate. The four missed essentials are exactly the four `"source": "default"` bands in the sidecar. **Fixed by `probe_lo = -12` (§4.7) and a relabel: `n_missed_essential` 6 -> 0**, and unrestricted the design no longer collapses the LP (2/3, 0/3, 3/3 members clearing the floor, worst true fraction 0.436 against 0.000). V6 still does not pass at a 0.5 floor — 0.491 / 0.436 / 0.512 — so what remains is a few-percent accuracy question, not a structural one |
-| M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% |
+| M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. Failure rate over the roster is the open half. **The `reach` at `c*` is 1.7-2.7 against a held-out ~0.10**, so §13.7 was right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
 

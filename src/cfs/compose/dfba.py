@@ -190,6 +190,28 @@ class Surrogate:
         z = np.maximum(z, -self._B.VMAX * (c / (self.km + c))) * self.mask
         return mu, self._element_balance(z)
 
+    def reach(self, c: np.ndarray) -> np.ndarray | None:
+        """§8.6g(1): per member, the NN distance in `x` to its own training media.
+
+        The §8.6d coverage proxy, which predicts `dc_rel` at Spearman +0.673 across
+        cells. Held-out design media sit at ~0.10 and Head B's failures at 4-8, so
+        read it against those thresholds and not to three decimals: the reference
+        set is 512 strided rows per organism and reads 5-11% above the exact
+        distance. `None` when the checkpoint predates `reference_x.npz`.
+
+        **Per cell only.** Within one trajectory it scores a lift of 0.9x, worse
+        than random — predicted depletion depth is the per-step instrument.
+        """
+        if self.ref_x is None:
+            return None
+        x = self._x(c)[:, 0]  # (G, M)
+        d = np.empty(len(self.members))
+        for k, i in enumerate(self.members):
+            m = self.mask[i]
+            r = self.ref_x[i][:, m].astype(np.float32)
+            d[k] = float(np.sqrt(((r - x[i, m]) ** 2).sum(1)).min())
+        return d
+
     def _raw_z(self, c: np.ndarray) -> np.ndarray:
         """``z`` after §3.3's clamp but *before* the elemental projection.
 

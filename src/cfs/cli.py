@@ -587,6 +587,32 @@ def build_parser() -> argparse.ArgumentParser:
     sim.add_argument("--feed", type=Path, default=None, help="Feed JSON (default: the medium).")
     sim.add_argument("--seed", type=int, default=0)
 
+    ss = sub.add_parser(
+        "steady-state",
+        help="M12/§13.4: Newton-solve a chemostat fixed point — coexistence, "
+        "stability, invasion and feed sensitivities. No LP.",
+    )
+    ss.add_argument("--value", type=Path, required=True, help="Head A checkpoint dir.")
+    ss.add_argument("--behaviour", type=Path, required=True, help="Head B checkpoint dir.")
+    ss.add_argument("--out", type=Path, required=True, help="Report dir.")
+    ss.add_argument("--organisms", required=True, help="Comma-separated genome_ids.")
+    ss.add_argument("--medium", type=Path, default=None, help="Feed JSON {exchange_id: mM}.")
+    ss.add_argument(
+        "--labels", type=Path, default=None, help="Label root: draw a §4.3 feed instead."
+    )
+    ss.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the draw.")
+    ss.add_argument(
+        "--dilution", type=float, default=None, help="D (1/h). Default: --dilution-frac of max mu."
+    )
+    ss.add_argument("--dilution-frac", type=float, default=0.2)
+    ss.add_argument(
+        "--fd-check",
+        type=int,
+        default=20,
+        help="V4: feed components to finite-difference. 0 = off.",
+    )
+    ss.add_argument("--seed", type=int, default=0)
+
     rf = sub.add_parser("baseline-rf", help="Random-forest baseline on the same split and gate.")
     rf.add_argument("--labels", type=Path, required=True, help="Label shard root (§4.5).")
     rf.add_argument("--index", type=Path, required=True, help="Frozen metabolite_index.json.")
@@ -824,6 +850,25 @@ def main(argv: list[str] | None = None) -> int:
             feed=args.feed,
             seed=args.seed,
             scales=args.scales,
+        )
+        print(json.dumps(report, indent=2))
+        return 0
+
+    if args.command == "steady-state":
+        from cfs.science.steady import run as run_steady
+
+        report = run_steady(
+            args.value,
+            args.behaviour,
+            args.out,
+            organisms=[g for g in args.organisms.split(",") if g],
+            labels_dir=args.labels,
+            medium=args.medium,
+            dilution=args.dilution,
+            dilution_frac=args.dilution_frac,
+            seed=args.seed,
+            scales=args.scales,
+            fd_check=args.fd_check,
         )
         print(json.dumps(report, indent=2))
         return 0

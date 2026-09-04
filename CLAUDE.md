@@ -2052,6 +2052,61 @@ model-side arm is refuted, and coverage rounds are null or below the retrain noi
 floor. What is new is that the failure is now *detectable at runtime* (item 1) and
 *correctable on demand* (item 4).
 
+### M6/M12: the chemostat steady state, built — and three ways to converge on the wrong fixed point (2026-09-04)
+
+`cfs steady-state` (`src/cfs/science/steady.py`) is §13.4, and it is the next
+milestone after §8.6g closed. Newton on `D(c_feed - c) + sum_i X_i z_i(c) = 0`
+and `X_i (mu_i(c) - D) = 0`, surrogate only, no LP in the solve. The complementarity
+half is an **active set**: drop a member whose `X` reaches zero, re-admit one whose
+`mu(c*)` exceeds `D`, never re-admit a member already dropped (Bland's rule). `J`
+is finite-differenced in `c` with the `X` columns exact (`d(dc/dt)/dX_i = z_i` is
+just a unit-biomass probe), and solved by `lstsq` after row **and** column
+equilibration — §7 already measured the Hessian sum at rank ~10-25 of 365, so rank
+deficiency is the normal case. Coexistence, stability, invasion and the
+implicit-function derivative `dy*/dc_feed = -J^-1 D I` all come out of that one
+factorisation.
+
+First cell (2 members, `value_p4r2` + `behaviour_p4r2`, `D = 0.2 mu(c_feed)`):
+converged in 13 Newton iterations / 2 active-set passes at a scaled residual
+**9.1e-7**, one survivor, the loser's invasion score **-2.5e-4**, stable at
+`max Re(lambda) = -0.147` against `D = 0.154`. **V4 in miniature passes** — the
+implicit derivative against a re-solve at a perturbed feed, median relative error
+**2.0e-4**, max 4.9e-3 over five feed components.
+
+**`reach` at `c*` is 1.72 and 2.67**, against a held-out design median of ~0.10 and
+Head B's failure band of 4-8. §13.7's "most exposed use case" is now measured, not
+predicted. The cheap answer is `--fallback-depth`: an equilibrium visits **one**
+state, so paying the true LP there costs nothing like the 24.6% of member-steps it
+costs along a trajectory (§8.6g(4)).
+
+**Four traps, and three of them return a converged, wrong fixed point.**
+
+1. **`Surrogate.reach` never existed.** §8.6g(1) recorded it as shipped and
+   `cfs simulate` called it on line 871; the method was never written, so every
+   `simulate` run raised `AttributeError`. Now defined (over `sur.members`, with
+   the per-cell-only caveat in the docstring). **A feature recorded as shipped in
+   the design spec is not evidence that it runs.**
+2. **Do not warm-start a steady state by integrating.** Explicit Euler clips a fed
+   metabolite at zero, `mu` follows, and the run lands on the **spurious extinction
+   attractor** (`X ~ 1e-9` on both members, measured). The warm start is a
+   **bisection on a scaled feed** instead — `mu` is non-decreasing in `u`, so ~60
+   head evaluations put the fastest member exactly at `mu = D`, which is the fixed
+   point's own defining condition. Abundances come from one NNLS on the pool
+   balance, whose zeros are the first guess at the active set. Also ~2x faster.
+3. **Fraction to the boundary, or the anti-cycling rule eats the community.** One
+   Newton overshoot takes an `X` through zero, the ban stops it returning, and the
+   solve converges *cleanly* — residual 1e-13 — on `X = 0, c = c_feed`. That is a
+   fixed point, and it is the wrong one. Cap the step at 0.99 of the distance to
+   zero and drop on a relative test.
+4. **§8.4's `rtol=1e-10` is unreachable and the solver is not at fault.** float32
+   heads plus a finite-differenced `J` floor the residual near **5e-8** relative;
+   a tighter tolerance only burns iterations to report `converged=False` about a
+   converged state. Default `tol` is `1e-6`, dimensionless (pool rows over `D*Km`,
+   growth rows over `D`), and `residual_max_scaled` is what to read.
+
+**Open:** the M12 gate is a Newton failure rate < 1% over the roster; one cell is
+not a rate. Keystone members need no code (`--organisms` minus one, N runs).
+
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
 After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3
