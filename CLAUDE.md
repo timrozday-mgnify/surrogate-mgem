@@ -2134,11 +2134,16 @@ answer is that an equilibrium visits **one** state, so the LP costs nothing like
    That number is worth keeping — it is how far the surrogate alone is from calling
    the state an equilibrium — but under its own key.
 
-**Open:** the M12 gate (a Newton failure rate over the roster; nothing above n=2
-has run), V4 re-measured with the corrected step (the earlier 2.0e-4 / 4.9e-3 is
-void), the `scipy.optimize.root` swap, a warmer Jacobian temperature, exact
-`d(mu)/dc` for the surrogate path from Head A's analytic gradient, and a `z`-side
-mix trigger. Keystone leave-one-out needs no code.
+**Next, in order — the ranked plan with its reasoning is design spec §13.4.** It
+follows one measurement: the cells that still fail, fail on **globalisation**, not
+on the heads. (1) Swap the inner solver to `scipy.optimize.root` — `krylov` costs
+one rhs per Krylov iteration against 230 FD columns, and it **deletes** `_newton`,
+`_lstsq_step` and the line search. (2) A warmer `gm_eval_temp` inside `_jacobian`
+only — free by construction, and aimed at the chatter a hard-min head causes.
+(3) Re-measure V4; the old numbers are void. (4) Only then the M12 gate over the
+roster, or it measures the line search. Then exact `d(mu)/dc` for the surrogate
+path from `growth.mu_and_grad`, a `z`-side trigger for `--mix-mu-rel`, a
+regression test for the dual chain rule, and keystone leave-one-out (no code).
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
