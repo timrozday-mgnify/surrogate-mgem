@@ -2200,9 +2200,41 @@ cells scanned, cell 1 included** — so that path never closes the pool balance 
 where the solve succeeds, and the scan cannot decide existence. Run it before any
 future warm-start idea.
 
-**Next:** (1) the M12 gate over the roster, quoted per cell with `reach`; (2) a
-per-cell `--jac-temp` / `--d-steps` decision; (3) keystone leave-one-out, which
-needs no code; (4) re-seeding abundances per continuation rung.
+**The M12 gate over the roster, 2026-09-05 — 60% Newton failure, and one
+survivor everywhere.** All ten §8.1 communities, sizes 2-21, one feed draw, the
+default solver. **V4 passes on every converged cell (5.6e-7 to 3.1e-6)** — that
+half of the gate is met on four cells now, not two. **The failure rate is 60%
+against a 1% gate**, and it is *not* size-monotone: the 5-member cell converges
+in 35 iterations where three of the five 2-member cells fail.
+
+**`reach` does not separate converged from failed, and "the two failures are the
+two deepest" is retracted** — it was five 2-member cells. Over ten it is 2.2-2.7
+on the converged and **1.0-5.7** on the failed; cell 5 fails at the *shallowest*
+`reach` in the set. Being off-distribution at `c*` is still §13.7's problem; it
+is not the convergence predictor.
+
+**Failure is bimodal.** Cells 2/3/10 sit at residual 10-11 — the `feed/Km`
+signature of a collapsed pool. Cells 5/6/9 stop at 1.2e-6 / 4.2e-3 / 4.2e-3, one
+to three orders off tolerance on a state that is nearly an equilibrium. Two
+different problems; stop counting them as one number.
+
+**Exactly one survivor on every cell at every size — and four of those states an
+excluded member can invade.** `invasion_score` is free and is the check:
+`mu_j(c*) > D` for a non-survivor means the active set is wrong. Cells 1/6/8 are
+within **0.2% of `D`** of a tie (neutral coexistence at the surrogate's
+resolution, not exclusion) and **cell 9 is invalid at +41.0 against `D` = 11.1**.
+That is the anti-cycling ban doing what it is documented to do: Bland's rule
+guarantees termination, not termination on a state satisfying complementarity.
+`solve_steady` now reports `invadable` and **gates `converged` on it**, so a
+coexistence result can no longer be quoted off a residual alone.
+
+**Next:** (1) let a near-tie *return* coexistence instead of being banned —
+solve the two-survivor system once when a re-admission is within tolerance of
+`D`; (2) cell 9's +41, which is neither a tie nor the pool collapse; (3) a
+per-cell grid over `--jac-temp` / `--d-steps` / `--ptc`, since none is a default;
+(4) keystone leave-one-out, no code; (5) re-seed abundances per continuation
+rung; (6) whether cells 2/3/10 have a fixed point at all — still open, but cell
+3 reaching 4.5e-5 under continuation is evidence *for*.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

@@ -3900,14 +3900,74 @@ others, and the converged count over the five is 2 (baseline), 2 (`--ptc`), 1
 (`--d-steps`). The per-cell decision is now three flags wide, which is itself a
 finding: this solver has no single setting.
 
+##### The M12 gate over the roster — 2026-09-05. 60% failure, and one survivor everywhere
+
+Job 2. All ten §8.1 communities, sizes 2 to 21, one feed draw each (`seed 0`),
+default solver, `value_p4r2`/`behaviour_p4r2`. V4 on the cells small enough to
+afford it (it re-solves the whole fixed point per column).
+
+| cell | n | conv | residual | it | surv | stable | `reach` | max `mu_j(c*) - D`, excluded | V4 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 2 | **yes** | 1.5e-08 | 11 | 1 | yes | 2.7 | +2.5e-4 | **9.1e-07** |
+| 2 | 2 | no | 9.8e+00 | 100 | 1 | — | 2.4 | -10.9 | — |
+| 3 | 2 | no | 1.0e+01 | 14 | 1 | — | 5.7 | -14.3 | — |
+| 4 | 2 | **yes** | 5.3e-08 | 30 | 1 | yes | 2.2 | -2.16 | **3.1e-06** |
+| 5 | 2 | no | 1.2e-06 | 13 | 1 | — | **1.0** | -9.8e-5 | — |
+| 6 | 3 | no | 4.2e-03 | 76 | 1 | — | 2.7 | +5.4e-4 | — |
+| 7 | 3 | **yes** | 7.3e-08 | 32 | 1 | yes | 2.4 | -2.2e-4 | **5.6e-07** |
+| 8 | 5 | **yes** | 9.2e-08 | 35 | 1 | yes | 2.7 | +5.6e-5 | — |
+| 9 | 10 | no | 4.2e-03 | 76 | 1 | — | 2.7 | **+41.0** | — |
+| 10 | 21 | no | 1.1e+01 | 15 | 1 | — | 4.5 | -11.9 | — |
+
+**1. V4 passes on every cell that converges** -- 5.6e-7 to 3.1e-6 -- which is the
+half of M12's gate that is met, and it now has four cells behind it rather than
+two.
+
+**2. The Newton failure rate is 60%, against a gate of 1%.** M12 does not pass.
+Failure is **not** size-monotone: the 5-member cell converges in 35 iterations
+where three of the five 2-member cells fail. Size was never the axis here either.
+
+**3. `reach` does not separate converged from failed, and the earlier claim that
+it did is retracted.** It was measured on five 2-member cells; over ten it is
+2.2-2.7 on the converged and **1.0-5.7** on the failed. Cell 5 fails at
+`reach = 1.0`, the *shallowest* cell in the set, and cell 8 converges at 2.7. The
+head being off-distribution at `c*` remains true and remains §13.7's concern; it
+is not the convergence predictor.
+
+**4. Failure is bimodal, and only one mode is the pool collapse.** Cells 2, 3 and
+10 sit at a scaled residual of 10-11, which is the `feed/Km` signature of a
+collapsed pool. Cells 5, 6 and 9 stop at 1.2e-6 / 4.2e-3 / 4.2e-3 -- within one to
+three orders of the tolerance, on a state that is nearly an equilibrium. Those are
+two different problems and should stop being counted as one number.
+
+**5. Exactly one survivor on every cell at every size -- and four of them are not
+valid fixed points.** The `invasion_score` column is the check, and it is free:
+an excluded member with `mu_j(c*) > D` could grow, so the active set is wrong.
+Cells 1, 6 and 8 are within **0.2% of `D`** of a tie -- neutral coexistence at the
+surrogate's own resolution, not clean exclusion -- and **cell 9 is outright
+invalid at +41.0 against `D` = 11.1**, an excluded member growing 4.7x faster than
+the dilution rate.
+
+This is the anti-cycling ban doing exactly what it is documented to do. Bland's
+rule guarantees the active-set loop terminates; it does not guarantee it
+terminates on a state satisfying the complementarity condition, and on a near-tie
+it will not. So "complete competitive exclusion at every community size" is the
+*reported* answer and it is only trustworthy on the six cells whose excluded
+members are decisively negative. **Read `invasion_score` before quoting a
+coexistence result**, and treat any cell with `max invasion > 0` as unconverged
+whatever `residual_max_scaled` says -- the report has both and the convergence
+flag currently reflects only the second.
+
 ##### What is next, in order
 
 | # | Job | Why here |
 | --- | --- | --- |
-| 1 | **Diagnose whether cells 2 and 3 have a fixed point at all** | Every method now tried fails on them, including two that converge elsewhere. Integration is the cheap discriminator -- it found cell 1's root independently. Until this is answered, more solver work may be chasing a root that is not there |
-| 2 | **The M12 gate** — Newton failure rate over the roster, sizes 2 to 21 | Nothing above n=2 has been run. State it per cell with `reach`, since the two failures are the two deepest off-distribution cells |
-| 3 | A per-cell `--jac-temp` decision, or a homotopy in it | It wins 2 cells and loses 1, which is a sweet-spot signal rather than a direction. Cheap: it is one flag |
-| 4 | Keystone members | `--organisms` minus one, N runs, **no code** |
+| 1 | **The near-tie cells** — cells 1, 6, 8 are within 0.2% of `D` of coexistence and the anti-cycling ban decides them | Now that `converged` gates on `invadable`, these read as failures, which is honest but not useful. A tie is a real ecological answer (neutral coexistence); the loop needs a way to *return* it instead of banning one side. Smallest version: on a re-admission that is within tolerance of `D`, solve the two-survivor system once rather than banning |
+| 2 | **Cell 9 at `mu - D` = +41** | Not a tie and not the pool collapse: an excluded member growing 4.7x faster than the dilution rate at the returned state. The active set is simply wrong there, and it is the one cell where the ban costs an order of magnitude rather than a rounding error |
+| 3 | Per-cell `--jac-temp` / `--d-steps` / `--ptc` | Three flags now, each winning some cells and losing others, none a default. A short grid over the ten cells would at least say whether *some* setting converges each one |
+| 4 | Keystone members | `--organisms` minus one, N runs, **no code**. Cheap, and it needs only the cells that converge |
+| 5 | Re-seed abundances per continuation rung | Cell 2's ladder converges only on its top rung, whose answer is `X ~ 0` by construction, and carries that state down. The single-`D` warm start already has the NNLS that would fix it |
+| 6 | Whether cells 2, 3 and 10 have a fixed point at all | Still open, and still the branch that would stop this being a numerical question. Deprioritised because integration is expensive (17 ms per right-hand side over a 357-dimensional stiff system) and because cell 3 reaching 4.5e-5 under continuation is evidence *for* existence |
 
 **What would change this plan.** If cells 2 and 3 have no fixed point under the
 surrogate, the question stops being numerical and becomes §13.7's: an equilibrium
@@ -4040,7 +4100,7 @@ must budget a matched control.
 | M9 | `cfs simulate`, batch + chemostat | **done 2026-08-30**; agrees with `cfs community`'s surrogate path on `D = 0` |
 | M10 | §13.2 growth maximisation, convex solver | Optimum survives V5 round-trip on 20 cases — **built 2026-08-30; 19/20 at the default trust region, 20/20 at 0.25 and at 1.0 decades.** Median true gain +2.2%, median optimism 0.3%. The one failure is a `mu = 2.0` start medium, the head's known weak band; it is not monotone in the trust radius. **Under an additive trust region 3/20 collapse to `mu_true = 0`, and under none at all 2 of the first 4** — P21, and the mechanism is zeroing an essential trace metabolite |
 | M11 | §13.3 static minimal medium | **built 2026-08-30; the essentiality blocker is closed 2026-08-31, V6 still short.** `cfs minimal-medium`: convex penalty solve + a greedy cardinality prune, one case per medium draw. **Head A cannot represent essentiality** — knocking a trace metal (`EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e`) out of a rich medium takes the true LP to `mu = 0` and moves the head by <1%, 6 of 37 free metabolites on a 3-member community. Unrestricted, the program exploits exactly that: 273 -> **41** components with every surrogate floor satisfied and `mu_true` 55/70/38 -> **0/0/0**. With the lethal singles pinned from the models (`--keep-essential`, default; one FBA per free metabolite, a static property of the GEM), 273 -> 251 and 2 of 3 members clear a 0.5 floor under the LP, the misses being 0.489/0.485 — i.e. ~2% short — and one real failure at 0.334 on the community's slow member (`mu_true` 3.5 against 55 and 70), Head A's known weak low-`mu` band. **The cause is `SamplingConfig.log10_lo = -4`**: the trace metals' limiting regime is at `c/Km ~ 1e-9..1e-6`, outside the probe's bracket, so the probe omits them, `band_scales` defaults them to 1.0, the design never makes them scarce, `_kink_scale` defaults `x_scale` to 1.0 and the head has no resolution left in that coordinate. The four missed essentials are exactly the four `"source": "default"` bands in the sidecar. **Fixed by `probe_lo = -12` (§4.7) and a relabel: `n_missed_essential` 6 -> 0**, and unrestricted the design no longer collapses the LP (2/3, 0/3, 3/3 members clearing the floor, worst true fraction 0.436 against 0.000). V6 still does not pass at a 0.5 floor — 0.491 / 0.436 / 0.512 — so what remains is a few-percent accuracy question, not a structural one |
-| M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. Failure rate over the roster is the open half, and the failures that remain are the line search, not the heads. **The `reach` at `c*` is 1.7-2.7 against a held-out ~0.10**, so §13.7 was right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
+| M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 passes on every converged cell (5.6e-7 to 3.1e-6), the Newton failure rate is 60% against the 1% gate, and 4 of 10 cells return a state an excluded member can invade** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
 

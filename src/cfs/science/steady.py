@@ -123,7 +123,13 @@ def solve_steady(
     # relative and a tighter tolerance only spends Newton iterations to report
     # `converged=False` about a state that is converged. §8.4's `rtol=1e-10` is a
     # statement about the root finder, not about what a float32 head can deliver.
-    info = {"newton_iters": 0, "active_set_passes": 0, "converged": False, "solver": solver}
+    info = {
+        "newton_iters": 0,
+        "active_set_passes": 0,
+        "converged": False,
+        "invadable": False,
+        "solver": solver,
+    }
     J = None
     for _ in range(G + 2):
         info["active_set_passes"] += 1
@@ -163,7 +169,14 @@ def solve_steady(
             alive = alive | back
             X[back] = 1e-9 * max(X[alive].max(initial=0.0), 1.0)
             continue
-        info["converged"] = bool(ok)
+        # A *banned* member that can grow at `c*` is the anti-cycling rule's price:
+        # Bland's guarantees the loop terminates, not that it terminates on a state
+        # satisfying complementarity, and on a near-tie it does not. Measured over
+        # the roster, 4 of 10 cells return `mu_j(c*) > D` for an excluded member --
+        # one of them by 4.7x -- so this is not a corner case. Report it as
+        # unconverged rather than as a coexistence result.
+        info["invadable"] = bool((~alive & (mu > D * (1 + 1e-8))).any())
+        info["converged"] = bool(ok) and not info["invadable"]
         break
     LOGGER.info(
         "steady: %d survivors, %d Newton iterations, converged=%s",
@@ -801,6 +814,7 @@ def run(
         # calling this a steady state, which is the honest accuracy number.
         "residual_max_scaled_surrogate": float((np.abs(_r_sur) / _rs).max()),
         "converged": sol["converged"],
+        "invadable": sol["invadable"],
         "newton_iterations": sol["newton_iters"],
         "active_set_passes": sol["active_set_passes"],
         # Coexistence: who is left at this dilution rate.
