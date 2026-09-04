@@ -396,8 +396,21 @@ def rhs_hybrid(sur: Surrogate, models: list, eps: float, depth: float):
     return f, state
 
 
-def rhs_truth(models: list, exchanges: list[str], c: np.ndarray, X: np.ndarray, eps: float):
-    """``(dc/dt, mu)`` from one FBA + elastic-net solve per organism at medium ``c``."""
+def rhs_truth(
+    models: list,
+    exchanges: list[str],
+    c: np.ndarray,
+    X: np.ndarray,
+    eps: float,
+    duals: dict | None = None,
+):
+    """``(dc/dt, mu)`` from one FBA + elastic-net solve per organism at medium ``c``.
+
+    Pass ``duals`` to also collect each member's exchange shadow prices from the
+    *same* solve -- they are ``d(mu_max)/d(uptake bound)`` and cost nothing extra,
+    so anything that needs ``d(mu)/dc`` exactly (`cfs steady-state`'s Jacobian)
+    should take them from here rather than finite-difference a second model.
+    """
     from cfs.groundtruth.solve import load_km_defaults, solve
 
     km_cfg = load_km_defaults()
@@ -411,8 +424,12 @@ def rhs_truth(models: list, exchanges: list[str], c: np.ndarray, X: np.ndarray, 
             LOGGER.debug("organism %d non-optimal (%s) — treated as no growth (P2)", i, sol.status)
             continue
         mu[i] = sol.mu_max
+        if duals is not None:
+            duals[i] = sol.shadow_prices
         for ex, v in sol.z.items():
             dc[col[ex]] += X[i] * v
+    if duals is not None:
+        duals["c"] = c.copy()
     return dc, mu
 
 

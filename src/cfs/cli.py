@@ -606,6 +606,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ss.add_argument("--dilution-frac", type=float, default=0.2)
     ss.add_argument(
+        "--roster",
+        type=Path,
+        default=None,
+        help="Roster TSV. Given: solve the true LP for the residual and keep the "
+        "surrogate for the Jacobian (inexact Newton). An equilibrium is one state, "
+        "so this costs G solves per iteration, not per Jacobian column.",
+    )
+    ss.add_argument("--eps", type=float, default=1e-3, help="Elastic-net eps for the LP residual.")
+    ss.add_argument(
+        "--mix-mu-rel",
+        type=float,
+        default=None,
+        help="With --roster: solve both and keep the surrogate for any member "
+        "whose mu agrees with the LP within this relative tolerance, substituting "
+        "the LP only where they diverge. Keeps the residual consistent with the "
+        "Jacobian where it can be, at the cost of solving everything anyway.",
+    )
+    ss.add_argument(
         "--fd-check",
         type=int,
         default=20,
@@ -866,6 +884,9 @@ def main(argv: list[str] | None = None) -> int:
             medium=args.medium,
             dilution=args.dilution,
             dilution_frac=args.dilution_frac,
+            roster_path=args.roster,
+            eps=args.eps,
+            mix_mu_rel=args.mix_mu_rel,
             seed=args.seed,
             scales=args.scales,
             fd_check=args.fd_check,

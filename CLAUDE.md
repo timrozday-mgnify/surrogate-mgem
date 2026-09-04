@@ -2052,60 +2052,93 @@ model-side arm is refuted, and coverage rounds are null or below the retrain noi
 floor. What is new is that the failure is now *detectable at runtime* (item 1) and
 *correctable on demand* (item 4).
 
-### M6/M12: the chemostat steady state, built — and three ways to converge on the wrong fixed point (2026-09-04)
+### M6/M12: the chemostat steady state — and a finite-difference step that was 61x wrong (2026-09-04)
 
-`cfs steady-state` (`src/cfs/science/steady.py`) is §13.4, and it is the next
-milestone after §8.6g closed. Newton on `D(c_feed - c) + sum_i X_i z_i(c) = 0`
-and `X_i (mu_i(c) - D) = 0`, surrogate only, no LP in the solve. The complementarity
-half is an **active set**: drop a member whose `X` reaches zero, re-admit one whose
-`mu(c*)` exceeds `D`, never re-admit a member already dropped (Bland's rule). `J`
-is finite-differenced in `c` with the `X` columns exact (`d(dc/dt)/dX_i = z_i` is
-just a unit-biomass probe), and solved by `lstsq` after row **and** column
-equilibration — §7 already measured the Hessian sum at rank ~10-25 of 365, so rank
-deficiency is the normal case. Coexistence, stability, invasion and the
-implicit-function derivative `dy*/dc_feed = -J^-1 D I` all come out of that one
-factorisation.
+`cfs steady-state` (`src/cfs/science/steady.py`) is §13.4, the next milestone after
+§8.6g closed. Active-set Newton on `D(c_feed - c) + sum_i X_i z_i(c) = 0` and
+`X_i (mu_i(c) - D) = 0`; coexistence, stability, invasion and the implicit
+derivative `dy*/dc_feed` all fall out of one factorisation. `lstsq` after row and
+column equilibration, since §7 measured the Hessian sum at rank ~10-25 of 365.
 
-First cell (2 members, `value_p4r2` + `behaviour_p4r2`, `D = 0.2 mu(c_feed)`):
-converged in 13 Newton iterations / 2 active-set passes at a scaled residual
-**9.1e-7**, one survivor, the loser's invasion score **-2.5e-4**, stable at
-`max Re(lambda) = -0.147` against `D = 0.154`. **V4 in miniature passes** — the
-implicit derivative against a re-solve at a perturbed feed, median relative error
-**2.0e-4**, max 4.9e-3 over five feed components.
+**The headline is the FD step, and it generalises past this file.** The Jacobian
+is finite-differenced in `c`, and the first step was `1e-3 * (c + Km)`. The
+limiting metabolite is by definition the scarce one: at a real fixed point
+`EX_k_e` sits at `c = 3.0e-8` against `Km = 1e-3`, so that step is **33x `c`
+itself** and secants clean across the Michaelis-Menten saturation.
 
-**`reach` at `c*` is 1.72 and 2.67**, against a held-out design median of ~0.10 and
-Head B's failure band of 4-8. §13.7's "most exposed use case" is now measured, not
-predicted. The cheap answer is `--fallback-depth`: an equilibrium visits **one**
-state, so paying the true LP there costs nothing like the 24.6% of member-steps it
-costs along a trajectory (§8.6g(4)).
+| `d(mu)/dc`, `EX_k_e` | value |
+| --- | --- |
+| the LP's shadow price, chain-ruled | **5 122 827.50** |
+| FD at `h = 1e-4 c` | 5 122 827.5 |
+| FD at `h = 1e-3 (c + Km)` | **84 153.7** — 61x low |
 
-**Four traps, and three of them return a converged, wrong fixed point.**
+Fixed to `1e-3 * max(c, 1e-3 Km)`. **Same cell: 159 Newton iterations / 9.3e-7 /
+615 s became 11 / 1.8e-8 / 55 s**, and 2 of 5 cells converge where 1 did. Both
+bounds bind: below ~3e-4 relative the float32 heads return noise, above it the
+step crosses the kink. It also made every other diagnosis in the session look
+worse than it was.
 
-1. **`Surrogate.reach` never existed.** §8.6g(1) recorded it as shipped and
+**The LP hybrid, measured.** Three arms, five 2-member cells, identical warm
+starts. A **pure LP residual with a surrogate Jacobian does not converge** (0-13
+iterations, then no descent direction) — the textbook inexact-Newton failure, and
+`mu_rel` of 1e-4 to 9e-3 at those states says Head A was already accurate, so the
+inconsistency costs more than the truth buys. The **mixed** residual fixes it:
+solve both, keep the surrogate wherever it agrees within `--mix-mu-rel`, and give
+the Jacobian **exact dual rows for exactly the members the LP was used on** (NaN
+means "keep the FD"). It matches or beats surrogate-only and needs **2.3x fewer
+iterations on one cell** at 3-5% LP usage. Caveat: the trigger is on `mu` and Head
+B's error is in `z` — one cell fires on nothing at 1% while the pure LP finds a
+different fixed point where the surrogate's own residual is 4.4.
+
+**The exact dual rows are free**: `d(mu)/dc = pi * (-Vmax) * Km/(Km+c)^2`, with the
+*same two corrections* `data._organism_arrays` applies (the dual is that derivative
+only where the bound binds; clamping at 0 also drops the dust that is half the
+non-zero duals). Verified against a properly-scaled FD to 8 significant figures.
+
+**The remaining failures are the optimiser, not the model.** Two cells sit at a
+scaled residual of *exactly* 10.0 in all three arms, and that is `feed/Km ~ 10` on
+nearly every fed metabolite at once: the iterate collapsed the pool to `c ~ 0`
+with `mu ~ 0.005` against `D ~ 12`, including metabolites the community
+*secretes*, whose steady state is `c >= c_feed`. A damped line search is not
+enough globalisation; a trust region, Newton-Krylov (1 rhs per Krylov iteration
+against 230 FD columns) or pseudo-transient continuation are all
+`scipy.optimize.root` one-liners that would **delete** the hand-rolled Newton.
+
+**`reach` at `c*` is 1.0-5.5** against a held-out ~0.10, and the two failing cells
+are the two deepest. §13.7's "most exposed use case" is measured now. The cheap
+answer is that an equilibrium visits **one** state, so the LP costs nothing like
+§8.6g(4)'s 24.6% of member-steps along a trajectory.
+
+**Five more traps, three of which return a converged wrong answer.**
+
+1. **`Surrogate.reach` never existed.** §8.6g(1) recorded it shipped and
    `cfs simulate` called it on line 871; the method was never written, so every
-   `simulate` run raised `AttributeError`. Now defined (over `sur.members`, with
-   the per-cell-only caveat in the docstring). **A feature recorded as shipped in
-   the design spec is not evidence that it runs.**
-2. **Do not warm-start a steady state by integrating.** Explicit Euler clips a fed
-   metabolite at zero, `mu` follows, and the run lands on the **spurious extinction
-   attractor** (`X ~ 1e-9` on both members, measured). The warm start is a
-   **bisection on a scaled feed** instead — `mu` is non-decreasing in `u`, so ~60
-   head evaluations put the fastest member exactly at `mu = D`, which is the fixed
-   point's own defining condition. Abundances come from one NNLS on the pool
-   balance, whose zeros are the first guess at the active set. Also ~2x faster.
+   `simulate` run raised `AttributeError`. Found only when a second caller reused
+   it. **A feature recorded as shipped in the design spec is not evidence it runs.**
+2. **Do not warm-start a steady state by integrating.** The medium saturates `mu`
+   at ~0.2% of the feed, so explicit Euler ratchets `X` to ~1e8 at a large step and
+   washes out to the **spurious extinction** fixed point (`X ~ 1e-9`, residual
+   1e-13, a genuine root) at a small one. The warm start bisects a **partially**
+   scaled feed — only what the community consumes — because a secreted
+   metabolite's steady state is at or above the feed, and scaling it down too makes
+   the abundance NNLS return `X = 0` on 8 of 9 cells (water and protons dominate
+   the rhs and the community secretes both).
 3. **Fraction to the boundary, or the anti-cycling rule eats the community.** One
-   Newton overshoot takes an `X` through zero, the ban stops it returning, and the
-   solve converges *cleanly* — residual 1e-13 — on `X = 0, c = c_feed`. That is a
-   fixed point, and it is the wrong one. Cap the step at 0.99 of the distance to
-   zero and drop on a relative test.
-4. **§8.4's `rtol=1e-10` is unreachable and the solver is not at fault.** float32
-   heads plus a finite-differenced `J` floor the residual near **5e-8** relative;
-   a tighter tolerance only burns iterations to report `converged=False` about a
-   converged state. Default `tol` is `1e-6`, dimensionless (pool rows over `D*Km`,
-   growth rows over `D`), and `residual_max_scaled` is what to read.
+   overshoot through `X = 0` plus the ban converges cleanly at residual 1e-13 on
+   `X = 0, c = c_feed`.
+4. **§8.4's `rtol=1e-10` is unreachable and the solver is not at fault** — float32
+   heads plus an FD `J` floor the residual near 5e-8. `tol` is `1e-6`,
+   dimensionless; read `residual_max_scaled`.
+5. **Report the residual of the rhs you actually solved.** It was taken from the
+   surrogate even in LP mode, making a converged LP run read as a failure at 4.4.
+   That number is worth keeping — it is how far the surrogate alone is from calling
+   the state an equilibrium — but under its own key.
 
-**Open:** the M12 gate is a Newton failure rate < 1% over the roster; one cell is
-not a rate. Keystone members need no code (`--organisms` minus one, N runs).
+**Open:** the M12 gate (a Newton failure rate over the roster; nothing above n=2
+has run), V4 re-measured with the corrected step (the earlier 2.0e-4 / 4.9e-3 is
+void), the `scipy.optimize.root` swap, a warmer Jacobian temperature, exact
+`d(mu)/dc` for the surrogate path from Head A's analytic gradient, and a `z`-side
+mix trigger. Keystone leave-one-out needs no code.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
