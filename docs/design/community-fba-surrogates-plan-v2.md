@@ -3168,10 +3168,33 @@ all (94.8% above 0.9 even at 8 doublings).
    *gradient*, not only a non-finite loss, and reports the skip count (12-13 of 63
    monoculture cells).
 
-   **Next, if this is picked up:** a joint loss -- the per-state label term plus
-   the trajectory term, on monocultures -- which both measurements now motivate
-   directly: (a) says the supervision must be attributable, (b) says the per-state
-   fit needs its own term to survive.
+   **(f) The joint loss was built, controlled, and the trajectory term is null.**
+   `--w-label` adds the per-state label loss on a random minibatch beside the
+   trajectory term; `--w-traj 0` is the control that runs the label term alone
+   through the identical optimiser, steps and data. On monocultures at
+   `--w-label 10`:
+
+   | | worst R2 | median R2 | worst cos | sign | 4-dbl overall | 8-dbl overall |
+   | --- | --- | --- | --- | --- | --- | --- |
+   | `behaviour_p4r2` (start) | 0.577 | 0.937 | 0.964 | 0.912 | **0.002** | **0.041** |
+   | joint (label + trajectory) | 0.784 | 0.958 | 0.982 | 0.955 | 0.006 | 0.082 |
+   | **control (label only)** | **0.816** | **0.959** | 0.982 | 0.953 | 0.007 | 0.070 |
+
+   Joint and control are indistinguishable: paired over 30 cells the joint head is
+   better on **18/30** at 4 doublings and **16/30** at 8 -- a coin flip -- with a
+   median relative difference of 5-9%. And the control alone drives the *trajectory*
+   loss down 0.0854 -> 0.0233 (3.7x), which is more than the trajectory-only arm's
+   own 3.4x. **Everything attributed to the trajectory term is the label term.**
+   §8.6g(3) is refuted; `cfs train-traj` stays in the tree, off any default path,
+   with this result on file.
+
+   **(g) A tenth instance of "held-out cannot see it", and the sharpest.** The
+   control improves **every** held-out label metric over the head it started from
+   -- worst R2 0.577 -> 0.816, median 0.937 -> 0.959, worst cosine 0.964 -> 0.982,
+   sign 0.912 -> 0.953 -- and makes the composition **worse at both gates** (0.002
+   -> 0.007, 0.041 -> 0.070). More label training, better label scores, worse
+   composition. Whatever selects a Head B for §8.1, it is not the held-out label
+   fit.
 
    The original entry: Backprop the endpoint through the integrator
    instead of fitting `z` per state -- the only idea that optimises what the gate

@@ -147,8 +147,21 @@ def _anchor(params, initial, weight: float):
     return weight * total
 
 
-def _loss_fn(sur, cell: dict, initial=None, w_anchor: float = 0.0):
-    """Mean squared ``log X`` error over the whole trajectory, for one cell."""
+def _loss_fn(
+    sur,
+    cell: dict,
+    initial=None,
+    w_anchor: float = 0.0,
+    w_label: float = 0.0,
+    w_traj: float = 1.0,
+):
+    """Mean squared ``log X`` over the trajectory, plus the per-state label term.
+
+    ``w_label`` restores the supervision the trajectory loss cannot provide. The
+    two are complementary and both measurements say so: the trajectory term is the
+    only one that sees the endpoint, and the label term is the only one that sees a
+    single organism's flux vector rather than the pool sum.
+    """
     members = np.array([sur.genome_ids.index(g) for g in cell["genome_ids"]])
     run = _forward(sur, members)
     c0 = jnp.asarray(cell["c0"])
@@ -159,11 +172,20 @@ def _loss_fn(sur, cell: dict, initial=None, w_anchor: float = 0.0):
     keep = jnp.asarray(live.astype(np.float64))
     dt, steps = cell["dt"], cell["steps"]
 
-    def loss(bheads):
+    def loss(bheads, batch=None):
         xs = run(bheads, c0, x0, dt, steps)
         err = (jnp.log(jnp.maximum(xs, 1e-300)) - target) ** 2
         traj = (err * keep).sum() / jnp.maximum(keep.sum() * steps, 1.0)
-        return traj + _anchor(bheads, initial, w_anchor)
+        label = 0.0
+        if w_label and batch is not None:
+            from cfs.surrogate.behaviour import _loss as label_loss
+
+            xb, ab, znb = batch
+            label = label_loss(bheads, xb, ab, znb, 0.0, 0.0)
+        # Reported separately: the label term dominates the total, so one number
+        # cannot say whether the trajectory half is doing anything -- and
+        # `--w-traj 0` is the control that attributes a joint result to it.
+        return w_traj * traj + w_label * label + _anchor(bheads, initial, w_anchor), (traj, label)
 
     return loss
 
@@ -178,6 +200,11 @@ def run(
     lr: float = 1e-5,
     clip: float = 1.0,
     w_anchor: float = 0.0,
+    w_label: float = 0.0,
+    w_traj: float = 1.0,
+    labels_dir: Path | None = None,
+    index: Path | None = None,
+    batch: int = 256,
     seed: int = 0,
 ) -> dict:
     """Fine-tune Head B on stored community trajectories. Writes a checkpoint.
@@ -204,9 +231,32 @@ def run(
         len({tuple(c["genome_ids"]) for c in cells}),
         sorted({len(c["genome_ids"]) for c in cells}),
     )
+    label_data = None
+    if w_label:
+        if labels_dir is None or index is None:
+            raise ValueError("--w-label needs --labels and --index")
+        from cfs.surrogate.data import load_behaviour_dataset
+
+        ds = load_behaviour_dataset(labels_dir, index, eps=1e-3, seed=seed)
+        if list(ds.genome_ids) != list(sur.genome_ids):
+            raise ValueError("the label root and the checkpoint disagree on genome_ids (P13)")
+        label_data = (
+            jnp.asarray(ds.x_train),
+            jnp.asarray(ds.a_train),
+            jnp.asarray(ds.z_train / ds.mu_train[:, :, None] / ds.z_scale[:, None, :]),
+        )
+        LOGGER.info("label term on %d rows/organism, batch %d", ds.x_train.shape[1], batch)
+
     initial = sur._bheads
     losses = [
-        (c, eqx.filter_jit(eqx.filter_value_and_grad(_loss_fn(sur, c, initial, w_anchor))))
+        (
+            c,
+            eqx.filter_jit(
+                eqx.filter_value_and_grad(
+                    _loss_fn(sur, c, initial, w_anchor, w_label, w_traj), has_aux=True
+                )
+            ),
+        )
         for c in cells
     ]
 
@@ -216,10 +266,14 @@ def run(
     order = np.random.default_rng(seed)
     history = []
     for epoch in range(epochs):
-        total, seen, skipped = 0.0, 0, 0
+        total, traj_total, label_total, seen, skipped = 0.0, 0.0, 0.0, 0, 0
         for i in order.permutation(len(losses)):
             cell, fn = losses[i]
-            value, grad = fn(params)
+            batch_arrays = None
+            if label_data is not None:
+                idx = jnp.asarray(order.integers(0, label_data[0].shape[1], batch))
+                batch_arrays = tuple(a[:, idx] for a in label_data)
+            (value, (traj_v, label_v)), grad = fn(params, batch_arrays)
             # A single non-finite gradient is permanent damage, not a bad step:
             # `clip_by_global_norm` puts the NaN into the global norm and Adam's
             # moments carry it forever, so every later cell reads non-finite too.
@@ -237,6 +291,8 @@ def run(
             updates, state = opt.update(grad, state, eqx.filter(params, eqx.is_inexact_array))
             params = eqx.apply_updates(params, updates)
             total += float(value)
+            traj_total += float(traj_v)
+            label_total += float(label_v)
             seen += 1
         # Averaging over *all* cells would report a diverged epoch, where every
         # trajectory is non-finite and skipped, as a loss of exactly 0 -- which is
@@ -248,9 +304,11 @@ def run(
             )
         history.append(total / seen)
         LOGGER.info(
-            "epoch %3d  mean trajectory loss %.6g  (%d/%d cells, %d skipped)",
+            "epoch %3d  loss %.6g  (traj %.6g, label %.6g)  (%d/%d cells, %d skipped)",
             epoch,
             history[-1],
+            traj_total / seen,
+            label_total / seen,
             seen,
             len(losses),
             skipped,
@@ -272,6 +330,8 @@ def run(
         "lr": lr,
         "clip": clip,
         "w_anchor": w_anchor,
+        "w_label": w_label,
+        "w_traj": w_traj,
         "loss_first": history[0] if history else None,
         "loss_last": history[-1] if history else None,
         "history": history,

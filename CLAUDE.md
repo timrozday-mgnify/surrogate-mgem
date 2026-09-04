@@ -1973,7 +1973,19 @@ relative-error re-anchoring; each was compensating for that lift.
    evidence that the two are independent. Trap: one non-finite gradient poisons
    Adam permanently through `clip_by_global_norm`, which reads as an `lr`
    divergence at every `lr`; the guard skips on the gradient, not just the loss.
-   Then the LP fallback at `depth < 0.9`.
+   **(v) The joint loss closes it: the trajectory term is null.** `--w-label` adds
+   the per-state label term; `--w-traj 0` runs the label term alone through the
+   identical optimiser and data. Joint and control are a coin flip — the joint head
+   is better on **18/30** cells at 4 doublings and **16/30** at 8, median relative
+   difference 5-9% — and the control alone drives the *trajectory* loss down 3.7x,
+   more than the trajectory-only arm's 3.4x. **§8.6g(3) is refuted**; `cfs
+   train-traj` stays in the tree with the result on file. **(vi) And the control is
+   a tenth instance of [[held-out-cannot-see-a-design-change]], the sharpest yet:
+   it improves every held-out label metric** (worst R2 0.577 -> 0.816, median 0.937
+   -> 0.959, cosine 0.964 -> 0.982, sign 0.912 -> 0.953) **and makes the
+   composition worse at both gates** (0.002 -> 0.007, 0.041 -> 0.070). More label
+   training, better label scores, worse composition — so the held-out label fit is
+   not what selects a Head B for §8.1. Then the LP fallback at `depth < 0.9`.
 7. **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
    touching cut selection again, and Part 3d before touching Head B.
 

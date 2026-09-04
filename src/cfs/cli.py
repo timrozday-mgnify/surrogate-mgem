@@ -355,10 +355,30 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="Weight on mean squared parameter drift from the starting head, "
-        "normalised per leaf. Unconstrained, 60 epochs on 32 trajectories buy 9% "
+        "normalised per leaf. Unconstrained, 60 epochs on 32 trajectories buy 9%% "
         "of the trajectory loss and take held-out label R2 from 0.577 to -31.98, "
         "with both community gates 2.5-7x worse. Default 0 (off) records that.",
     )
+    tt.add_argument(
+        "--w-label",
+        type=float,
+        default=0.0,
+        help="Weight on the per-state label loss, evaluated on a random minibatch "
+        "beside the trajectory term. The two see different things: only the "
+        "trajectory term sees the endpoint, and only the label term sees a single "
+        "organism's flux vector rather than the pool sum. Needs --labels/--index.",
+    )
+    tt.add_argument(
+        "--w-traj",
+        type=float,
+        default=1.0,
+        help="Weight on the trajectory term. `--w-traj 0 --w-label W` is the "
+        "control that attributes a joint run's result to the trajectory half "
+        "rather than to the label rounds the starting head had not seen.",
+    )
+    tt.add_argument("--labels", type=Path, help="Label shard root, for --w-label.")
+    tt.add_argument("--index", type=Path, help="Frozen metabolite_index.json, for --w-label.")
+    tt.add_argument("--batch", type=int, default=256, help="Label-term minibatch (media/step).")
     tt.add_argument("--seed", type=int, default=0)
 
     tb.add_argument(
@@ -699,6 +719,11 @@ def main(argv: list[str] | None = None) -> int:
             lr=args.lr,
             clip=args.clip,
             w_anchor=args.w_anchor,
+            w_label=args.w_label,
+            w_traj=args.w_traj,
+            labels_dir=args.labels,
+            index=args.index,
+            batch=args.batch,
             seed=args.seed,
         )
         print(json.dumps({k: v for k, v in report.items() if k != "history"}, indent=2))
