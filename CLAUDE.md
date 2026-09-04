@@ -2164,7 +2164,9 @@ answer is that an equilibrium visits **one** state, so the LP costs nothing like
 
 Also: `--mix-z-rel`, because a `mu`-only mix trigger fires on nothing exactly
 where Head B is wrong (cell 5: 0% of members at 1%, while the pure LP found a
-different fixed point with a surrogate residual of 4.4); and regression tests for
+different fixed point with a surrogate residual of 4.4). Measured: the z-side
+trigger fires on **54%** of that cell's members against 0%, and the solve takes
+**5 iterations against 23**; and regression tests for
 the dual chain rule and the stale-cache NaN fallback.
 
 **Next:** (1) find out whether cells 2 and 3 have a fixed point *at all* — every

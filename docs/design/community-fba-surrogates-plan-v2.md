@@ -3822,6 +3822,12 @@ whole finding restated at an equilibrium. Cell 5 fired on **0%** of members at
 `--mix-mu-rel 0.01` while the pure-LP residual converged to a different fixed
 point at which the surrogate's own residual is **4.4**.
 
+Measured on that cell, `--mix-mu-rel 0.01 --mix-z-rel 0.1`: the trigger fires on
+**54% of members** against 0% for `mu` alone, and the solve takes **5 iterations
+against 23**, ending at 4.9e-6. (Not comparable to the surrogate-only 1.2e-6 --
+that is a different, harder residual -- but it is the first evidence the trigger
+is firing on the right members.)
+
 **Job 7**, regression tests for the dual chain rule -- the sign convention, both
 label clamps (non-binding duals, and the O(1e-14) dust that is half the non-zero
 ones), and that a stale dual cache returns NaN rather than a silently wrong row.
