@@ -264,7 +264,31 @@ and the reading below is the part of the literature that speaks to that.
 | **Minimizing the Number of Optimizations for Efficient Community dFBA**, [bioRxiv 2020](https://www.biorxiv.org/content/10.1101/2020.03.12.988592) (also Part 4) | The non-ML baseline *and* the shape of the fallback in §8.6g's solution 4: reuse/short-circuit the LP where it is cheap, solve it where it is not. Our trigger is predicted depletion depth (24% of member-steps carry 72% of the error); theirs is basis validity. Any speed claim has to be stated against this, not against a cold LP. |
 | Settles, **Active Learning Literature Survey** (also 3b) | Read again for the *self-labelling* loop: the failure it documents is acquisition over a pool drawn from the training distribution. The fallback avoids it structurally — the pool is the trajectory, which is the shifted distribution — and the remaining risk is the covariate shift the loop induces in itself, which is why every label is kept and the trajectory re-run after each retrain (Guigues's store-and-select, 3a). |
 | Vovk, Gammerman & Shafer (also 3c); Angelopoulos & Bates, **A Gentle Introduction to Conformal Prediction** | §13.6's missing error model. The nonconformity score is available and measured: NN distance in `x` predicts `dc_rel` at Spearman +0.673 **across cells**. The caveat is now measured too — the same quantity is *anti*-correlated with error **within** a trajectory (lift 0.9x), so calibrate per run, not per step. |
-| Famili & Palsson 2003; Haraldsdóttir & Fleming 2016; Donti et al., **DC3** (all above) | Re-read for §8.6g's solution 2, the secretion-side inequality `E z <= 0`. Note which half of DC3 has paid here: the *correction* (the MM clamp) bought the composition, the *projection* (B1) bought 0.001. |
+| Famili & Palsson 2003; Haraldsdóttir & Fleming 2016; Donti et al., **DC3** (all above) | Re-read for §8.6g's solution 2, the secretion-side inequality `E z <= 0`. Note which half of DC3 has paid here: the *correction* (the MM clamp) bought the composition, the *projection* (B1) bought 0.001. **Built 2026-09-04 and kept**: labels violate it at 0.0000, Head B at 34-53%, and the *minimum-norm* projection is 14/30 cells better on the endpoint and never worse. A uniform shrink satisfying the same inequalities made `dc_rel` worse on 10 of 11 cells — DC3's correction step is a projection for a reason. |
+
+**Updated 2026-09-04, after all four of §8.6g's solutions ran.** Only the fallback
+moved the gate, and none of the four changed Head B as a model:
+
+* **The differentiable simulator (solution 3) is refuted here, and the reason is
+  structural rather than about neural ODEs.** `d(log X)/dt` is Head A's frozen
+  `mu`, so the trajectory loss reaches Head B *only* through the pool sum
+  `sum_i X_i z_i`: N members' fluxes collapse into one vector per step and the
+  individual `z_i` are unidentifiable (held-out R2 0.577 -> -31.98 while the loss
+  moved 9%). Monocultures restore identifiability — and there the whole gain is
+  reproduced by the label term alone at `--w-traj 0`. Anyone reading the neural-ODE
+  literature for this project should start from *what the loss can identify*, not
+  from the adjoint.
+* **The bioRxiv 2020 dFBA baseline is now the right comparison and the gap is
+  quantified.** Our trigger fires on 24.6% of member-steps live — matching the
+  offline ROC exactly — and takes the 8-doubling gate from 0.041 to 0.028, n=21 to
+  0.015. State speed against that paper's basis-reuse, not against a cold LP.
+* **Settles's warning did not bite, and something else did.** The self-labelling
+  loop is built (`--fallback-media` -> `cfs generate --media` -> retrain with
+  `x_scale` pinned) and its first pass, 71 media, is null against a matched
+  control — but the *control itself*, a fresh fit with no new rows, moved the
+  8-doubling mean 0.085 -> 0.143. The active-learning risk to manage here is not
+  acquisition bias, it is that retraining variance exceeds the signal being
+  acquired.
 
 ---
 

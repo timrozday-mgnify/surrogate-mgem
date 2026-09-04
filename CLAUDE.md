@@ -1804,7 +1804,7 @@ relative-error re-anchoring; each was compensating for that lift.
 
 | gate | state |
 | --- | --- |
-| **M5, 1% log-X** | **met at every size at the default 4-doubling horizon (0.0-2.6%) — and failed at every size at 8 doublings (3.1-13.5%, overall 4.1%). The gate was a statement about the integration window; quote it with its horizon (§8.6f B4)** |
+| **M5, 1% log-X** | **met at every size at the default 4-doubling horizon (0.0-2.6%) — and failed at every size at 8 doublings (3.1-13.5%, overall 4.1%). The gate was a statement about the integration window; quote it with its horizon (§8.6f B4).** The 8-doubling gate now has one working lever: the **LP fallback** at `depth < 0.9` takes it to 0.028 overall and n=21 to 0.015, for 24.6% of the member-steps a full LP would cost (§8.6g(4)) |
 | **M3, 0.99 worst grad cosine** | 0.9522 — untouched by any of this, and no longer what §8.1 is waiting on |
 
 **What is open, in order.**
@@ -2018,6 +2018,39 @@ relative-error re-anchoring; each was compensating for that lift.
 **Caveat that affects all of it:** `x = u/(u+s)` takes `s` from the training
 rows, so every relabel silently changes the input coordinate and two label roots
 are never strictly comparable.
+
+### §8.6g's ranked list is complete, and one of the four works — 2026-09-04
+
+All four items built and measured, in order. **Only the LP fallback moves the
+gate**, and it does so without touching either head.
+
+| item | outcome |
+| --- | --- |
+| 1. runtime predictors | **shipped** — `cfs simulate` reports `reach` (per cell), `depth_final`, `frac_steps_below_depth_0.9`; the reference media ride in the Head B checkpoint |
+| 2. secretion bound `E z <= 0` | **built, kept, small** — premise passed on both legs (labels violate at 0.0000, Head B at 34-53%), min-norm projection is 14/30 cells better on the endpoint and never worse |
+| 3. trajectory-level training | **refuted** — a community loss cannot identify a member; on monocultures its whole gain is reproduced by the label term alone (`--w-traj 0`) |
+| 4. LP fallback at `depth < 0.9` | **works** — 8-doubling median log-X 0.041 -> 0.028, n=21 0.054 -> **0.015**, 26/30 cells better, at a 24.6% fire rate that matched the offline ROC exactly. Its self-labelling half is null at 71 media |
+
+**The three methodological results are worth more than three of the four arms.**
+(a) **Enforcing a constraint is not projecting onto it** — the uniform secretion
+shrink satisfied the same inequalities and made `dc_rel` worse on 10 of 11 cells.
+(b) **Run the zero-weight ablation** — the joint loss looked like a win on every
+metric until `--w-traj 0` reproduced it. (c) **Score a label round against a
+matched retrain** — a fresh fit at the same seed moves the 8-doubling mean 0.085
+-> 0.143 and the max 0.572 -> 1.866 with no new rows, which is larger than any
+round-sized effect; rounds 3 and 4 were scored the older way.
+
+**What the fallback changes about the plan.** It is a speed/accuracy knob, not a
+model fix: `fallback_roc.py` prices a threshold offline (no solves) and the live
+fire rate matches, so a use case can *choose* its LP budget. §13.7's per-use-case
+table should be read with that in mind — an application that cannot afford 24% of
+a full LP solve is a different application from one that can.
+
+**Where Head B stands after all of it.** Unchanged as a model: the residual is
+still extrapolation to community-regime states (§8.6g stock-take), every
+model-side arm is refuted, and coverage rounds are null or below the retrain noise
+floor. What is new is that the failure is now *detectable at runtime* (item 1) and
+*correctable on demand* (item 4).
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

@@ -2989,6 +2989,33 @@ all (94.8% above 0.9 even at 8 doublings).
 
 ##### What looks promising, ranked
 
+**All four were built and measured, 2026-09-03/04. Verdicts first, detail below.**
+
+| item | verdict |
+| --- | --- |
+| 1. runtime predictors | **shipped**, and item 4's trigger came out of it |
+| 2. secretion bound `E z <= 0` | **kept**, small and free: 14/30 cells better, never worse |
+| 3. trajectory-level training | **refuted** by its own zero-weight control |
+| 4. LP fallback at `depth < 0.9` | **works**: 8-doubling 0.041 -> 0.028, n=21 -> 0.015, at a 24.6% fire rate. Self-labelling half null at 71 media |
+
+Only item 4 moves the gate, and it moves it **without changing either head** —
+which is consistent with everything else in this section: Head B's residual is
+extrapolation, every model-side arm is refuted, and the useful responses are to
+*detect* the regime (item 1) and *pay for truth* in it (item 4).
+
+Three methodological results came out of this pass and generalise beyond it:
+
+* **Enforcing a constraint is not projecting onto it.** A uniform secretion shrink
+  satisfies the same four inequalities and made `dc_rel` worse on 10 of the 11
+  cells it moved; only the min-norm projection inherits "a set containing the truth
+  cannot increase the error".
+* **Run the zero-weight ablation.** The joint label+trajectory loss beat its
+  starting head on every metric until `--w-traj 0` reproduced the whole gain.
+* **Score a label round against a matched retrain.** A fresh fit at the same seed,
+  with no new rows, moves the 8-doubling mean 0.085 -> 0.143 and the max 0.572 ->
+  1.866 — larger than any round-sized effect measured here. Rounds 3 and 4 were
+  scored against their starting checkpoint instead, and carry that caveat.
+
 1. **Ship the runtime predictors — done 2026-09-03.** `cfs simulate`'s report now
    carries `reach` (per member, at `t = 0`), `depth_final` and
    `frac_steps_below_depth_0.9`, all surrogate-only and all free. The reach proxy
@@ -3689,6 +3716,24 @@ below is a Head B statement, and two things changed the verdicts:
 | §13.5 interaction magnitude | yes | exploratory, unchanged |
 | §13.6 posterior | yes | still blocked, but the error model now has a candidate: the reach proxy as a distance-aware nonconformity score, calibrated on community-regime states (never on held-out design media) |
 
+**Amended 2026-09-04, after §8.6g.** Two rows move, and both move because the LP
+fallback makes accuracy something a use case can *buy* rather than something the
+head either has or lacks.
+
+| Use case | Amendment |
+| --- | --- |
+| §13.1 quantitative yield / batch endpoint | **Reachable, at a price.** `--fallback-depth 0.9` takes the 8-doubling gate from 0.041 to 0.028 overall and n=21 from 0.054 to **0.015**, for 24.6% of the member-steps a full LP costs. Still not 1%, and P23 still stands — but "not safe at a long horizon" is now a statement about the LP budget, not about the head |
+| §13.6 posterior | The nonconformity score has a **second** candidate, and it is the better one: predicted depletion **depth**, which is the only *per-step* predictor measured to beat random (lift 3.0x, against the reach proxy's 0.9x). Reach stays the per-cell instrument. Both ship in `cfs simulate` |
+| §13.4 steady state | Unchanged and still the most exposed — but the fallback applies there too, and an equilibrium solve visits few states, so the price of truth at those states is low. Measure it at the equilibrium, as this row already says |
+
+**And a caution the §8.6g pass adds to P25.** Every one of the label rounds in
+this project has been scored against the checkpoint it started from, which
+conflates the new rows with a fresh fit. Measured at the 8-doubling gate, a
+matched retrain with **no new rows** moves the mean 0.085 -> 0.143 and the max
+0.572 -> 1.866. Rounds 3, 4 and 5's "null" verdicts are safe in direction — none
+of them helped — but their magnitudes are inside that noise, and any future round
+must budget a matched control.
+
 ### 13.8 New pitfalls
 
 | ID | Pitfall | Symptom | Solution |
@@ -3698,6 +3743,7 @@ below is a Head B statement, and two things changed the verdicts:
 | P22 | An objective on flux *magnitude* | Inherits Head B's weakest axis while the diagnostics (cosine, sign agreement) look fine | Prefer direction- and structure-valued objectives; label magnitude-valued results exploratory |
 | P23 | Optimising a batch-culture endpoint | The answer flips under changes that improve the right-hand side on every measure — the endpoint turns on which metabolite empties first | Optimise rates, or a chemostat steady state. Never a batch endpoint |
 | P24 | A relabel that improves every held-out metric and breaks composition | Worst grad cosine, value R², per-metabolite coverage and M11 all improve; §8.1 regresses 17x at n=21 | Held-out media come from the *same design that changed*, so they cannot see it. Score every design change on a **community-regime held-out set** (§8.5). The stratum-budget reading of P24 was measured and is wrong — see §4.3 |
+| P26 | Reading a fine-tune or a label round against its starting checkpoint | Every metric improves and the change looks earned; the same numbers appear with the new term at weight zero or the new rows absent | Two ablations, both measured to matter here: run the new loss term at **weight 0** (the trajectory term's entire gain was the label term's), and score a label round against a **matched retrain** (a fresh fit alone moves the 8-doubling mean 68% and the max 3.3x) |
 | P25 | Tuning a training distribution against a proxy metric | The proxy moves exactly as designed, three times, and the downstream number does not follow | Co-limitation count, near-onset count, NN-distance in `x` and per-metabolite limiting rows are all refuted as predictors of §8.1 (§8.5). Do not spend a 5 h relabel on a metric that has not first been shown to correlate with the composition on runs already on disk |
 
 ### 13.9 Milestones
