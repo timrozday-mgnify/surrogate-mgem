@@ -342,7 +342,7 @@ def rhs_hybrid(sur: Surrogate, models: list, eps: float, depth: float):
 
     km_cfg = load_km_defaults()
     col = {ex: j for j, ex in enumerate(sur.exchanges)}
-    state = {"mu0": None, "fired": 0, "steps": 0}
+    state = {"mu0": None, "fired": 0, "steps": 0, "media": []}
 
     def f(c: np.ndarray, X: np.ndarray):
         mu, z = sur.mu_and_z(c, np.ones(len(sur.genome_ids), dtype=np.float32))
@@ -354,6 +354,13 @@ def rhs_hybrid(sur: Surrogate, models: list, eps: float, depth: float):
         state["steps"] += len(mu)
         if fire.any():
             conc = dict(zip(sur.exchanges, c.tolist(), strict=True))
+            # The self-labelling half: keep the state, not the solve. `cfs generate
+            # --media` labels an explicit medium list over the full alpha grid
+            # through the tested path, so recording `c` is enough and a second
+            # label writer -- which would have to solve every alpha here -- is not
+            # needed. Retraining on them needs `x_scale` pinned (P14, §8.6f trap 1):
+            # `load_*_dataset(..., x_scale=...)`.
+            state["media"].append(c.copy())
             for i in np.flatnonzero(fire):
                 sol = solve(models[i], conc, 1.0, eps, km_cfg)
                 if sol.status != "optimal":
@@ -572,6 +579,7 @@ def compare(
                     "fire_rate": fb_state["fired"] / max(fb_state["steps"], 1),
                 }
             ),
+            "_fired_media": [] if fb_state is None else fb_state["media"],
             "trajectory": {
                 "x_log_err_final": float(x_log[-1].max()),
                 "x_log_err_max": float(x_log.max()),
@@ -668,6 +676,7 @@ def run(
     seed: int = 0,
     scales: Path | None = None,
     fallback_depth: float = 0.0,
+    fallback_media: Path | None = None,
 ) -> dict:
     """Compose each community, compare against the LP, write ``community.json``."""
     from surrogate_mgem.data import read_roster
@@ -675,6 +684,7 @@ def run(
     Path(out).mkdir(parents=True, exist_ok=True)
     roster = {gm.genome_id: gm for gm in read_roster(Path(roster_path))}
     report = {"communities": []}
+    fired_media: list[np.ndarray] = []
     for n, gids in enumerate(communities):
         sur = Surrogate(value_dir, behaviour_dir, organisms=gids)
         missing = [g for g in gids if g not in roster]
@@ -718,6 +728,7 @@ def run(
             "  inoculum %.3g gDW/L total, %d exchanges present", x_total, int((c0 > 0).sum())
         )
         res, true, surr = compare(sur, models, c0, x0, dt, steps, eps, fallback_depth)
+        fired_media.extend(res.pop("_fired_media", []))
         res |= {"genome_ids": gids, "size": len(gids), "t_end": t_end, "steps": steps, "dt": dt}
         report["communities"].append(res)
         LOGGER.info(
@@ -739,6 +750,18 @@ def run(
             x_surr=surr.x,
             exchanges=np.array(sur.exchanges),
         )
+
+    if fallback_media is not None and fired_media:
+        # The same layout `cfs generate --media` reads and `make_traj_pool.py`
+        # writes, so the loop closes with no new format: label these, then retrain
+        # with `x_scale` pinned to this checkpoint's.
+        np.savez_compressed(
+            Path(fallback_media),
+            media=np.asarray(fired_media),
+            exchanges=np.array(sur.exchanges),
+            index_hash=sur.index_hash,
+        )
+        LOGGER.info("%d fired states -> %s", len(fired_media), fallback_media)
 
     by_size: dict[int, list] = {}
     for r in report["communities"]:

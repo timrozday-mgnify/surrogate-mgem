@@ -292,6 +292,15 @@ def build_parser() -> argparse.ArgumentParser:
         "the run, in 3 geometric steps. Low T is what stops the head over-predicting "
         "slow media; a low *fixed* T trains worse, so this separates the two.",
     )
+    tv.add_argument(
+        "--x-scale-from",
+        type=Path,
+        default=None,
+        help="Pin the input coordinate to this checkpoint's `x_scale` instead of "
+        "recomputing it from these rows (§8.6f trap 1). Required to extend an "
+        "existing head with new label rounds -- otherwise every round moves `x` "
+        "under it (P14) and the two are not comparable.",
+    )
     tv.add_argument("--seed", type=int, default=0)
     tv.add_argument(
         "--organisms",
@@ -310,6 +319,15 @@ def build_parser() -> argparse.ArgumentParser:
     tb.add_argument("--epochs", type=int, default=300)
     tb.add_argument("--batch", type=int, default=512)
     tb.add_argument("--lr", type=float, default=3e-3)
+    tb.add_argument(
+        "--x-scale-from",
+        type=Path,
+        default=None,
+        help="Pin the input coordinate to this checkpoint's `x_scale` instead of "
+        "recomputing it from these rows (§8.6f trap 1). Required to extend an "
+        "existing head with new label rounds -- otherwise every round moves `x` "
+        "under it (P14) and the two are not comparable.",
+    )
     tb.add_argument("--seed", type=int, default=0)
     tb.add_argument("--organisms", help="Comma-separated genome_ids (default: every shard).")
     tb.add_argument(
@@ -445,6 +463,14 @@ def build_parser() -> argparse.ArgumentParser:
         "depth `mu_hat(t)/mu_hat(0)` falls below this, and use it for that step. "
         "Measured offline at 0.9: fires on 24%% of member-steps and captures 72%% "
         "of the accumulated |d log X| (lift 3.0x). 0 disables it (default).",
+    )
+    cm.add_argument(
+        "--fallback-media",
+        type=Path,
+        default=None,
+        help="Write the states the fallback fired at to this .npz, in the layout "
+        "`cfs generate --media` reads. That is the self-labelling half: label "
+        "them, then retrain with `x_scale` pinned to the current checkpoint.",
     )
     cm.add_argument("--seed", type=int, default=0)
 
@@ -687,6 +713,7 @@ def main(argv: list[str] | None = None) -> int:
             k_code=args.k_code,
             seed=args.seed,
             organisms=organisms,
+            x_scale_from=args.x_scale_from,
         )
         print(json.dumps(diagnostics, indent=2))
         return 0 if diagnostics["passed"] else 1
@@ -710,6 +737,7 @@ def main(argv: list[str] | None = None) -> int:
                     basis_var=args.basis_var,
                     seed=args.seed,
                     organisms=organisms,
+                    x_scale_from=args.x_scale_from,
                 )["summary"],
                 indent=2,
             )
@@ -766,6 +794,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
             scales=args.scales,
             fallback_depth=args.fallback_depth,
+            fallback_media=args.fallback_media,
         )
         print(json.dumps(report["summary"], indent=2))
         return 0

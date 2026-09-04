@@ -240,6 +240,7 @@ def _stack(
     seed: int,
     organisms: list[str] | None,
     with_z: bool = False,
+    x_scale_pin: np.ndarray | None = None,
 ):
     """Everything both heads share: read, check (P13), split by medium, rescale.
 
@@ -320,7 +321,22 @@ def _stack(
     # non-decreasing for the composition to stay concave. `picnn.ValueHead`
     # enforces that, and it is true of the target anyway: relaxing an uptake bound
     # can only enlarge the LP's feasible set.
-    x_scale = np.stack([_kink_scale(x[i], g[i]) for i in range(x.shape[0])])
+    # `x_scale` is read off the *training rows*, so every relabel silently moves
+    # the input coordinate and two label roots are never strictly comparable --
+    # which is also why a round forces both heads to be rebuilt (P14). Pinning it
+    # is the prerequisite for any incremental loop that adds rows to an existing
+    # checkpoint (§8.6f trap 1): pass the scale the checkpoint was trained with and
+    # the coordinate stops moving under it.
+    if x_scale_pin is not None:
+        x_scale = np.asarray(x_scale_pin, dtype=float)
+        if x_scale.shape != (x.shape[0], x.shape[2]):
+            raise ValueError(
+                f"pinned x_scale has shape {x_scale.shape}, expected "
+                f"{(x.shape[0], x.shape[2])} (G, M) -- a different organism set or index (P13)"
+            )
+        LOGGER.info("x_scale pinned from a checkpoint; not recomputed from these rows")
+    else:
+        x_scale = np.stack([_kink_scale(x[i], g[i]) for i in range(x.shape[0])])
     s = x_scale[:, None, :]
     # Chain rule: dx'/dx = s / (x + s)^2. A few depletion-corner rows (x = 0 with
     # a huge dual on a metabolite that never limits elsewhere, so s = 1) stay
@@ -366,6 +382,7 @@ def load_value_dataset(
     val_frac: float = 0.2,
     seed: int = 0,
     organisms: list[str] | None = None,
+    x_scale: np.ndarray | None = None,
 ) -> ValueDataset:
     """Load the labels of ``organisms`` (default: all) into stacked train/val arrays.
 
@@ -388,7 +405,7 @@ def load_value_dataset(
     which is what makes a round-over-round number mean anything. Top-up media all
     go to training, which is what they were generated for.
     """
-    d = _stack(labels_dir, index_path, eps, val_frac, seed, organisms)
+    d = _stack(labels_dir, index_path, eps, val_frac, seed, organisms, x_scale_pin=x_scale)
     ti, vi = d["ti"], d["vi"]
     mu_scale = d["mu"].std(axis=1)
     mu_scale[mu_scale <= 0] = 1.0
@@ -418,6 +435,7 @@ def load_behaviour_dataset(
     val_frac: float = 0.2,
     seed: int = 0,
     organisms: list[str] | None = None,
+    x_scale: np.ndarray | None = None,
 ) -> BehaviourDataset:
     """Head B labels: ``z_i(c, alpha)`` over the §4.4 alpha grid.
 
@@ -428,7 +446,9 @@ def load_behaviour_dataset(
     The (medium, alpha) pairs are flattened into one row axis. Alpha is a *model
     input*, not a batch axis: §8.2 evaluates ``z`` at an ``alpha`` off the grid.
     """
-    d = _stack(labels_dir, index_path, eps, val_frac, seed, organisms, with_z=True)
+    d = _stack(
+        labels_dir, index_path, eps, val_frac, seed, organisms, with_z=True, x_scale_pin=x_scale
+    )
     ti, vi, a = d["ti"], d["vi"], d["alphas"]
     x, z = d["x"], d["z"]  # (G, N, M), (G, A, N, M)
     g, n_a, _, m = z.shape

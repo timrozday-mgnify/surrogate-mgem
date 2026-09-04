@@ -431,8 +431,25 @@ def run(
     basis_var: float = 0.0,
     seed: int = 0,
     organisms: list[str] | None = None,
+    x_scale_from: Path | None = None,
 ) -> dict:
-    ds = load_behaviour_dataset(labels_dir, index_path, eps=eps, seed=seed, organisms=organisms)
+    # §8.6f trap 1: pin the input coordinate to an existing checkpoint's, so
+    # rows added by a fallback round do not move `x` under the head that is
+    # being extended (P14). Without this no incremental loop is comparable.
+    pin = None
+    if x_scale_from is not None:
+        import json as _json
+
+        for name in ("value_heads.json", "behaviour_heads.json"):
+            cand = Path(x_scale_from) / name
+            if cand.exists():
+                pin = np.asarray(_json.loads(cand.read_text())["x_scale"], dtype=float)
+                break
+        if pin is None:
+            raise ValueError(f"no heads json with an x_scale in {x_scale_from}")
+    ds = load_behaviour_dataset(
+        labels_dir, index_path, eps=eps, seed=seed, organisms=organisms, x_scale=pin
+    )
     heads = train_behaviour_heads(
         ds,
         width=width,

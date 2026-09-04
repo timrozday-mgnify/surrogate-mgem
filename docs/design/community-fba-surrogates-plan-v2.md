@@ -3231,9 +3231,42 @@ all (94.8% above 0.9 even at 8 doublings).
       deplete and a few fire on 83% of their steps. The median describes a typical
       cell, not the cost.
 
-   Still to do: the self-labelling half (keep the fired rows, retrain), which needs
-   trap 1 — pinning `x_scale` at round 0 in `data._stack` — and traps 2-4 apply to
-   it unchanged.
+   **The self-labelling half is built too, and its first pass is null — but the
+   control is the result worth keeping.** Trap 1 is cleared:
+   `load_{value,behaviour}_dataset(..., x_scale=...)` and
+   `cfs train-{value,behaviour} --x-scale-from <checkpoint>` pin the input
+   coordinate instead of recomputing it from the rows, so a round can extend an
+   existing head **without rebuilding Head A** — `Surrogate`'s P14 check passes
+   across the round, which is what it is for. Pinning costs nothing: retraining on
+   the *unchanged* labels with the coordinate pinned gives worst R2 0.933 / median
+   0.964 against `behaviour_p4r2`'s 0.935 / 0.964.
+
+   The loop then runs end to end: `--fallback-media` writes the fired states in the
+   layout `cfs generate --media` reads (no second label writer, and no need to
+   solve every alpha online), 2 draws x 16 n=15 communities at 8 doublings gave
+   **71 media** after dedup and striding, `--round 5` labelled them 21/21, and Head
+   B was retrained with the pin.
+
+   | median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | mean | max |
+   | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+   | 8 dbl, `behaviour_p4r2` | 0.031 | 0.135 | 0.041 | 0.053 | 0.054 | 0.041 | 0.085 | 0.572 |
+   | 8 dbl, **control** (pinned retrain, no round 5) | 0.026 | 0.054 | 0.031 | 0.057 | 0.059 | 0.035 | **0.143** | **1.866** |
+   | 8 dbl, + round 5 | 0.032 | 0.201 | 0.031 | 0.057 | 0.068 | 0.040 | 0.126 | 0.573 |
+
+   1. **The round is null against its own control** — better on 9/30 cells at 8
+      doublings and 11/30 at 4, with median and mean disagreeing in both (the round
+      fixes the control's tail and loses the typical cell). 71 media against a
+      ~4700-media root is a small spend, so this refutes nothing bigger; it says
+      one pass at this size does not transfer.
+   2. **Retraining alone moves the composition more than the round does, and that
+      is the finding.** The control differs from `behaviour_p4r2` only by a fresh
+      600-epoch fit at the same seed and settings, and at 8 doublings it moves the
+      mean **0.085 -> 0.143** and the max **0.572 -> 1.866**. So the noise floor
+      for "did this round help" is larger than any round-sized effect measured
+      here. **Score a label round against a matched retrain, never against the
+      checkpoint it started from** — rounds 3 and 4 were both scored the older way.
+   3. The online fallback remains the thing that works: 0.041 -> 0.028 on the same
+      gate, with no retraining at all.
 5. **Application-scoped coverage**, run the cheap way -- generate free from
    `c_surr`, farthest-point subsample, label ~25 per composition across many
    compositions. On round 4's evidence this buys `dc` and structure, not the

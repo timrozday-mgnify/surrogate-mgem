@@ -1998,9 +1998,20 @@ relative-error re-anchoring; each was compensating for that lift.
    the offline estimator can price a threshold before a run. Spearman(fire rate,
    relative gain) = +0.458 (p=0.016) over the cells that fired. **Quote the pooled
    rate, not the per-cell median** — 12.3% vs 1.8% at 4 doublings, because most
-   cells never deplete and a few fire on 83% of their steps. Still open: the
-   self-labelling half (keep the fired rows and retrain), which needs `x_scale`
-   pinned at round 0 in `data._stack`.
+   cells never deplete and a few fire on 83% of their steps. **The self-labelling half is
+   built and its first pass is null; the control is the keeper.** Trap 1 is
+   cleared — `load_{value,behaviour}_dataset(..., x_scale=...)` and
+   `cfs train-{value,behaviour} --x-scale-from <ckpt>` pin the input coordinate, so
+   a round extends a head **without rebuilding Head A** (P14 passes across it), and
+   pinning costs nothing (0.933/0.964 against 0.935/0.964 on unchanged labels).
+   `--fallback-media` writes the fired states in `cfs generate --media`'s layout;
+   71 media, labelled as round 5, retrained. Against its own control the round is
+   **null** (9/30 cells better at 8 doublings). **But the control moved the deep
+   gate's mean 0.085 -> 0.143 and its max 0.572 -> 1.866 on a fresh 600-epoch fit
+   at the same seed, with no new rows at all** — so retraining noise here exceeds
+   any round-sized effect. **Score a label round against a matched retrain, never
+   against the checkpoint it started from**; rounds 3 and 4 were scored the older
+   way. The online fallback is what works (0.041 -> 0.028), with no retraining.
 7. **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
    touching cut selection again, and Part 3d before touching Head B.
 
