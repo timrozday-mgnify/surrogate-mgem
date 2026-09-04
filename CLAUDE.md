@@ -1957,7 +1957,23 @@ relative-error re-anchoring; each was compensating for that lift.
    the n=21 draw-200 cell (`||g||` 0.198 against an error of 0.318), as expected:
    that one is Head A's mid-`mu` over-prediction. Gradients reach ~300 through 40
    Euler steps, so clip and prefer a whole-trajectory loss to an endpoint-only
-   one. Then the LP fallback at `depth < 0.9`.
+   one. **It is now built (`cfs train-traj`) and measured**, and the result is
+   mixed with a clean structure — design spec §8.6g(3). Four things to carry:
+   (i) **a community trajectory loss cannot identify per-organism behaviour** —
+   `d(log X)/dt` is Head A's frozen `mu`, so Head B reaches the loss only through
+   the pool sum, and 60 epochs take held-out label R2 from 0.577 to **-31.98**
+   with both gates worse; a weight-drift anchor cannot repair that (still -15.8 at
+   `--w-anchor 1.0`). (ii) **Monocultures can**: on `monodeep_s*` the trajectory
+   loss falls **3.4x** (against 9%) with worst R2 -0.445 and sign agreement
+   slightly better than baseline. (iii) At the gate it is size-split — at 8
+   doublings every size from 5 up improves 10-40% (n=10 0.053 -> 0.032, n=21 0.054
+   -> 0.039) and the small communities lose. (iv) **`dc_rel` got 3x worse while
+   the endpoint improved** — the exact inverse of
+   [[rhs-accuracy-does-not-buy-the-endpoint]]'s six instances, and the sharpest
+   evidence that the two are independent. Trap: one non-finite gradient poisons
+   Adam permanently through `clip_by_global_norm`, which reads as an `lr`
+   divergence at every `lr`; the guard skips on the gradient, not just the loss.
+   Then the LP fallback at `depth < 0.9`.
 7. **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
    touching cut selection again, and Part 3d before touching Head B.
 

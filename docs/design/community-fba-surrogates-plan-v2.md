@@ -3118,6 +3118,61 @@ all (94.8% above 0.9 even at 8 doublings).
    Euler steps, so the training gradients will be stiff. Clip, and prefer a loss
    over the whole trajectory to an endpoint-only one.
 
+   **Built (`cfs train-traj`, `src/cfs/surrogate/traj.py`) and measured, and it
+   does what it says on its own objective without being a net win at the gate.**
+   The JAX replica of the dFBA map reproduces `dfba.integrate` to **3e-6** in
+   `log X` (`20hm_bands/traj_check.py`), so training and scoring are the same map.
+
+   **(a) The community loss cannot identify per-organism behaviour.** `d(log X)/dt`
+   is Head A's frozen `mu`, a function of `c` alone, so Head B reaches the loss
+   *only* through the pool sum `sum_i X_i z_i`: 15 members' fluxes collapse into
+   one vector per step. Measured on the 16 n=15 communities: 60 epochs buy 9% of
+   the trajectory loss and take held-out label R2 from **0.577 to -31.98** (median
+   0.937 -> -0.26), with both gates worse (4 doublings 0.002 -> 0.014 overall,
+   8 doublings 0.041 -> 0.104). A per-leaf weight-drift anchor (`--w-anchor`) does
+   not fix it -- at `w = 1.0`, where learning is nearly off (-2.3% loss), the worst
+   organism is still at **-15.8**. An anchor cannot repair an identifiability
+   problem.
+
+   **(b) Monocultures identify it, and the loss then actually moves.** In a
+   monoculture the pool sum *is* that organism. On `monodeep_s*` (21 organisms x 3
+   draws, 8 doublings -- the depletion regime, and already on disk) the trajectory
+   loss falls **0.0180 -> 0.0053, a 3.4x reduction** against 9% on community data,
+   and the label damage is far milder: worst R2 -0.445, median 0.817, worst cosine
+   0.911, sign agreement 0.918 (*better* than the 0.912 it started from).
+
+   **(c) At the gate it is mixed, and splits cleanly by size.** Paired over 30
+   cells, `behaviour_tjm_lr1e-5` against the same-medium controls:
+
+   | median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | better/30 |
+   | --- | --- | --- | --- | --- | --- | --- |
+   | 4 doublings, base -> tuned | 0.0020 -> 0.0050 | 0.0025 -> 0.0327 | 0.0002 -> 0.0006 | 0.0259 -> **0.0200** | 0.0129 -> **0.0094** | 10 |
+   | 8 doublings, base -> tuned | 0.031 -> 0.034 | 0.135 -> **0.095** | 0.041 -> **0.037** | 0.053 -> **0.032** | 0.054 -> **0.039** | 13 |
+
+   At the deep gate every size from 5 up improves by 10-40%; the small communities
+   lose, and they dominate the count.
+
+   **(d) The inverse of six earlier results, and the sharpest evidence yet that
+   `dc_rel` is the wrong instrument.** `dc_rel` gets *much worse* — median
+   0.190 -> 0.626 at 4 doublings, 0.556 -> 1.586 at 8, better on only 2-3 of 30 —
+   while the endpoint at n >= 5 improves. Six times a better rhs failed to buy the
+   endpoint; here a **3x worse rhs bought it** at the sizes that matter. The two
+   are close to independent, and only one of them is the gate.
+
+   **(e) One trap, and it is not specific to this module.** A single non-finite
+   gradient is permanent: `optax.clip_by_global_norm` puts the NaN in the global
+   norm and Adam's moments carry it forever, so every later cell reads non-finite
+   and the run looks like a learning-rate divergence at any `lr`. It arises on
+   starved states, where Head A's softmin at the shipped `gm_eval_temp` (1e-4)
+   amplifies by ~1/T in float32. `traj.run` now skips the update on a non-finite
+   *gradient*, not only a non-finite loss, and reports the skip count (12-13 of 63
+   monoculture cells).
+
+   **Next, if this is picked up:** a joint loss -- the per-state label term plus
+   the trajectory term, on monocultures -- which both measurements now motivate
+   directly: (a) says the supervision must be attributable, (b) says the per-state
+   fit needs its own term to survive.
+
    The original entry: Backprop the endpoint through the integrator
    instead of fitting `z` per state -- the only idea that optimises what the gate
    measures, and the only one that can see which metabolite empties first. The

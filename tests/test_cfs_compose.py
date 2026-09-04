@@ -268,3 +268,28 @@ def test_element_balance_is_the_identity_without_a_table():
     sur._E = None
     z = np.array([[1.0, -2.0]])
     assert np.allclose(Surrogate._element_balance(sur, z), z)
+
+
+def test_traj_anchor_is_normalised_per_leaf():
+    # §8.6g(3). The drift penalty must be per leaf: Head B's arrays differ in scale
+    # by orders of magnitude, and `--w-prox` already showed that one global ratio
+    # over a heavy-tailed quantity is set by its largest members and reads ~0 for
+    # every other array — a penalty that silently does nothing.
+    import equinox as eqx
+    import jax.numpy as jnp
+    import pytest
+
+    from cfs.surrogate.traj import _anchor
+
+    class P(eqx.Module):
+        big: jnp.ndarray
+        small: jnp.ndarray
+
+    base = P(jnp.full((4,), 1000.0), jnp.full((4,), 0.001))
+    # Same *relative* drift in each leaf: 10%.
+    moved = P(base.big * 1.1, base.small * 1.1)
+    assert float(_anchor(moved, base, 1.0)) == pytest.approx(2 * 0.01, rel=1e-4)  # float32
+    # A drift in the small leaf alone still registers.
+    small_only = P(base.big, base.small * 1.1)
+    assert float(_anchor(small_only, base, 1.0)) == pytest.approx(0.01, rel=1e-4)  # float32
+    assert float(_anchor(moved, base, 0.0)) == 0.0

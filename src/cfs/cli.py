@@ -325,6 +325,42 @@ def build_parser() -> argparse.ArgumentParser:
         "with individual predictions 13x outside it, so the net is spending "
         "capacity on outputs the LP cannot produce. Default 0 (off).",
     )
+    tt = sub.add_parser(
+        "train-traj",
+        help="§8.6g(3): fine-tune Head B on stored community trajectories (endpoint loss).",
+    )
+    tt.add_argument("--value", type=Path, required=True, help="Head A checkpoint (frozen).")
+    tt.add_argument(
+        "--behaviour", type=Path, required=True, help="Head B checkpoint to start from."
+    )
+    tt.add_argument("--out", type=Path, required=True, help="Fine-tuned Head B checkpoint dir.")
+    tt.add_argument(
+        "--runs",
+        required=True,
+        help="Comma-separated `cfs community` output dirs supplying the true "
+        "trajectories. **Never the 10 benchmark communities** -- the M5 numbers are "
+        "quoted on those; use the 16 n=15 sets, as §8.6d's round 2 did.",
+    )
+    tt.add_argument("--epochs", type=int, default=20)
+    tt.add_argument("--lr", type=float, default=1e-5)
+    tt.add_argument(
+        "--clip",
+        type=float,
+        default=1.0,
+        help="Global-norm gradient clip. The premise check measured d(logX)/dz "
+        "reaching ~300 through 40 Euler steps, so this is load-bearing, not hygiene.",
+    )
+    tt.add_argument(
+        "--w-anchor",
+        type=float,
+        default=0.0,
+        help="Weight on mean squared parameter drift from the starting head, "
+        "normalised per leaf. Unconstrained, 60 epochs on 32 trajectories buy 9% "
+        "of the trajectory loss and take held-out label R2 from 0.577 to -31.98, "
+        "with both community gates 2.5-7x worse. Default 0 (off) records that.",
+    )
+    tt.add_argument("--seed", type=int, default=0)
+
     tb.add_argument(
         "--basis-var",
         type=float,
@@ -339,7 +375,6 @@ def build_parser() -> argparse.ArgumentParser:
         "held-out worst R2 falls 0.935 -> 0.920, so the default is 0 (off, the "
         "full-width head). 0.9999 is the cutoff that gives rank 12-39.",
     )
-
 
     cm = sub.add_parser(
         "community", help="M5/§8.1: compose the frozen heads into communities vs the LP."
@@ -650,6 +685,23 @@ def main(argv: list[str] | None = None) -> int:
                 indent=2,
             )
         )
+        return 0
+
+    if args.command == "train-traj":
+        from cfs.surrogate.traj import run as run_t
+
+        report = run_t(
+            args.value,
+            args.behaviour,
+            [p for p in args.runs.split(",") if p],
+            args.out,
+            epochs=args.epochs,
+            lr=args.lr,
+            clip=args.clip,
+            w_anchor=args.w_anchor,
+            seed=args.seed,
+        )
+        print(json.dumps({k: v for k, v in report.items() if k != "history"}, indent=2))
         return 0
 
     if args.command == "community":
