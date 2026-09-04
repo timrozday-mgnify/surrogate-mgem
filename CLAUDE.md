@@ -1985,7 +1985,22 @@ relative-error re-anchoring; each was compensating for that lift.
    -> 0.959, cosine 0.964 -> 0.982, sign 0.912 -> 0.953) **and makes the
    composition worse at both gates** (0.002 -> 0.007, 0.041 -> 0.070). More label
    training, better label scores, worse composition — so the held-out label fit is
-   not what selects a Head B for §8.1. Then the LP fallback at `depth < 0.9`.
+   not what selects a Head B for §8.1.
+
+   **The LP fallback is built and it is the first thing to buy the deep gate**
+   (`cfs community --fallback-depth 0.9`, `dfba.rhs_hybrid`, 2026-09-04): solve the
+   true LP for any member whose predicted depletion depth `mu_hat(t)/mu_hat(0)`
+   falls below the threshold. At 8 doublings, median log-X **0.041 -> 0.028
+   overall (26/30 cells better)**, and the large communities gain most — n=21
+   **0.054 -> 0.015 (-72%)**, n=10 -45%; at 4 doublings 0.002 -> 0.001. The pooled
+   fire rate is **24.6%** of member-steps, matching `fallback_roc.py`'s offline
+   prediction of 24% exactly, so it is a ~4x saving against solving everything and
+   the offline estimator can price a threshold before a run. Spearman(fire rate,
+   relative gain) = +0.458 (p=0.016) over the cells that fired. **Quote the pooled
+   rate, not the per-cell median** — 12.3% vs 1.8% at 4 doublings, because most
+   cells never deplete and a few fire on 83% of their steps. Still open: the
+   self-labelling half (keep the fired rows and retrain), which needs `x_scale`
+   pinned at round 0 in `data._stack`.
 7. **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
    touching cut selection again, and Part 3d before touching Head B.
 

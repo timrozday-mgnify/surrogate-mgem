@@ -3200,8 +3200,40 @@ all (94.8% above 0.9 even at 8 doublings).
    instead of fitting `z` per state -- the only idea that optimises what the gate
    measures, and the only one that can see which metabolite empties first. The
    stack has the pieces (JAX; `integrate` is an explicit Euler map).
-4. **The LP fallback at `depth < 0.9`**, self-labelling (§8.6f above): 24% of
-   member-steps, 72% of the error, with the four recorded traps.
+4. **The LP fallback at `depth < 0.9` — built and it works, 2026-09-04.**
+   `cfs community --fallback-depth 0.9` (`dfba.rhs_hybrid`): at each step, any
+   member whose predicted depletion depth `mu_hat(t)/mu_hat(0)` is below the
+   threshold gets its true LP solved and substituted for that step. The trigger is
+   surrogate-only and free; `mu_hat(0)` is taken at the first call.
+
+   | median log-X, 3 draws x 10 communities | n=2 | n=3 | n=5 | n=10 | n=21 | overall | better/30 |
+   | --- | --- | --- | --- | --- | --- | --- | --- |
+   | 4 doublings, base | 0.002 | 0.002 | 0.000 | 0.026 | 0.013 | 0.002 | — |
+   | 4 doublings, fallback | 0.001 | 0.002 | 0.000 | 0.023 | 0.011 | **0.001** | **19** (4 worse) |
+   | 8 doublings, base | 0.031 | 0.135 | 0.041 | 0.053 | 0.054 | 0.041 | — |
+   | **8 doublings, fallback** | 0.029 | 0.127 | **0.027** | **0.029** | **0.015** | **0.028** | **26** (3 worse) |
+
+   1. **It buys the deep gate, which nothing else has**: overall -32%, and the
+      large communities most — n=21 **0.054 -> 0.015 (-72%)**, n=10 -45%. The
+      4-doubling gate improves slightly (0.002 -> 0.001) because there is little
+      depletion there to trigger on.
+   2. **The offline ROC was accurate.** `fallback_roc.py` predicted a 24% fire rate
+      at `depth < 0.9`; live, the pooled rate is **24.6%** (3835/15600 member-steps)
+      at 8 doublings and 12.3% at 4. So it is a ~4x saving against solving every
+      member every step, and the offline estimator can be trusted to price a
+      threshold before running it.
+   3. **The benefit tracks the trigger.** Over the 27 deep cells that fired,
+      Spearman(fire rate, relative endpoint gain) = **+0.458** (p=0.016) — the
+      cells that fire more are the cells that gain more, which is what a trigger
+      aimed at the error should do.
+   4. **Quote the pooled rate, not the per-cell median.** At 4 doublings the
+      per-cell median fire rate is 1.8% against a pooled 12.3%: most cells never
+      deplete and a few fire on 83% of their steps. The median describes a typical
+      cell, not the cost.
+
+   Still to do: the self-labelling half (keep the fired rows, retrain), which needs
+   trap 1 — pinning `x_scale` at round 0 in `data._stack` — and traps 2-4 apply to
+   it unchanged.
 5. **Application-scoped coverage**, run the cheap way -- generate free from
    `c_surr`, farthest-point subsample, label ~25 per composition across many
    compositions. On round 4's evidence this buys `dc` and structure, not the

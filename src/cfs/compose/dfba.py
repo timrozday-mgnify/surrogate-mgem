@@ -318,6 +318,55 @@ def rhs_surrogate(sur: Surrogate, c: np.ndarray, X: np.ndarray):
     return (X[:, None] * z).sum(0), mu
 
 
+def rhs_hybrid(sur: Surrogate, models: list, eps: float, depth: float):
+    """§8.6g(4): the surrogate, with the true LP substituted for depleting members.
+
+    The trigger is **predicted depletion depth**, `mu_hat(t) / mu_hat(0)` per
+    member: surrogate-only, free, and the only per-step predictor measured to
+    beat random. `fallback_roc.py` on trajectories already on disk: at
+    `depth < 0.9` it fires on **24%** of member-steps and those steps carry **72%**
+    of the accumulated `|d log X|`, a lift of 3.0x. The §8.6d reach proxy is
+    explicitly *not* usable here -- it is a per-cell predictor, and per step it
+    scores a lift of **0.9x**, worse than random (a proxy validated across cells is
+    not thereby a proxy within one).
+
+    The reference `mu_hat(0)` is taken at the first call, so it is the surrogate's
+    own view of the inoculum's growth rate and needs no truth.
+
+    Expect a **discrete** change, not an interpolation: substituting truth at the
+    fired steps changes which metabolite empties first, which is the mechanism
+    behind six "a better rhs is not a better trajectory" results. Score it on the
+    endpoint.
+    """
+    from cfs.groundtruth.solve import load_km_defaults, solve
+
+    km_cfg = load_km_defaults()
+    col = {ex: j for j, ex in enumerate(sur.exchanges)}
+    state = {"mu0": None, "fired": 0, "steps": 0}
+
+    def f(c: np.ndarray, X: np.ndarray):
+        mu, z = sur.mu_and_z(c, np.ones(len(sur.genome_ids), dtype=np.float32))
+        mu, z = mu[sur.members].copy(), z[sur.members].copy()
+        if state["mu0"] is None:
+            state["mu0"] = np.maximum(mu, 1e-30)
+        fire = mu / state["mu0"] < depth
+        state["fired"] += int(fire.sum())
+        state["steps"] += len(mu)
+        if fire.any():
+            conc = dict(zip(sur.exchanges, c.tolist(), strict=True))
+            for i in np.flatnonzero(fire):
+                sol = solve(models[i], conc, 1.0, eps, km_cfg)
+                if sol.status != "optimal":
+                    continue  # P2: keep the surrogate's row rather than zeroing it
+                mu[i] = sol.mu_max
+                z[i] = 0.0
+                for ex, v in sol.z.items():
+                    z[i, col[ex]] = v
+        return (X[:, None] * z).sum(0), mu
+
+    return f, state
+
+
 def rhs_truth(models: list, exchanges: list[str], c: np.ndarray, X: np.ndarray, eps: float):
     """``(dc/dt, mu)`` from one FBA + elastic-net solve per organism at medium ``c``."""
     from cfs.groundtruth.solve import load_km_defaults, solve
@@ -437,10 +486,16 @@ def compare(
     dt: float,
     steps: int,
     eps: float,
+    fallback_depth: float = 0.0,
 ) -> dict:
     """Integrate both, and score the surrogate rhs along the *true* trajectory."""
     true = integrate(lambda c, X: rhs_truth(models, sur.exchanges, c, X, eps), c0, x0, dt, steps)
-    surr = integrate(lambda c, X: rhs_surrogate(sur, c, X), c0, x0, dt, steps)
+    fb_state = None
+    if fallback_depth > 0:
+        hybrid, fb_state = rhs_hybrid(sur, models, eps, fallback_depth)
+        surr = integrate(hybrid, c0, x0, dt, steps)
+    else:
+        surr = integrate(lambda c, X: rhs_surrogate(sur, c, X), c0, x0, dt, steps)
 
     # Step-matched: the surrogate rhs at the states the real community visited.
     # This separates "the heads are wrong" from "the error compounded".
@@ -507,6 +562,16 @@ def compare(
                     float(per_member[worst]),
                 ],
             },
+            "fallback": (
+                None
+                if fb_state is None
+                else {
+                    "depth": fallback_depth,
+                    "solved_member_steps": fb_state["fired"],
+                    "member_steps": fb_state["steps"],
+                    "fire_rate": fb_state["fired"] / max(fb_state["steps"], 1),
+                }
+            ),
             "trajectory": {
                 "x_log_err_final": float(x_log[-1].max()),
                 "x_log_err_max": float(x_log.max()),
@@ -602,6 +667,7 @@ def run(
     eps: float = 1e-3,
     seed: int = 0,
     scales: Path | None = None,
+    fallback_depth: float = 0.0,
 ) -> dict:
     """Compose each community, compare against the LP, write ``community.json``."""
     from surrogate_mgem.data import read_roster
@@ -651,7 +717,7 @@ def run(
         LOGGER.info(
             "  inoculum %.3g gDW/L total, %d exchanges present", x_total, int((c0 > 0).sum())
         )
-        res, true, surr = compare(sur, models, c0, x0, dt, steps, eps)
+        res, true, surr = compare(sur, models, c0, x0, dt, steps, eps, fallback_depth)
         res |= {"genome_ids": gids, "size": len(gids), "t_end": t_end, "steps": steps, "dt": dt}
         report["communities"].append(res)
         LOGGER.info(

@@ -437,6 +437,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cm.add_argument("--eps", type=float, default=1e-3, help="Elastic-net level for the LP truth.")
     cm.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the medium.")
+    cm.add_argument(
+        "--fallback-depth",
+        type=float,
+        default=0.0,
+        help="§8.6g(4): solve the true LP for any member whose predicted depletion "
+        "depth `mu_hat(t)/mu_hat(0)` falls below this, and use it for that step. "
+        "Measured offline at 0.9: fires on 24%% of member-steps and captures 72%% "
+        "of the accumulated |d log X| (lift 3.0x). 0 disables it (default).",
+    )
     cm.add_argument("--seed", type=int, default=0)
 
     ch = sub.add_parser(
@@ -756,6 +765,7 @@ def main(argv: list[str] | None = None) -> int:
             eps=args.eps,
             seed=args.seed,
             scales=args.scales,
+            fallback_depth=args.fallback_depth,
         )
         print(json.dumps(report["summary"], indent=2))
         return 0
