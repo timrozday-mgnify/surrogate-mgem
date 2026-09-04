@@ -624,6 +624,29 @@ def build_parser() -> argparse.ArgumentParser:
         "Jacobian where it can be, at the cost of solving everything anyway.",
     )
     ss.add_argument(
+        "--mix-z-rel",
+        type=float,
+        default=None,
+        help="Second --mix-mu-rel trigger, relative on z in the 2-norm. Needed in "
+        "practice: a mu-only trigger fires on nothing exactly where Head B is "
+        "wrong, since Head A is the accurate head.",
+    )
+    ss.add_argument(
+        "--jac-temp",
+        type=float,
+        default=None,
+        help="Evaluate Head A at this temperature in the Jacobian only. Free by "
+        "construction: the residual keeps the shipped temperature and decides the "
+        "fixed point, the Jacobian only decides the rate.",
+    )
+    ss.add_argument(
+        "--solver",
+        default="newton",
+        choices=["newton", "krylov", "df-sane", "hybr", "broyden1"],
+        help="Inner root finder. The scipy methods are kept but refuted: none of "
+        "them knows X > 0, so they converge on the trivial washout root.",
+    )
+    ss.add_argument(
         "--fd-check",
         type=int,
         default=20,
@@ -887,6 +910,9 @@ def main(argv: list[str] | None = None) -> int:
             roster_path=args.roster,
             eps=args.eps,
             mix_mu_rel=args.mix_mu_rel,
+            mix_z_rel=args.mix_z_rel,
+            jac_temp=args.jac_temp,
+            solver=args.solver,
             seed=args.seed,
             scales=args.scales,
             fd_check=args.fd_check,

@@ -50,3 +50,52 @@ def test_the_implicit_derivative_matches_a_resolve():
     sol = solve_steady(_rhs, feed, D, free, scale, feed.copy(), np.array([1.0, 1.0]))
     S = sensitivity(sol["J"], np.flatnonzero(free), scale, D)
     assert np.allclose(S[:, 0], [0.0, YIELD], atol=1e-6)
+
+
+def test_the_dual_chain_rule_and_its_two_corrections():
+    """`_lp_mu_rows`: the sign convention, the chain rule, and both label clamps.
+
+    A sign error here is silent -- it makes the Jacobian's growth rows point the
+    wrong way and shows up only as slow or absent convergence -- and the two
+    corrections are the ones `cfs.surrogate.data._organism_arrays` documents:
+    the dual is `d(mu)/d(uptake bound)` only where that bound *binds*, and half
+    the "non-zero" duals are O(1e-14) solver dust.
+    """
+    from cfs.science.steady import _lp_mu_rows
+    from cfs.surrogate.behaviour import VMAX
+
+    ex = ["EX_a_e", "EX_b_e", "EX_c_e", "EX_d_e"]
+    km = np.array([1e-3, 1e-2, 1e-3, 1e-3])
+    c = np.array([3.0e-8, 5.0e-3, 1.0e-3, 1.0e-3])
+    duals = {
+        "c": c.copy(),
+        0: {
+            "EX_a_e": -5.123134538636119,  # binds: a real sensitivity
+            "EX_b_e": +2.0,  # a waste product's network value, NOT a derivative
+            "EX_c_e": -1e-14,  # solver dust
+            # EX_d_e absent from the solve entirely
+        },
+    }
+    g = _lp_mu_rows(duals, None, ex, 1e-3, km, c, 1)
+
+    # d(mu)/dc = pi * (-Vmax) * Km/(Km+c)^2, and only on the binding entry.
+    want = 5.123134538636119 * VMAX * km[0] / (km[0] + c[0]) ** 2
+    assert np.isclose(g[0, 0], want, rtol=1e-12)
+    assert g[0, 0] > 0.0  # more nutrient cannot lower growth
+    assert (g[0, 1:] == 0.0).all()  # positive dual, dust and absent all clamp to 0
+
+
+def test_a_stale_dual_cache_is_not_silently_reused():
+    """The duals ride on the residual's solve, so evaluation order is a hazard.
+
+    Asking for rows at a different `c` than the cache holds must not return the
+    cached ones: a stale Jacobian row is invisible and wrong.
+    """
+    from cfs.science.steady import _mixed_mu_rows
+
+    ex = ["EX_a_e"]
+    km = np.array([1e-3])
+    st = {"c": np.array([1.0]), "lp": np.array([True]), "duals": {0: {"EX_a_e": -1.0}}}
+    assert np.isfinite(_mixed_mu_rows(st, ex, km, np.array([1.0]), 1)).all()
+    # NaN means "keep the finite difference", which is the safe fallback.
+    assert np.isnan(_mixed_mu_rows(st, ex, km, np.array([2.0]), 1)).all()

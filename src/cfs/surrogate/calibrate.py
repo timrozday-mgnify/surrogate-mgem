@@ -128,3 +128,26 @@ def apply(mu_hat, cal) -> np.ndarray:
     return a.reshape(shape) * m - d0.reshape(shape) * np.exp(
         np.minimum(-m / np.maximum(beta.reshape(shape), 1e-12), 700.0)
     )
+
+
+def deriv(mu_hat, cal) -> np.ndarray:
+    """``g'(mu_hat) = a + (d0/beta) exp(-m/beta)``, matching :func:`apply` exactly.
+
+    Anything that differentiates a *reported* ``mu`` through the calibration needs
+    this -- `cfs steady-state`'s analytic Jacobian rows, and §13.3's constraint
+    gradients. It is positive by construction (``a, d0 >= 0``), which is what keeps
+    a calibrated head monotone in ``u``.
+
+    The same exponent clip as :func:`apply`, and for the same reason: an
+    uncalibrated checkpoint stores ``beta = 0``, and Head A's raw output does go
+    negative at a scarce medium. Above the clip ``exp`` is constant, so the
+    derivative there is ``a`` plus a constant rather than ``inf``; with ``d0 = 0``
+    -- the identity -- it is exactly ``a``.
+    """
+    cal = np.asarray(cal)
+    d0, beta = cal[:, 0], cal[:, 1]
+    a = cal[:, 2] if cal.shape[1] > 2 else np.ones_like(d0)
+    shape = (-1,) + (1,) * (np.ndim(mu_hat) - 1)
+    m = np.asarray(mu_hat)
+    b = np.maximum(beta.reshape(shape), 1e-12)
+    return a.reshape(shape) + (d0.reshape(shape) / b) * np.exp(np.minimum(-m / b, 700.0))

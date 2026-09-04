@@ -2134,16 +2134,43 @@ answer is that an equilibrium visits **one** state, so the LP costs nothing like
    That number is worth keeping — it is how far the surrogate alone is from calling
    the state an equilibrium — but under its own key.
 
-**Next, in order — the ranked plan with its reasoning is design spec §13.4.** It
-follows one measurement: the cells that still fail, fail on **globalisation**, not
-on the heads. (1) Swap the inner solver to `scipy.optimize.root` — `krylov` costs
-one rhs per Krylov iteration against 230 FD columns, and it **deletes** `_newton`,
-`_lstsq_step` and the line search. (2) A warmer `gm_eval_temp` inside `_jacobian`
-only — free by construction, and aimed at the chatter a hard-min head causes.
-(3) Re-measure V4; the old numbers are void. (4) Only then the M12 gate over the
-roster, or it measures the line search. Then exact `d(mu)/dc` for the surrogate
-path from `growth.mu_and_grad`, a `z`-side trigger for `--mix-mu-rel`, a
-regression test for the dual chain rule, and keystone leave-one-out (no code).
+**The solver pass, 2026-09-04 — full detail and the ranked plan in design spec
+§13.4.** Four results:
+
+1. **Replacing the hand-rolled Newton with `scipy.optimize.root` is refuted, and
+   the reason generalises: none of those methods knows `X > 0`.** On the toy
+   chemostat, whose answer is closed-form, `hybr`, `df-sane`, `broyden1` and
+   `krylov` **all** converge to the *trivial washout root* `X = 0, c = c_feed` —
+   always present, usually nearest, wrong. Re-parametrising as `log X` removes
+   that root and does not rescue them. `--solver` keeps them, default `newton`.
+   **A matching fraction-to-the-boundary on `c` is refuted too**: it takes cell 1
+   from converged to failed. The boundaries are not symmetric — `c = 0` is a
+   normal steady state, `X = 0` is a change of active set.
+2. **Analytic growth rows (`_head_mu_rows` + `calibrate.deriv`) are exact and are
+   the durable win.** On the limiting metabolite: Head A analytic **5 122 829**,
+   the LP's chain-ruled dual **5 122 827.5** — two independent derivations
+   agreeing to 7 significant figures. And at `EX_cu2_e` the analytic gradient is
+   5.6 where the finite difference returns **0.0**; FD was silently zeroing real
+   entries. Cell 5 moves 7.8e-6 -> **1.2e-6** at half the iterations.
+3. **`--jac-temp` is real but not a default.** Head B's `z` is independent of Head
+   A's temperature, so the growth rows are the *only* place the shipped hard-min
+   `gm_eval_temp = 1e-4` reaches the Jacobian; warming it there costs nothing by
+   construction. At `T = 0.01` it takes cell 4 from 25 to **9** iterations and
+   cell 3 from 10.0 to 4.0, and **loses cell 1 outright**. A sweet spot, not a
+   direction.
+4. **V4 re-measured with the corrected FD step: median 3.1e-7 / 3.9e-6, max
+   1.4e-6 / 3.9e-5** on the two converging cells, against the void 2.0e-4 /
+   4.9e-3. **V4 passes wherever the solve converges.**
+
+Also: `--mix-z-rel`, because a `mu`-only mix trigger fires on nothing exactly
+where Head B is wrong (cell 5: 0% of members at 1%, while the pure LP found a
+different fixed point with a surrogate residual of 4.4); and regression tests for
+the dual chain rule and the stale-cache NaN fallback.
+
+**Next:** (1) find out whether cells 2 and 3 have a fixed point *at all* — every
+method now fails on them and integration is the cheap discriminator; (2) the M12
+gate over the roster, quoted per cell with `reach`; (3) a per-cell `--jac-temp`
+decision; (4) keystone leave-one-out, which needs no code.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

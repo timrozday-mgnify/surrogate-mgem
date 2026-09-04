@@ -3747,31 +3747,99 @@ there costs nothing like §8.6g(4)'s 24.6% of member-steps along a trajectory.
    that state an equilibrium -- but it is not the convergence test, and it now has
    its own key.
 
-##### What is next, in order — and why this order
+##### The solver pass — 2026-09-04. One job refuted, one exact, one mixed
 
-The ordering follows one measurement: **the cells that still fail, fail on
-globalisation, not on the heads.** Both sit at `feed/Km` on every fed metabolite
-because a step collapsed the pool. So the solver is fixed before the gate is
-measured, or the gate measures the line search.
+**Job 1, replacing the hand-rolled Newton with `scipy.optimize.root`, is
+refuted, and the reason is worth keeping: none of those methods knows `X > 0`.**
+On the toy chemostat, whose answer is closed-form, `hybr`, `df-sane`, `broyden1`
+and `krylov` **all** converge to the *trivial washout root* `X = 0, c = c_feed` --
+which is always present, is usually nearest, and is wrong. The hand-rolled Newton
+avoided it only through its fraction-to-the-boundary step. Re-parametrising
+abundances as `log X` removes that root to minus infinity and does not rescue
+them either: they then converge nowhere on the toy. `--solver` keeps all four
+selectable and defaults to `newton`.
 
-| # | Job | Why here | Cost |
+**A matching fraction-to-the-boundary on `c` is also refuted**, and it was the
+obvious reading of the diagnosis (a step collapses the pool, so cap the step).
+Measured: cell 1 goes from converged (1.8e-8, 11 iterations) to failed (20.0, 21)
+and cell 5 from 7.8e-6 to 14. The boundaries are **not symmetric** -- a
+concentration reaching zero is a normal steady state (that metabolite is absent),
+where an abundance reaching zero is a change of active set.
+
+**Job 5, the analytic growth rows, is exact and is the durable result.** Head A is
+analytically differentiable, so those rows never needed probing:
+`dmu/dc = dmu/dx . dx/du . du/dc` times the output calibration's derivative
+(`calibrate.deriv`, new -- `mu` is *reported* calibrated, so the Jacobian must be
+too). Two cross-checks, both on the limiting metabolite of a real fixed point:
+
+| `d(mu)/dc`, `EX_k_e` | value |
+| --- | --- |
+| Head A, analytic | **5 122 829** |
+| the LP's shadow price, chain-ruled | **5 122 827.5** |
+| finite difference, corrected step | 5 122 807 - 5 122 838 |
+
+Agreement to **7 significant figures** between two independent derivations. And it
+is not only about precision: at `EX_cu2_e` the analytic gradient is 5.6 where the
+finite difference returns **0.0** -- FD was silently zeroing real entries.
+
+**Job 2, a warmer Jacobian temperature, is real but not a default.** Head B's `z`
+does not depend on Head A's temperature, so the growth rows are the *only* place
+the shipped `gm_eval_temp = 1e-4` -- effectively a hard min, so piecewise-constant
+derivative -- reaches the Jacobian. `--jac-temp` warms Head A there and nowhere
+else, which costs nothing by construction. Measured at `T = 0.01`
+(gradient cosine to the shipped one: 0.99992 at 1e-3, 0.9891 at 1e-2):
+
+| cell | FD rows | analytic rows (default) | analytic + `--jac-temp 0.01` |
 | --- | --- | --- | --- |
-| 1 | **Swap the inner solver to `scipy.optimize.root`** | Directly targets the measured failure, and it is a **net deletion**: `_newton`, `_lstsq_step` and the hand-rolled line search all go. `krylov` (JFNK) needs only `J.v` products -- **one** rhs call each, against 230 FD columns -- so it is likely faster as well as better globalised; `df-sane` needs no Jacobian at all and is the laziest thing to try; `hybr` is the Powell dogleg trust region my line search is a poor imitation of. Keep `_jacobian` for the **final** stability and sensitivity object only, which is a per-solve object and not a per-iteration one | small, and negative in lines |
-| 2 | **A warmer Jacobian temperature** | Head A ships at `gm_eval_temp = 1e-4`, i.e. effectively a hard min, so the residual is piecewise linear and Newton has no quadratic convergence to find -- one cell took 159 iterations before the FD fix and 100 after. Evaluating Head A warm (`groupmax.with_temp`) **inside `_jacobian` only** costs no accuracy by construction: the residual decides the fixed point, the Jacobian only the rate. Sweep it -- too warm and the direction stops pointing at the cold root, which is exactly how the pure-LP arm failed | one call site |
-| 3 | **Re-measure V4** | The 2.0e-4 / 4.9e-3 implicit-derivative numbers were taken with the broken FD step and are void. `--fd-check` already exists | minutes |
-| 4 | **The M12 gate** — Newton failure rate over the roster, sizes 2 to 21 | Nothing above n=2 has been run. Only meaningful after 1 and 2 | hours of wall time |
-| 5 | Exact `d(mu)/dc` for the **surrogate** path, from Head A's analytic gradient (`science.growth.mu_and_grad`) | The sibling of the LP dual rows, and the same argument: it removes FD noise from the rows that set the answer, on the *default* path. The plumbing (`dmu_dc`, NaN = "keep the FD") already exists | small |
-| 6 | A `z`-side trigger for `--mix-mu-rel` | Measured gap: the mix triggers on `mu`, Head B's error is in `z`, and one cell fired on nothing at 1% while the pure LP found a different fixed point with a surrogate residual of 4.4 | small |
-| 7 | A regression test for the dual chain rule | It is verified only by a one-off script, and a sign error there is silent | small |
-| 8 | Keystone members | `--organisms` minus one, N runs, **no code** | free |
+| 1 | **1.8e-8**, 11 it | **1.5e-8**, 11 it | 2.3, 7 it |
+| 2 | 10.0, 11 it | 9.8, 100 it | 10.0, 37 it |
+| 3 | 10.0, **100 it** | 10.0, **14 it** | **4.0**, 20 it |
+| 4 | **5.3e-8**, 25 it | **5.3e-8**, 30 it | **1.9e-7, 9 it** |
+| 5 | 7.8e-6, 23 it | **1.2e-6**, 13 it | 1.2e-6, 14 it |
 
-**What would change this plan.** If (1) and (2) leave the same cells failing, the
-next question is whether a fixed point exists at all under the surrogate rather
-than how to find it -- and integration is the cheap discriminator, since it found
-one cell's root independently. If they *do* converge, the interesting number
-becomes `residual_max_scaled_surrogate` at an LP-solved fixed point: 4.4 on one
-cell already, which is the honest statement of how far the surrogate alone is from
-calling an equilibrium an equilibrium.
+Analytic rows leave the converged count at 2 of 5 but move cell 5 from 7.8e-6 to
+**1.2e-6**, just outside a 1e-6 tolerance, at half the iterations, and make cell
+3's failure 7x cheaper. Warming buys cell 4 (25 -> **9** iterations) and cell 3
+(10.0 -> 4.0) and **loses cell 1 outright**, so it stays off by default. Timings
+in that table are from two arms run in parallel and are contended; read
+iterations, not seconds.
+
+**Job 3, V4, re-measured with the corrected step.** The implicit feed derivative
+against a full re-solve at a perturbed feed, 10 components per cell:
+
+| | cell 1 | cell 4 |
+| --- | --- | --- |
+| median relative error | **3.1e-7** (6.0e-7 analytic) | **3.9e-6** (3.1e-6 analytic) |
+| max | 1.4e-6 | 3.9e-5 |
+
+Against the 2.0e-4 / 4.9e-3 measured with the broken step -- 50-500x better, and
+**V4 passes** on every cell that converges.
+
+**Job 6, a `z`-side trigger for the mix (`--mix-z-rel`).** The `mu`-only trigger
+fires on nothing exactly where it is needed: Head A is the accurate head, so a
+member can have `mu` right to four decimals and `z` badly wrong, which is §8.6g's
+whole finding restated at an equilibrium. Cell 5 fired on **0%** of members at
+`--mix-mu-rel 0.01` while the pure-LP residual converged to a different fixed
+point at which the surrogate's own residual is **4.4**.
+
+**Job 7**, regression tests for the dual chain rule -- the sign convention, both
+label clamps (non-binding duals, and the O(1e-14) dust that is half the non-zero
+ones), and that a stale dual cache returns NaN rather than a silently wrong row.
+
+##### What is next, in order
+
+| # | Job | Why here |
+| --- | --- | --- |
+| 1 | **Diagnose whether cells 2 and 3 have a fixed point at all** | Every method now tried fails on them, including two that converge elsewhere. Integration is the cheap discriminator -- it found cell 1's root independently. Until this is answered, more solver work may be chasing a root that is not there |
+| 2 | **The M12 gate** — Newton failure rate over the roster, sizes 2 to 21 | Nothing above n=2 has been run. State it per cell with `reach`, since the two failures are the two deepest off-distribution cells |
+| 3 | A per-cell `--jac-temp` decision, or a homotopy in it | It wins 2 cells and loses 1, which is a sweet-spot signal rather than a direction. Cheap: it is one flag |
+| 4 | Keystone members | `--organisms` minus one, N runs, **no code** |
+
+**What would change this plan.** If cells 2 and 3 have no fixed point under the
+surrogate, the question stops being numerical and becomes §13.7's: an equilibrium
+is a drawn-down medium, `reach` there is 5.2 and 5.5 against a held-out ~0.10, and
+Head B's `z` at that distance need not admit a steady state at all. The `--roster`
+and `--mix-*` paths exist precisely so that one state can be bought exactly.
 
 ### 13.5 Maximise metabolic interaction — non-convex, and the weakest use case
 

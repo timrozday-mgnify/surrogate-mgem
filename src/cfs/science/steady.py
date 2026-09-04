@@ -42,6 +42,11 @@ import numpy as np
 
 LOGGER = logging.getLogger("cfs.science.steady")
 
+# `log(X/X_ref)` is clipped here: 30 decades below the largest live member is
+# washed out by any standard, and an unbounded log lets a solver spend its whole
+# budget walking to minus infinity.
+_LOG_X_FLOOR = 69.0
+
 
 def solve_steady(
     rhs,
@@ -57,6 +62,7 @@ def solve_steady(
     tol: float = 1e-6,
     iters: int = 100,
     backtracks: int = 40,
+    solver: str = "newton",
 ) -> dict:
     """Newton + active set on the chemostat fixed point.
 
@@ -112,25 +118,29 @@ def solve_steady(
     # relative and a tighter tolerance only spends Newton iterations to report
     # `converged=False` about a state that is converged. §8.4's `rtol=1e-10` is a
     # statement about the root finder, not about what a float32 head can deliver.
-    info = {"newton_iters": 0, "active_set_passes": 0, "converged": False}
+    info = {"newton_iters": 0, "active_set_passes": 0, "converged": False, "solver": solver}
+    J = None
     for _ in range(G + 2):
         info["active_set_passes"] += 1
         rscale = np.concatenate([D * np.maximum(scale[idx], 1e-30), np.full(int(alive.sum()), D)])
-        c, X, J, ok, n_it = _newton(
-            residual,
-            residual_jac,
-            rhs_jac,
-            idx,
-            scale,
-            rscale,
-            c,
-            X,
-            alive,
-            tol,
-            iters,
-            backtracks,
-            dmu_dc,
-        )
+        if solver != "newton":
+            c, X, ok, n_it = _root(residual, idx, scale, rscale, c, X, alive, tol, iters, solver)
+        else:
+            c, X, _J, ok, n_it = _newton(
+                residual,
+                residual_jac,
+                rhs_jac,
+                idx,
+                scale,
+                rscale,
+                c,
+                X,
+                alive,
+                tol,
+                iters,
+                backtracks,
+                dmu_dc,
+            )
         info["newton_iters"] += n_it
         if not ok and alive.sum() > 1:
             # An inconsistent survivor set does not have to produce a negative X;
@@ -138,14 +148,14 @@ def solve_steady(
             k = np.flatnonzero(alive)[int(np.argmin(X[alive]))]
             alive[k], banned[k], X[k] = False, True, 0.0
             continue
-        if (drop := alive & (X <= 1e-9 * max(X[alive].max(), 1e-300))).any():
+        if (drop := alive & (X <= 1e-9 * X[alive].max(initial=1e-300))).any():
             alive, banned, X[drop] = alive & ~drop, banned | drop, 0.0
             continue
         _, mu = rhs(c, X)
         # A washed-out member is only consistent if it cannot grow at c*.
         if (back := (~alive) & ~banned & (mu > D * (1 + 1e-8))).any():
             alive = alive | back
-            X[back] = 1e-9 * max(X[alive].max(), 1.0)
+            X[back] = 1e-9 * max(X[alive].max(initial=0.0), 1.0)
             continue
         info["converged"] = bool(ok)
         break
@@ -162,6 +172,80 @@ def solve_steady(
     # member changes the shape without re-solving.
     J = _jacobian(residual_jac, rhs_jac, idx, scale, c, X, alive, dmu_dc)
     return {"c": c, "X": X, "alive": alive, "mu": mu, "J": J, **info}
+
+
+def _root(residual, idx, scale, rscale, c, X, alive, tol, iters, method):
+    """``scipy.optimize.root`` on the scaled system. Returns ``(c, X, ok, nfev)``.
+
+    This replaces a hand-rolled damped Newton, and it replaces it because the
+    hand-rolled one was **under-globalised**: a single bad step collapsed the whole
+    pool to `c ~ 0` -- including metabolites the community *secretes*, whose steady
+    state is at or above the feed -- and the clip at zero held it there, at a
+    scaled residual of exactly `c_feed/Km` on every fed row at once.
+
+    ``krylov`` is the default: Jacobian-free Newton-Krylov needs only ``J.v``
+    products, which cost **one** right-hand-side evaluation each, against the
+    ``n_free`` (230-365) a finite-differenced Jacobian costs. ``df-sane`` needs no
+    Jacobian at all and ``hybr`` is Powell's dogleg trust region; both are kept
+    selectable because they fail differently.
+
+    **Abundances are solved as ``log X``, and that is not a scaling choice -- it
+    is what makes a general-purpose root finder usable here at all.** Every method
+    tried (``hybr``, ``df-sane``, ``broyden1``, ``krylov``) converges on the toy
+    chemostat to `X = 0, c = c_feed`: the *trivial washout root*, which is always
+    present, is usually nearest, and is the wrong answer. None of them knows
+    ``X > 0``. In ``log X`` that root sits at minus infinity and cannot be reached,
+    washout appears as ``w`` drifting down instead, and the active-set loop reads
+    it off a threshold. The hand-rolled Newton avoided the same trap only via its
+    fraction-to-the-boundary step.
+
+    Scaling matters as much as the method (§7: ``x_scale`` spans five decades):
+    concentrations are solved in units of their own ``Km``, abundances relative to
+    the current largest, and the residual divided by its row scale, so the solver
+    sees an O(1) problem. ``c`` keeps a clip at zero -- the same one
+    :func:`cfs.compose.dfba.integrate` uses -- because ``c = 0`` is a legitimate
+    part of a solution where an abundance of exactly zero is not.
+    """
+    from scipy.optimize import root
+
+    live = np.flatnonzero(alive)
+    xref = max(float(np.abs(X[live]).max(initial=0.0)), 1e-30)
+    n_c = len(idx)
+
+    def unpack(y):
+        cc = c.copy()
+        cc[idx] = np.maximum(y[:n_c] * scale[idx], 0.0)
+        XX = X.copy()
+        XX[live] = xref * np.exp(np.clip(y[n_c:], -_LOG_X_FLOOR, 30.0))
+        return cc, XX
+
+    def f(y):
+        cc, XX = unpack(y)
+        return residual(cc, XX)[0] / rscale
+
+    y0 = np.concatenate(
+        [c[idx] / scale[idx], np.log(np.maximum(X[live] / xref, np.exp(-_LOG_X_FLOOR)))]
+    )
+    opts = {
+        "krylov": {"maxiter": iters, "fatol": tol},
+        "df-sane": {"maxfev": 10 * iters, "fatol": tol},
+        "broyden1": {"maxiter": iters, "fatol": tol},
+        "hybr": {"maxfev": iters * (len(y0) + 1)},
+    }.get(method, {})
+    try:
+        sol = root(f, y0, method=method, tol=tol, options=opts)
+        y = sol.x
+        nfev = int(getattr(sol, "nfev", 0) or 0)
+    except Exception as exc:  # a diverged inner solve, not a bug (P9)
+        LOGGER.warning("%s failed: %s", method, exc)
+        y, nfev = y0, 0
+    cc, XX = unpack(y)
+    # A member driven to the log floor is washing out; hand the active-set loop a
+    # literal zero so its relative drop test fires.
+    XX[live] = np.where(y[n_c:] <= -_LOG_X_FLOOR + 1e-9, 0.0, XX[live])
+    # Trust the residual, not the solver's own flag: the methods disagree about
+    # what `tol` means and none of them measures it in this row scaling.
+    return cc, XX, float(np.abs(f(y)).max()) < tol, nfev
 
 
 def _newton(
@@ -190,6 +274,15 @@ def _newton(
         t = 1.0
         if neg.any():
             t = min(1.0, 0.99 * float((-X[alive][neg] / dX[neg]).min()))
+        # A matching rule on the *other* boundary is **refuted**, and it looked
+        # obvious: the measured failure is a step collapsing the pool to `c ~ 0`,
+        # so capping `c`'s move at 0.9 of the distance to zero should stop it.
+        # Measured, it takes cell 1 from converged (1.8e-8, 11 iterations) to
+        # failed (20.0, 21) and cell 5 from 7.8e-6 to 14. A concentration
+        # legitimately goes to zero -- a metabolite absent from the steady state
+        # is a normal outcome, where an abundance of exactly zero is a change of
+        # active set -- so the two boundaries are not symmetric and only `X` gets
+        # the rule.
         # Backtrack on the residual norm, with the pool clipped at zero the way
         # `integrate` clips it.
         for _ in range(bt):
@@ -297,6 +390,47 @@ def sensitivity(J: np.ndarray, idx: np.ndarray, scale: np.ndarray, dilution: flo
     return np.linalg.lstsq(A / dr[:, None], rhs / dr[:, None], rcond=1e-10)[0] * dc[:, None]
 
 
+def _head_mu_rows(sur, c, heads=None):
+    """``d(mu_i)/dc`` for every member from **Head A's own analytic gradient**.
+
+    The surrogate-path sibling of :func:`_lp_mu_rows`, and it matters for the same
+    reason: a finite difference is worst exactly on the scarce metabolites that set
+    the answer. Head A is analytically differentiable, so those rows never needed
+    to be probed at all. Chain rule as in :func:`cfs.science.growth.mu_and_grad`,
+    ``dmu/dc = dmu/dx . dx/du . du/dc`` with ``dx/du = (1-x)^2/s`` and
+    ``du/dc = Km/(Km+c)^2``, plus the output calibration's derivative -- ``mu`` is
+    *reported* calibrated, so the Jacobian must be too.
+
+    **This is also where a warmer Jacobian temperature belongs, and why the two
+    jobs collapsed into one.** Head B's ``z`` does not depend on Head A's
+    temperature, so the growth rows are the *only* place the shipped
+    ``gm_eval_temp = 1e-4`` -- effectively a hard min, hence piecewise-linear
+    ``mu`` and a piecewise-constant derivative -- reaches the Jacobian. Passing a
+    warmed copy of the heads here smooths it at **no cost to the answer**: the
+    residual keeps the cold head, and in an inexact Newton the residual decides
+    the fixed point while the Jacobian only decides the rate.
+
+    Returns one row per **member** (``sur.members``), matching
+    :func:`_lp_mu_rows` and the active set the Jacobian indexes with -- not one
+    per genome in the stack. And NaN rows -- "keep the finite difference" -- for a
+    multi-seed value stack, whose pointwise min this gradient does not describe.
+    """
+    from cfs.surrogate import calibrate
+
+    if len(sur._ens) > 1:
+        return np.full((len(sur.members), len(sur.exchanges)), np.nan)
+    x = sur._x(c)  # (G, 1, M)
+    mu, g = sur.mod.batched_value_and_grad(heads or sur._vheads, sur._jnp.asarray(x))
+    raw = np.asarray(mu, dtype=np.float64)[:, 0]  # uncalibrated, unscaled
+    gx = np.asarray(g, dtype=np.float64)[:, 0]  # d(raw)/dx
+    xk = np.asarray(x, dtype=np.float64)[:, 0]
+    dxdu = (1.0 - xk) ** 2 / sur.x_scale
+    dudc = sur.km / (sur.km + c) ** 2
+    dcal = calibrate.deriv(raw[:, None], sur.value_cal)[:, 0]
+    rows = gx * dxdu * dudc * (sur.mu_scale * dcal)[:, None]
+    return rows[sur.members]
+
+
 def _lp_mu_rows(duals, models, exchanges, eps, km, c, n_g):
     """``d(mu_i)/dc`` for every member, exactly, from the LP's own shadow prices.
 
@@ -334,7 +468,7 @@ def _lp_mu_rows(duals, models, exchanges, eps, km, c, n_g):
     return g
 
 
-def _mixed_rhs(sur, models, eps, tol):
+def _mixed_rhs(sur, models, eps, tol, z_tol=None):
     """Solve both, and keep the **surrogate** wherever it agrees with the LP.
 
     The pure-LP residual paired with a surrogate Jacobian is an inexact Newton
@@ -346,7 +480,16 @@ def _mixed_rhs(sur, models, eps, tol):
     going to be wrong anyway.
 
     It costs the LP either way, since divergence cannot be detected without it.
-    What it buys is consistency, not solves. ``tol`` is relative on ``mu``.
+    What it buys is consistency, not solves.
+
+    ``tol`` is relative on ``mu`` and ``z_tol``, if given, relative on ``z`` in the
+    2-norm. **The second one is not optional in practice.** Head A is the accurate
+    head and Head B is not, so a ``mu``-only trigger fires on nothing exactly where
+    it is most needed: measured, one cell fired on **0%** of members at
+    ``tol = 0.01`` and stayed at a residual of 7.8e-6, while the pure-LP residual
+    converged to a *different* fixed point at which the surrogate's own residual is
+    **4.4**. A member can have `mu` right to four decimals and `z` badly wrong --
+    that is §8.6g's whole finding restated at an equilibrium.
     """
     from cfs.groundtruth.solve import load_km_defaults, solve
 
@@ -366,13 +509,17 @@ def _mixed_rhs(sur, models, eps, tol):
             if sol.status != "optimal":
                 continue  # P2: keep the surrogate's row rather than zeroing it
             duals[k] = sol.shadow_prices
-            if abs(mu[k] - sol.mu_max) > tol * max(abs(sol.mu_max), 1e-30):
+            z_lp = np.zeros_like(z[k])
+            for ex, v in sol.z.items():
+                z_lp[col[ex]] = v
+            diverged = abs(mu[k] - sol.mu_max) > tol * max(abs(sol.mu_max), 1e-30)
+            if z_tol is not None and not diverged:
+                den = max(float(np.linalg.norm(z_lp)), 1e-30)
+                diverged = float(np.linalg.norm(z[k] - z_lp)) > z_tol * den
+            if diverged:
                 use[k] = True
                 st["n_lp"] += 1
-                mu[k] = sol.mu_max
-                z[k] = 0.0
-                for ex, v in sol.z.items():
-                    z[k, col[ex]] = v
+                mu[k], z[k] = sol.mu_max, z_lp
         st.update(duals=duals, c=c.copy(), lp=use)
         return (X[:, None] * z).sum(0), mu
 
@@ -418,6 +565,9 @@ def run(
     roster_path: Path | None = None,
     eps: float = 1e-3,
     mix_mu_rel: float | None = None,
+    mix_z_rel: float | None = None,
+    jac_temp: float | None = None,
+    solver: str = "newton",
     seed: int = 0,
     scales: Path | None = None,
     fd_check: int = 20,
@@ -437,7 +587,16 @@ def run(
     # per Newton iteration -- tens to hundreds for a whole steady state, against
     # the 24.6% of 15600 member-steps a trajectory pays. Never finite-difference
     # through the LP: that would be `n_free * G` solves per Jacobian, ~250x more.
-    rhs_lp = dmu_dc = mix = None
+    # The growth rows analytically, from Head A itself -- optionally at a warmer
+    # temperature than the head ships at, which is free because only the Jacobian
+    # sees it.
+    jheads = sur._vheads
+    if jac_temp is not None:
+        from cfs.surrogate import groupmax
+
+        jheads = groupmax.with_temp(sur._vheads, jac_temp)
+    dmu_dc = lambda c: _head_mu_rows(sur, c, jheads)  # noqa: E731
+    rhs_lp = mix = None
     if roster_path is not None:
         import cobra
 
@@ -453,10 +612,14 @@ def run(
             duals, models, sur.exchanges, eps, sur.km, c, len(organisms)
         )
         if mix_mu_rel is not None:
-            rhs_lp, mix = _mixed_rhs(sur, models, eps, mix_mu_rel)
-            dmu_dc = lambda c: _mixed_mu_rows(  # noqa: E731
-                mix, sur.exchanges, sur.km, c, len(organisms)
-            )
+            rhs_lp, mix = _mixed_rhs(sur, models, eps, mix_mu_rel, mix_z_rel)
+
+            # Per member, differentiate whichever function that member's residual
+            # came from: the LP's duals where the LP was substituted, Head A's own
+            # analytic gradient where it was not.
+            def dmu_dc(c, _mix=mix, _h=jheads):
+                g = _mixed_mu_rows(_mix, sur.exchanges, sur.km, c, len(organisms))
+                return np.where(np.isnan(g), _head_mu_rows(sur, c, _h), g)
 
     mu_feed = rhs(feed, np.zeros(len(organisms)))[1]
     if mu_feed.max() <= 0:
@@ -519,6 +682,7 @@ def run(
         x0,
         rhs_jac=rhs if rhs_lp else None,
         dmu_dc=dmu_dc,
+        solver=solver,
     )
     c, X, alive, J = sol["c"], sol["X"], sol["alive"], sol["J"]
 
@@ -540,6 +704,8 @@ def run(
         "genome_ids": organisms,
         "dilution": D,
         "residual": ("mixed" if mix else "lp") if rhs_lp else "surrogate",
+        "solver": solver,
+        "jac_temp": jac_temp,
         "residual_max": float(np.abs(_r_used).max()),
         # The dimensionless one the solver actually tests: pool rows over `D*Km`,
         # growth rows over `D`.
