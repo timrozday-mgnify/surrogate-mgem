@@ -663,6 +663,8 @@ def run(
     readmits: int = 1,
     invade_rel: float = 1e-2,
     warm_start: Path | None = None,
+    seed_mode: str = "monoculture",
+    seed_probes: int = 4,
     seed: int = 0,
     scales: Path | None = None,
     fd_check: int = 20,
@@ -738,34 +740,53 @@ def run(
     # zero -- and lands at `X ~ 1e8`, `|dc| ~ 1e10`. At a small enough step it
     # instead washes out to the *spurious extinction* fixed point (`X ~ 1e-9`,
     # residual 1e-13, and a genuine root). One of the two happens on most cells.
-    consumed = rhs(feed, np.ones(len(organisms)))[0] < 0
     zero = np.zeros(len(organisms))
-
-    def _draw(th):
-        c = feed.copy()
-        c[consumed] = th * feed[consumed]
-        return c
-
-    lo, hi = 0.0, 1.0
-    for _ in range(60):
-        th = 0.5 * (lo + hi)
-        if rhs(_draw(th), zero)[1].max() > D:
-            hi = th
-        else:
-            lo = th
-    c0 = _draw(hi)
-
     free = np.zeros(len(sur.exchanges), dtype=bool)
     for i in sur.members:
         free |= sur.mask[i]  # a metabolite nobody exchanges solves as c = c_feed
     idx = np.flatnonzero(free)
-    # `dc/dt` is linear in X, so the pool balance at `c0` is a non-negative least
-    # squares, and its zeros are the first guess at the active set.
-    Z = np.array([rhs(c0, np.eye(len(organisms))[i])[0][idx] for i in range(len(organisms))])
-    x0 = nnls(Z.T, -D * (feed - c0)[idx])[0]
-    if not x0.any():
-        x0 = np.full(len(organisms), 1e-6)
-    LOGGER.info("warm start: theta %.3e, X %s", hi, np.array2string(x0))
+
+    def _bisect(who):
+        """Warm start for the sub-community `who` (a boolean mask over members).
+
+        Both halves are per-sub-community and both matter. Only what *those*
+        members consume is scaled down, and the bisection targets *their* `mu`,
+        so a monoculture probe gets the start it would have got from solving that
+        member on its own -- which is the whole point of the probe. Reusing the
+        full community's `c0` and merely zeroing the other abundances is **not**
+        the same thing and does not work: measured, it leaves the two hardest
+        roster cells at the collapsed-pool residual of 10, where a per-member
+        bisection reaches 1e-05.
+        """
+        cons = rhs(feed, who.astype(float))[0] < 0
+
+        def draw(th):
+            c = feed.copy()
+            c[cons] = th * feed[cons]
+            return c
+
+        lo, hi = 0.0, 1.0
+        for _ in range(60):
+            th = 0.5 * (lo + hi)
+            if rhs(draw(th), zero)[1][who].max() > D:
+                hi = th
+            else:
+                lo = th
+        c = draw(hi)
+        # `dc/dt` is linear in X, so the pool balance at `c` is a non-negative
+        # least squares, and its zeros are the first guess at the active set.
+        Z = np.array(
+            [rhs(c, np.eye(len(organisms))[i])[0][idx] for i in range(len(organisms))]
+        )
+        x = nnls(Z.T, -D * (feed - c)[idx])[0]
+        x[~who] = 0.0
+        if not x.any():
+            x = np.where(who, 1e-6, 0.0)
+        LOGGER.info("warm start %s: theta %.3e, X %s", who.astype(int), hi, np.array2string(x))
+        return c, x
+
+    everyone = np.ones(len(organisms), dtype=bool)
+    c0, x0 = _bisect(everyone)
 
     if warm_start is not None:
         # Continue from another solve's state instead. Members absent from that
@@ -797,26 +818,110 @@ def run(
         if hi > D:
             ladder = list(D * (hi / D) ** (np.arange(d_steps, -1, -1) / d_steps))
             c0, x0 = feed.copy(), np.full(len(organisms), 1e-9)
-    for Dk in ladder:
-        sol = solve_steady(
-            rhs_lp or rhs,
-            feed,
-            Dk,
-            free,
-            sur.km,
-            c0,
-            x0,
-            rhs_jac=rhs if rhs_lp else None,
-            dmu_dc=dmu_dc,
-            solver=solver,
-            ptc=ptc,
-            readmits=readmits,
-            invade_rel=invade_rel,
+
+    def _from(c_s, x_s):
+        """One full solve from a given start, walking the `D` ladder."""
+        cc, xx, out = c_s, x_s, None
+        for Dk in ladder:
+            out = solve_steady(
+                rhs_lp or rhs,
+                feed,
+                Dk,
+                free,
+                sur.km,
+                cc,
+                xx,
+                rhs_jac=rhs if rhs_lp else None,
+                dmu_dc=dmu_dc,
+                solver=solver,
+                ptc=ptc,
+                readmits=readmits,
+                invade_rel=invade_rel,
+            )
+            LOGGER.info("continuation: D %.4g converged=%s", Dk, out["converged"])
+            # A failed rung is not fatal: its iterate is still closer to the next
+            # rung's answer than the feed is, and the last rung is the one that
+            # counts.
+            cc, xx = out["c"], np.maximum(out["X"], 1e-12)
+        al = out["alive"]
+        rs = np.concatenate(
+            [D * np.maximum(sur.km[idx], 1e-30), np.full(int(al.sum()), D)]
         )
-        LOGGER.info("continuation: D %.4g converged=%s", Dk, sol["converged"])
-        # A failed rung is not fatal: its iterate is still closer to the next
-        # rung's answer than the feed is, and the last rung is the one that counts.
-        c0, x0 = sol["c"], np.maximum(sol["X"], 1e-12)
+        r = np.concatenate(
+            [
+                (D * (feed - out["c"]) + (rhs_lp or rhs)(out["c"], out["X"])[0])[idx],
+                (out["mu"] - D)[al],
+            ]
+        )
+        out["res_scaled"] = float((np.abs(r) / rs).max())
+        return out
+
+    def _margin(sol):
+        """`max_j (mu_j(c*) - D) / D` over the excluded members; -inf if none."""
+        dead = ~sol["alive"]
+        if not dead.any():
+            return -np.inf
+        return float(((sol["mu"][dead] - D) / D).max())
+
+    def _key(sol):
+        """Rank candidate states: converged first, then margin, then residual.
+
+        The **signed** margin rather than the `invadable` flag, because the flag at
+        `invade_rel` calls a state valid whenever its excluded member is above
+        break-even by less than that -- and 2 of the 4 converging roster cells
+        returned exactly such a state.
+
+        But the margin is only meaningful on a **converged** state, and getting
+        that wrong cost a gate run: a collapsed pool has `c ~ 0`, so `mu ~ 0` for
+        everybody, so *nobody* can invade it and it scores the most negative margin
+        in the set. Ranking on margin alone therefore prefers the degenerate state
+        it is supposed to reject -- the same trap as judging a root find by its
+        residual, one level up. Among unconverged candidates, rank on residual.
+        """
+        return (
+            sol["converged"],
+            -_margin(sol) if sol["converged"] else -np.inf,
+            -sol["res_scaled"],
+        )
+
+    sol = _from(c0, x0)
+    if seed_mode == "monoculture" and warm_start is None and len(organisms) > 1:
+        # Seed from each member's own monoculture equilibrium and keep the best
+        # state by `_margin`. Measured: the bisection start commits to a survivor
+        # and, on the two hardest roster cells, collapses the pool at a scaled
+        # residual of 10 -- where the *other* member's monoculture basin reaches
+        # 1.3e-05 and 3.8e-05. It also returns a strictly invadable state on 2 of
+        # the 4 cells it does converge. An unconverged monoculture is still a far
+        # better seed than the bisection, so the probe is not required to succeed.
+        #
+        # Each probe is two solves -- the monoculture (`readmits=0`, so nobody
+        # re-enters and it stays a monoculture) and the full community from it --
+        # so it is capped at `seed_probes` of them and stops at the first strictly
+        # valid state. Both bounds are needed: the 21-member cell does not finish
+        # in an hour uncapped, against ~15 min for the bisection alone.
+        # Fastest grower at the feed first. The survivor of a chemostat is usually
+        # the member with the lowest break-even concentration, which correlates
+        # with `mu` at the feed, so this puts the likely answer early and the early
+        # stop then ends the loop -- which is what keeps the cost near one probe
+        # instead of `2G` on a 21-member community.
+        for i in np.argsort(-mu_feed)[:seed_probes]:
+            if _margin(sol) < 0.0 and sol["converged"]:
+                break
+            who = np.zeros(len(organisms), dtype=bool)
+            who[i] = True
+            ci, xi = _bisect(who)
+            mono = solve_steady(
+                rhs_lp or rhs, feed, D, free, sur.km, ci, xi,
+                rhs_jac=rhs if rhs_lp else None, dmu_dc=dmu_dc, solver=solver,
+                ptc=ptc, readmits=0, invade_rel=invade_rel,
+            )
+            cand = _from(mono["c"], np.maximum(mono["X"], 0.0))
+            LOGGER.info(
+                "monoculture seed %s: converged=%s margin=%.3g (best %.3g)",
+                organisms[int(i)], cand["converged"], _margin(cand), _margin(sol),
+            )
+            if _key(cand) > _key(sol):
+                sol = cand
     c, X, alive, J = sol["c"], sol["X"], sol["alive"], sol["J"]
 
     # The full (c, X) Jacobian: d(X_i (mu_i - D))/dc = X_i dmu_i/dc, and its X

@@ -125,3 +125,27 @@ def test_pseudo_transient_continuation_finds_the_same_root():
     assert sol["converged"]
     assert np.isclose(sol["c"][0], c_star, rtol=1e-6)
     assert np.isclose(sol["X"][0], YIELD * (FEED - c_star), rtol=1e-6)
+
+
+def test_the_selection_key_is_the_signed_margin_not_the_flag():
+    """The exclusion the Monod toy must NOT return, and how it is rejected.
+
+    `solve_steady` reports `invadable` against `invade_rel`, so a state whose
+    excluded member is above break-even by less than that tolerance reads as
+    valid. Selection therefore ranks on the *signed* margin instead. Here the
+    wrong exclusion — the fast grower shut out by the slow one — is not merely
+    marginal: `mu_0(c*) = 0.998` against `D = 0.5`, so any rule that looks at the
+    sign rejects it and the solver must land on the other one.
+    """
+    feed = np.array([FEED, 3.0])
+    free = np.array([True, False])
+    scale = np.array([K, K])
+    sol = solve_steady(_rhs, feed, D, free, scale, feed.copy(), np.array([1.0, 1.0]))
+
+    c_star_wrong = K * D / (MUMAX[1] - D)  # where the *slow* member breaks even
+    mu_wrong = MUMAX * c_star_wrong / (K + c_star_wrong)
+    assert mu_wrong[0] > D  # the fast member would invade it, so it is not a root
+    assert not np.isclose(sol["c"][0], c_star_wrong)  # and the solver rejects it
+
+    mu_star = MUMAX * sol["c"][0] / (K + sol["c"][0])
+    assert (mu_star[~sol["alive"]] - D).max() < 0.0  # strictly valid, by sign

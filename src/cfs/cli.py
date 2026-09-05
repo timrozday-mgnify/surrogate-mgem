@@ -681,6 +681,24 @@ def build_parser() -> argparse.ArgumentParser:
         "distinguishable and the tie is not a solver failure.",
     )
     ss.add_argument(
+        "--seed-mode",
+        default="monoculture",
+        choices=["monoculture", "bisect"],
+        help="Warm start. 'monoculture' also seeds from each member's own "
+        "equilibrium and keeps the state with the most negative invasion margin, "
+        "stopping at the first strictly valid one; 'bisect' is the single "
+        "bisection start alone, which returns a strictly invadable state on 2 of "
+        "4 converging roster cells and collapses the pool on the 2 hardest.",
+    )
+    ss.add_argument(
+        "--seed-probes",
+        type=int,
+        default=4,
+        help="With --seed-mode monoculture: how many members to probe, fastest "
+        "grower at the feed first. Caps the cost at 2N extra solves regardless of "
+        "community size; the 21-member cell does not finish in an hour uncapped.",
+    )
+    ss.add_argument(
         "--warm-start",
         type=Path,
         default=None,
@@ -961,6 +979,8 @@ def main(argv: list[str] | None = None) -> int:
             readmits=args.readmits,
             invade_rel=args.invade_rel,
             warm_start=args.warm_start,
+            seed_mode=args.seed_mode,
+            seed_probes=args.seed_probes,
             seed=args.seed,
             scales=args.scales,
             fd_check=args.fd_check,

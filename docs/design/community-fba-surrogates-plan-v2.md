@@ -4195,6 +4195,60 @@ apart in magnitude; cells 1 and 8, both positive, are not. A prediction made fro
 magnitude ("a near-tie means alternative states") was wrong on cell 7 and is
 recorded here because it was made in advance.
 
+##### Monoculture seeding is the default, and the M12 gate re-run on it — 2026-09-05
+
+`--seed-mode monoculture` (default; `bisect` reproduces every earlier number).
+Solve from the bisection, then from each member's own monoculture equilibrium,
+and keep the state with the most negative **signed** invasion margin, stopping at
+the first strictly valid one. Nine of ten roster cells, one feed draw, same
+`value_p4r2`/`behaviour_p4r2`:
+
+| cell | n | before | after | margin now | note |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 2 | 9.4e-08, **+1.6e-03 invalid** | 8.5e-07 | **−1.64e-03** | valid, and *faster* (101 s vs 205 s) |
+| 2 | 2 | **9.8** | **1.1e-05** | +7.0e-05 | different survivor (`CP001820.1`) |
+| 3 | 2 | **10.0** | **2.1e-05** | **−2.49e-05** | different survivor (`ABCC02`), valid |
+| 4 | 2 | 5.3e-08 | 5.3e-08 | −8.83e-01 | control: unchanged, V4 3.1e-06 |
+| 5 | 2 | 1.2e-06 | 1.2e-06 | −8.11e-06 | unchanged |
+| 6 | 3 | 4.2e-03, **+5.8e-05 invalid** | 1.9e-03 | **−5.49e-06** | now valid |
+| 7 | 3 | 7.3e-08 | 7.3e-08 | −2.09e-04 | control: unchanged, V4 5.6e-07 |
+| 8 | 5 | 9.2e-08, **+1.5e-05 invalid** | 9.4e-09 | +1.47e-05 | **still invalid** — see below |
+| 9 | 10 | 4.2e-03, **invalid** | **2.4e-07** ✓ | **−3.09e-06** | converges now |
+
+**Four cells improved, two unchanged, zero regressions**, and both unique cells
+(4 and 7) are bit-identical including V4. Strictly valid states go from 4 of 9 to
+**8 of 9**, and the two cells that had defeated every method reach 1e-05 from a
+collapsed-pool 10.
+
+**1. It does not find a coexistence, and cell 8 is the proof.** Cell 8's only
+valid state is the two-member `AAXE02 + DACTBY01` equilibrium, and no
+single-member monoculture basin reaches it -- it was found by the *leave-one-out*
+probe, which removes a member from the system rather than starting it dead. So
+monoculture seeding explores alternative **monoculture** equilibria only. Covering
+coexistence needs pairwise probes, `G^2`, and one cell is not evidence enough.
+
+**2. The cost is bounded by two knobs, and both were needed.** Probes run
+fastest-grower-at-the-feed first (a chemostat's survivor usually has the lowest
+break-even concentration, which tracks `mu` at the feed) and stop at the first
+strictly valid state. Even so, **the 21-member cell does not finish in an hour
+uncapped**, against ~15 min for the bisection alone, so `--seed-probes` (default
+4) caps it at `2N` extra solves regardless of size.
+
+**3. Two false starts, both worth keeping.** *Ranking on the margin alone prefers
+the degenerate state*: a collapsed pool has `c ~ 0`, so `mu ~ 0` for everybody,
+nobody can invade it, and it scores the most negative margin in the set (−0.948).
+The margin is meaningful only on a converged state, so the key is
+`(converged, margin, −residual)` -- the same trap as judging a root find by its
+residual, one level up. And *zeroing the other abundances is not a monoculture*:
+reusing the full community's `c0` with `X_j = 0` left cells 2 and 3 at 9.8. The
+**bisection itself** has to be per-sub-community -- `consumed` from that member's
+own consumption, the theta search targeting *its* `mu = D`.
+
+**4. Unexplained, and not waved through: cell 1's V4 is 8.5e-05 against 9.1e-07.**
+It is measured at a different (now valid) fixed point so it is not like-for-like,
+but two orders is not noise and M12's V4 half should not be called met on cell 1
+until it is understood. Cells 4 and 7 are unmoved at 3.1e-06 and 5.6e-07.
+
 ##### What is next, in order
 
 | # | Job | Why here |

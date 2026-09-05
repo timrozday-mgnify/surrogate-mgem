@@ -2347,11 +2347,40 @@ land on a fourth, non-converged candidate (both at 4.6e-03, so the same point).
    **Quote a steady-state result with the size of that set, or say it was not
    measured.**
 
-**Next:** (1) make monoculture seeding the default warm start, and re-run the
-M12 gate on it — it is the one change that moves the failing cells; (2) rank scan
-states by `invasion_score` rather than taking the first convergent one; (3) cell
-10 (n=21) and cell 9's scans, not yet run; (4) a per-cell grid over `--jac-temp`
-/ `--d-steps` / `--ptc`, since none is a default.
+**Monoculture seeding is now the default (`--seed-mode monoculture`;
+`bisect` reproduces every earlier number), 2026-09-05.** Solve from the
+bisection, then from each member's own monoculture equilibrium, keep the state
+with the most negative **signed** margin, stop at the first strictly valid one.
+Over 9 of 10 roster cells: **4 improved, 2 unchanged, 0 regressions**, both
+unique cells (4, 7) bit-identical including V4, and strictly valid states go
+**4 of 9 -> 8 of 9**. Cells 2 and 3 reach **1.1e-05 / 2.1e-05** from a
+collapsed-pool 9.8 / 10.0 (with the *other* member surviving), and cell 9 now
+**converges at 2.4e-07** from 4.2e-03.
+
+1. **It cannot find a coexistence.** Cell 8's only valid state is the two-member
+   `AAXE02 + DACTBY01` equilibrium and no single-member basin reaches it — that
+   came from the *leave-one-out* probe, which removes a member rather than
+   starting it dead. Monoculture seeding explores alternative **monoculture**
+   equilibria only; coexistence needs pairwise probes (`G^2`), and one cell is
+   not enough evidence to build them.
+2. **Cost needs both knobs.** Probes go fastest-grower-at-the-feed first and stop
+   at the first strictly valid state; even so the **21-member cell does not
+   finish in an hour uncapped** (~15 min for the bisection alone), so
+   `--seed-probes` (default 4) caps it at `2N` extra solves.
+3. **Two false starts, both instructive.** *Ranking on margin alone prefers the
+   degenerate state* — a collapsed pool has `c ~ 0`, so nobody can invade it and
+   it scores the most negative margin (−0.948); the key is
+   `(converged, margin, −residual)`. And *zeroing the other abundances is not a
+   monoculture* — the **bisection** must be per-sub-community, with `consumed`
+   from that member's own consumption and theta targeting *its* `mu = D`.
+   Reusing the full community's `c0` left cells 2 and 3 at 9.8.
+4. **Unexplained: cell 1's V4 is 8.5e-05 against 9.1e-07.** Different fixed
+   point, so not like-for-like, but two orders is not noise — do not call M12's
+   V4 half met on cell 1 until it is understood. Cells 4 and 7 are unmoved.
+
+**Next:** (1) cell 1's V4 regression; (2) cell 10 (n=21) at a probe cap, the one
+cell not yet re-run; (3) pairwise probes for coexistence, if a second cell ever
+motivates them; (4) a per-cell grid over `--jac-temp` / `--d-steps` / `--ptc`.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
