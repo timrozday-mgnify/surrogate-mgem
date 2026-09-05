@@ -4127,6 +4127,74 @@ monoculture's own equilibrium is the obvious basis -- counting distinct converge
 non-invadable states. No LP, no new code. Quote a steady-state result with the
 size of that set, or say it was not measured.
 
+##### The multiplicity scan — and a retraction of "three fixed points" — 2026-09-05
+
+Every member's own monoculture equilibrium, at the cell's own feed and `D`, handed
+to the full community. The previous section read `invadable` at the shipped
+`--invade-rel 1e-2` and concluded cell 8 had **three** fixed points. Reading the
+*signed margin* instead says something sharper and different.
+
+| cell | state | conv | residual | survivors | max `(mu_j - D)/D`, excluded |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **default** | yes | 9.4e-08 | GCA_000151225.1 | **+1.64e-03** |
+| 1 | from CR626927.1 | yes | 8.5e-07 | **CR626927.1** | **−1.64e-03** |
+| 4 | default / either probe | yes | 5.3e-08 | CR626927.1 | **−8.83e-01** |
+| 7 | default / all three probes | yes | 7.3e-08 | CP001726.1 | **−2.09e-04** |
+| 8 | **default** | yes | 9.2e-08 | AAXE02 | **+1.47e-05** |
+| 8 | from −CP027002.1 | yes | 2.8e-07 | **AAXE02 + DACTBY01** | **−3.42e-05** |
+| 8 | from −AAXE02 | yes | 1.7e-07 | GCA_000209935.1 | +2.81e-04 |
+| 8 | from −FNPN01 | yes | 3.6e-07 | AAXE02 | +1.47e-05 |
+
+**1. RETRACTED: "three distinct converged non-invadable fixed points".** At the
+1e-2 tolerance all three read as non-invadable; by sign, **only one of them is** —
+the coexistence, at −3.42e-05. The other two are invadable by +1.5e-05 and
++2.8e-04. They are near-equilibria, not equilibria, and the tolerance was hiding
+the distinction it was introduced to make. Multiple equilibria at the *surrogate's
+resolution* is still real and still the operative problem, because those margins
+sit inside Head A's own 1e-4 to 9e-3 error; multiple equilibria as a mathematical
+claim about the system is **not established**.
+
+**2. The default warm start returns a strictly invadable state on 2 of the 4
+converging cells.** Cell 1's default gives `GCA_000151225.1` at **+1.64e-03** while
+the other member's basin gives `CR626927.1` at **−1.64e-03** -- exactly antisymmetric,
+as a two-member exclusion must be, and the default picks the wrong side. Cell 8's
+default gives `AAXE02` at +1.47e-05 where the valid state is the coexistence. So
+the earlier "one survivor at every size" was partly the warm start choosing an
+invalid exclusion.
+
+**3. So there is a free selection rule: take the most negative margin.** Every
+`steady_state.json` already carries `invasion_score`. Across the scan it picks
+`CR626927.1` on cell 1 and the coexistence on cell 8 -- in both cases the strictly
+valid state over the default's invalid one -- and is unchanged where the answer is
+unique (cells 4 and 7). **Rank scan states by margin; do not stop at the first
+that converges.**
+
+**4. Cells 2 and 3 have fixed points. The failure was the basin, not existence.**
+
+| cell | default survivor | default residual | monoculture-seeded survivor | residual |
+| --- | --- | --- | --- | --- |
+| 2 | CP001726.1 | **9.8** | **CP001820.1** | **1.3e-05** |
+| 3 | AAXE02 | **10.0** | **ABCC02** | **3.8e-05** |
+
+Six orders, on the two cells that had defeated every method tried -- and cell 3's
+3.8e-05 agrees with the continuation arm's 4.5e-05, so two independent routes find
+the same state. In both, the good fixed point is the one where the *other* member
+wins: the bisection warm start commits to the wrong survivor and collapses the
+pool. **This closes the "do cells 2 and 3 have a fixed point at all" question that
+has been open since §13.4 was written, and the answer is yes.**
+
+**5. Every monoculture probe that mattered reported `mono=False`.** An unconverged
+monoculture is still a far better basin seed than the bisection. That, not any of
+the three globalisation flags, is the change worth making: **seed from the
+monocultures**. It costs `G` extra solves, it is trivially parallel, and it is the
+only thing that has moved cells 2 and 3.
+
+**6. Uniqueness is predicted by the margin's sign, not its size.** Cell 4 at
+−8.8e-01 and cell 7 at −2.1e-04 are both unique across every probe, four orders
+apart in magnitude; cells 1 and 8, both positive, are not. A prediction made from
+magnitude ("a near-tie means alternative states") was wrong on cell 7 and is
+recorded here because it was made in advance.
+
 ##### What is next, in order
 
 | # | Job | Why here |
@@ -4269,7 +4337,7 @@ must budget a matched control.
 | M9 | `cfs simulate`, batch + chemostat | **done 2026-08-30**; agrees with `cfs community`'s surrogate path on `D = 0` |
 | M10 | §13.2 growth maximisation, convex solver | Optimum survives V5 round-trip on 20 cases — **built 2026-08-30; 19/20 at the default trust region, 20/20 at 0.25 and at 1.0 decades.** Median true gain +2.2%, median optimism 0.3%. The one failure is a `mu = 2.0` start medium, the head's known weak band; it is not monotone in the trust radius. **Under an additive trust region 3/20 collapse to `mu_true = 0`, and under none at all 2 of the first 4** — P21, and the mechanism is zeroing an essential trace metabolite |
 | M11 | §13.3 static minimal medium | **built 2026-08-30; the essentiality blocker is closed 2026-08-31, V6 still short.** `cfs minimal-medium`: convex penalty solve + a greedy cardinality prune, one case per medium draw. **Head A cannot represent essentiality** — knocking a trace metal (`EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e`) out of a rich medium takes the true LP to `mu = 0` and moves the head by <1%, 6 of 37 free metabolites on a 3-member community. Unrestricted, the program exploits exactly that: 273 -> **41** components with every surrogate floor satisfied and `mu_true` 55/70/38 -> **0/0/0**. With the lethal singles pinned from the models (`--keep-essential`, default; one FBA per free metabolite, a static property of the GEM), 273 -> 251 and 2 of 3 members clear a 0.5 floor under the LP, the misses being 0.489/0.485 — i.e. ~2% short — and one real failure at 0.334 on the community's slow member (`mu_true` 3.5 against 55 and 70), Head A's known weak low-`mu` band. **The cause is `SamplingConfig.log10_lo = -4`**: the trace metals' limiting regime is at `c/Km ~ 1e-9..1e-6`, outside the probe's bracket, so the probe omits them, `band_scales` defaults them to 1.0, the design never makes them scarce, `_kink_scale` defaults `x_scale` to 1.0 and the head has no resolution left in that coordinate. The four missed essentials are exactly the four `"source": "default"` bands in the sidecar. **Fixed by `probe_lo = -12` (§4.7) and a relabel: `n_missed_essential` 6 -> 0**, and unrestricted the design no longer collapses the LP (2/3, 0/3, 3/3 members clearing the floor, worst true fraction 0.436 against 0.000). V6 still does not pass at a 0.5 floor — 0.491 / 0.436 / 0.512 — so what remains is a few-percent accuracy question, not a structural one |
-| M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 passes on every converged cell (5.6e-7 to 3.1e-6), the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the fixed point is not unique — one cell has three distinct converged non-invadable equilibria at one feed and one `D`** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
+| M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 passes on every converged cell (5.6e-7 to 3.1e-6), the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the default warm start returns a *strictly invadable* state on 2 of the 4 converging cells — seeding from each member's monoculture instead finds the valid one, and takes the two hardest cells from residual 10 to 1e-5** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
 

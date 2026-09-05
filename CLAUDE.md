@@ -2287,7 +2287,41 @@ the steady state rather than the posterior.
 extra solve per excluded member and it separates an ecological finding from a
 solver artifact. Cell 7 passes it; cell 8 fails it.
 
-**Multiplicity is confirmed, not inferred — 2026-09-05.** `--warm-start` takes
+**The multiplicity scan, and a retraction — 2026-09-05.** Reading the *signed*
+invasion margin instead of the `invadable` flag at `--invade-rel 1e-2` changes
+the previous section's conclusion. **RETRACTED: "three distinct converged
+non-invadable fixed points" on cell 8.** By sign only **one** is valid — the
+coexistence at −3.42e-05; the other two are invadable by +1.5e-05 and +2.8e-04.
+Multiple equilibria *at the surrogate's resolution* is still the operative
+problem (those margins are inside Head A's own 1e-4 to 9e-3 error); multiple
+equilibria as a claim about the system is **not established**.
+
+1. **The default warm start returns a strictly invadable state on 2 of the 4
+   converging cells.** Cell 1's default gives `GCA_000151225.1` at **+1.64e-03**
+   where the other member's basin gives `CR626927.1` at **−1.64e-03** — exactly
+   antisymmetric, as a two-member exclusion must be, and the default picks the
+   wrong side. Cell 8's default is `AAXE02` at +1.47e-05 where the valid state is
+   the coexistence.
+2. **Free selection rule: take the most negative margin.** `invasion_score` is
+   already in every report. It picks the valid state on cells 1 and 8 and is
+   inert where the answer is unique. **Rank scan states by margin; do not stop at
+   the first that converges.**
+3. **Cells 2 and 3 have fixed points — the failure was the basin, not
+   existence.** Seeded from a monoculture: cell 2 **9.8 -> 1.3e-05**
+   (`CP001820.1`, not the default's `CP001726.1`), cell 3 **10.0 -> 3.8e-05**
+   (`ABCC02`, not `AAXE02`), and cell 3's value agrees with the continuation
+   arm's 4.5e-05. **This closes the question §13.4 has carried since it was
+   written, and the answer is yes.**
+4. **Seed from the monocultures.** Every probe that mattered reported
+   `mono=False` — an unconverged monoculture is still a far better seed than the
+   bisection. `G` extra solves, trivially parallel, and the only thing that has
+   moved cells 2 and 3. Worth more than all three globalisation flags.
+5. **Uniqueness follows the margin's *sign*, not its size.** Cell 4 (−8.8e-01)
+   and cell 7 (−2.1e-04) are unique across every probe, four orders apart; cells
+   1 and 8, both positive, are not. A prediction from magnitude ("a near-tie
+   means alternative states") was made in advance and was **wrong on cell 7**.
+
+**Superseded detail below (kept for the mechanism).** `--warm-start` takes
 another solve's `steady_state.npz` as the starting `(c, X)`, with members it does
 not name entering **dead** so the loop's own re-admission test decides whether
 they can invade. Handing each cell-8 leave-one-out's answer back to the **full**
@@ -2313,10 +2347,11 @@ land on a fourth, non-converged candidate (both at 4.6e-03, so the same point).
    **Quote a steady-state result with the size of that set, or say it was not
    measured.**
 
-**Next:** (1) the multiplicity scan over the converging cells, and whether cells
-2/3/10 fail because they have no fixed point or because they have several; (2) a
-per-cell grid over `--jac-temp` / `--d-steps` / `--ptc`, since none is a default;
-(3) re-seed abundances per continuation rung.
+**Next:** (1) make monoculture seeding the default warm start, and re-run the
+M12 gate on it — it is the one change that moves the failing cells; (2) rank scan
+states by `invasion_score` rather than taking the first convergent one; (3) cell
+10 (n=21) and cell 9's scans, not yet run; (4) a per-cell grid over `--jac-temp`
+/ `--d-steps` / `--ptc`, since none is a default.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
