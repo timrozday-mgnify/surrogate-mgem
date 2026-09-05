@@ -70,6 +70,7 @@ def solve_steady(
     ptc: float = 0.0,
     readmits: int = 1,
     invade_rel: float = 1e-2,
+    rhs_batch=None,
 ) -> dict:
     """Newton + active set on the chemostat fixed point.
 
@@ -120,7 +121,21 @@ def solve_steady(
 
         return residual
 
+    def _res_batch(fb):
+        """The same residual at `B` media at once, one row per medium."""
+
+        def residual_b(C, X):
+            dc, mu = fb(C, X)  # (B, M), (G, B)
+            return np.concatenate(
+                [(D * (feed[None] - C) + dc)[:, idx], (mu.T - D)[:, alive]], axis=1
+            )
+
+        return residual_b
+
     residual, residual_jac = _res(rhs), _res(rhs_jac)
+    # The Jacobian's finite differences are `n_free` media differing in one
+    # coordinate each -- exactly what a batched head evaluation is for.
+    residual_jac_b = None if rhs_batch is None else _res_batch(rhs_batch)
 
     # The two families are in different units -- mmol/L/h and 1/h -- so the
     # convergence test is on the residual divided by its own row scale, and `tol`
@@ -161,6 +176,7 @@ def solve_steady(
                 backtracks,
                 dmu_dc,
                 ptc,
+                residual_jac_b,
             )
         info["newton_iters"] += n_it
         if not ok and alive.sum() > 1:
@@ -206,7 +222,7 @@ def solve_steady(
     # Rebuild the Jacobian at the state actually returned: the loop's last one
     # belongs to whichever active set the last Newton *ran* on, and re-admitting a
     # member changes the shape without re-solving.
-    J = _jacobian(residual_jac, rhs_jac, idx, scale, c, X, alive, dmu_dc)
+    J = _jacobian(residual_jac, rhs_jac, idx, scale, c, X, alive, dmu_dc, residual_jac_b)
     return {"c": c, "X": X, "alive": alive, "mu": mu, "J": J, **info}
 
 
@@ -299,6 +315,7 @@ def _newton(
     bt,
     dmu_dc=None,
     ptc=0.0,
+    residual_b=None,
 ):
     """Damped Newton on the square system over ``idx`` and the live members.
 
@@ -320,7 +337,7 @@ def _newton(
         rn = float((np.abs(r) / rscale).max())
         if rn < tol:
             return c, X, J, True, it
-        J = _jacobian(residual_jac, rhs_jac, idx, scale, c, X, alive, dmu_dc)
+        J = _jacobian(residual_jac, rhs_jac, idx, scale, c, X, alive, dmu_dc, residual_b)
         accepted = False
         for _ in range(_LM_ESCALATIONS if ptc > 0.0 else 1):
             step = _lstsq_step(J, -r, scale[idx], np.maximum(np.abs(X[alive]), 1e-12), lam)
@@ -370,7 +387,7 @@ def _newton(
     return c, X, J, float((np.abs(residual(c, X)[0]) / rscale).max()) < tol, iters
 
 
-def _jacobian(residual, rhs, idx, scale, c, X, alive, dmu_dc=None):
+def _jacobian(residual, rhs, idx, scale, c, X, alive, dmu_dc=None, residual_b=None):
     """Finite differences in ``c``; the ``X`` columns are ``z_i`` and are exact.
 
     One residual call per free metabolite. The ``X`` block needs no probing:
@@ -395,12 +412,30 @@ def _jacobian(residual, rhs, idx, scale, c, X, alive, dmu_dc=None):
     """
     r0, _ = residual(c, X)
     n = len(r0)
-    Jc = np.empty((n, len(idx)))
-    for k, j in enumerate(idx):
-        h = 1e-3 * max(c[j], 1e-3 * scale[j])
-        cp = c.copy()
-        cp[j] += h
-        Jc[:, k] = (residual(cp, X)[0] - r0) / h
+    h = 1e-3 * np.maximum(c[idx], 1e-3 * scale[idx])
+    if residual_b is not None:
+        # One batched head evaluation instead of `n_free` sequential ones. The
+        # media differ in a single coordinate each -- but evaluating them one at a
+        # time is nearly all JAX dispatch: 11.6 ms per medium against 0.143 ms each
+        # in a batch of 64.
+        #
+        # **The unperturbed medium goes in the same batch, and that is required,
+        # not tidiness.** XLA does not compute a batch of `n` in float32 the way it
+        # computes a batch of 1: `z` differs by ~7e-5 between the two. Differencing
+        # a batched value against a singly-computed `r0` puts that discrepancy in
+        # the numerator over a step of `1e-3 c`, which made the Jacobian wrong by a
+        # relative 7e+07 -- larger than the derivative being measured. Taking both
+        # sides from one call cancels it.
+        CP = np.repeat(c[None], len(idx) + 1, axis=0)
+        CP[1 + np.arange(len(idx)), idx] += h
+        RB = residual_b(CP, X)
+        Jc = ((RB[1:] - RB[0][None]) / h[:, None]).T
+    else:
+        Jc = np.empty((n, len(idx)))
+        for k, j in enumerate(idx):
+            cp = c.copy()
+            cp[j] += h[k]
+            Jc[:, k] = (residual(cp, X)[0] - r0) / h[k]
     live = np.flatnonzero(alive)
     if dmu_dc is not None:
         # The growth rows exactly, rather than finite-differenced. Free wherever
@@ -672,11 +707,18 @@ def run(
     """One community, one feed, one dilution: solve, then characterise the state."""
     from scipy.optimize import nnls
 
-    from cfs.compose.dfba import Surrogate, _medium_vector, rhs_surrogate, rhs_truth
+    from cfs.compose.dfba import (
+        Surrogate,
+        _medium_vector,
+        rhs_surrogate,
+        rhs_surrogate_batch,
+        rhs_truth,
+    )
 
     sur = Surrogate(value_dir, behaviour_dir, organisms=organisms)
     feed = _medium_vector(sur, organisms, labels_dir, medium, seed, scales)
     rhs = lambda c, X: rhs_surrogate(sur, c, X)  # noqa: E731
+    rhs_b = lambda C, X: rhs_surrogate_batch(sur, C, X)  # noqa: E731
 
     # `--roster`: solve the true LP for the *residual* and keep the surrogate for
     # the Jacobian. The economics are the opposite of §8.6g(4)'s trajectory
@@ -862,6 +904,7 @@ def run(
                 ptc=ptc,
                 readmits=readmits,
                 invade_rel=invade_rel,
+                rhs_batch=rhs_b,
             )
             LOGGER.info("continuation: D %.4g converged=%s", Dk, out["converged"])
             # A failed rung is not fatal: its iterate is still closer to the next

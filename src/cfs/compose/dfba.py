@@ -169,6 +169,47 @@ class Surrogate:
             out = m if out is None else np.minimum(out, m)
         return out
 
+    def mu_and_z_batch(self, C: np.ndarray, alpha: np.ndarray):
+        """``(mu, z)`` at ``B`` media at once: ``C`` is ``(B, M)``, out ``(G,B)``/``(G,B,M)``.
+
+        Both heads already carry a medium axis -- :func:`mu_and_z` simply passes
+        ``B = 1`` -- and evaluating them one medium at a time is nearly all JAX
+        dispatch rather than arithmetic. Measured on Head A: 11.6 ms for a single
+        medium against **0.143 ms** each for 64 at once, an 81x difference, and the
+        finite-differenced Jacobian is exactly this shape (one medium per free
+        metabolite, each differing in one coordinate).
+        """
+        if self._bheads is None:
+            raise ValueError("this Surrogate was built without a behaviour checkpoint")
+        jnp, G, B = self._jnp, len(self.genome_ids), len(C)
+        u = C / (self.km + C)  # (B, M)
+        x = (u[None] / (u[None] + self.x_scale[:, None, :])).astype(np.float32)  # (G,B,M)
+        xj = jnp.asarray(x)
+        a = jnp.asarray(np.broadcast_to(np.asarray(alpha)[:, None], (G, B)), dtype=jnp.float32)
+
+        mu = None
+        for mod, heads, scale, cal in self._ens:
+            raw = np.asarray(mod.batched_value(heads, xj))  # (G, B)
+            m = calibrate.apply(raw, self.value_cal if cal is None else cal)
+            m = m * np.asarray(scale).reshape(-1, 1)
+            mu = m if mu is None else np.minimum(mu, m)
+        mu = np.maximum(mu, 0.0)  # P2: an infeasible medium has mu_max = 0.
+
+        zmu = (
+            None
+            if self.mu_floor is None
+            else jnp.asarray(np.maximum(mu, np.asarray(self.mu_floor).reshape(-1, 1)),
+                             dtype=jnp.float32)
+        )
+        z = np.asarray(self._B.flux(self._bheads, xj, a, jnp.asarray(self.z_scale), zmu))
+        z = np.maximum(z, -(self._B.VMAX * u)[None]) * self.mask[:, None, :]
+        # The projection is a per-state active-set solve, so it stays a loop -- but
+        # it is now a small share of the cost rather than 27% of it.
+        out = np.empty_like(z)
+        for b in range(B):
+            out[:, b, :] = self._element_balance(z[:, b, :])
+        return mu, out
+
     def mu_and_z(self, c: np.ndarray, alpha: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """``(mu, z)`` for every organism in the stack at medium ``c``."""
         if self._bheads is None:
@@ -353,6 +394,15 @@ def rhs_surrogate(sur: Surrogate, c: np.ndarray, X: np.ndarray):
     mu, z = sur.mu_and_z(c, np.ones(len(sur.genome_ids), dtype=np.float32))
     mu, z = mu[sur.members], z[sur.members]
     return (X[:, None] * z).sum(0), mu
+
+
+def rhs_surrogate_batch(sur: Surrogate, C: np.ndarray, X: np.ndarray):
+    """:func:`rhs_surrogate` at ``B`` media at once. ``C`` is ``(B, M)``.
+
+    Returns ``(dc, mu)`` shaped ``(B, M)`` and ``(n_members, B)``.
+    """
+    mu, z = sur.mu_and_z_batch(C, np.ones(len(sur.genome_ids), dtype=np.float32))
+    return np.einsum("i,ibm->bm", X, z[sur.members]), mu[sur.members]
 
 
 def rhs_hybrid(sur: Surrogate, models: list, eps: float, depth: float):

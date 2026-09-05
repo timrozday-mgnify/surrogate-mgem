@@ -2457,11 +2457,38 @@ max-affine gradient *is* one active plane. Separating "singly limited media" fro
 state). If true `k` is 2–3, cell 8's coexistence is real and deflation becomes
 correct.
 
-**Next:** (1) **the analytic pool-block Jacobian** — `d(dc/dt)/dc = −D·I +
-Σ Xᵢ dzᵢ/dc` via `jacfwd` through Head B, replacing 355 rhs evaluations per
-Jacobian; the growth rows are already analytic, this is the other block, and it is
-what makes n=21 affordable. Independent of everything above; (2) measure true `k`
-via `--roster` on one state; (3) cell 10 at `--seed-probes 0`.
+**Making a solve cheap — 2026-09-05. The analytic Jacobian is NOT the small
+change it looked like**: `mu_and_z` interleaves numpy with JAX (`np.maximum`, and
+an active-set NNLS in `_element_balance`), so it is not traceable and `jacfwd`
+needs that projection rewritten first. Profiling found two cheaper wins.
+
+1. **27% of every rhs was an allocation storm.** `cProfile`: Head A `_mu` **54%**,
+   `_element_balance` **27%**, Head B flux (the assumed bottleneck) inside the
+   remaining 19% — and almost all of the 27% was **1100 `np.asarray` calls per
+   evaluation**, rebuilding per-organism operators that never change. Cached in
+   `__init__`: rhs **23.9 -> 17.1 ms**, `dc`/`mu` bit-identical, helps every
+   caller. Built in `__init__` rather than lazily because a lazy cache of
+   `_E`/`mask`/`z_scale` goes stale if they are reassigned — which the unit tests
+   do, and how the first version was caught.
+2. **Batched FD columns, 2.3x.** Head A costs **11.6 ms for one medium against
+   0.143 ms each for 64 at once (81x)** — evaluating one at a time is nearly all
+   JAX dispatch. `mu_and_z_batch` / `rhs_surrogate_batch` feed a `residual_b`
+   that `_jacobian` uses. Per Jacobian **3.96 -> 1.70 s**; end to end cell 1
+   **101 -> 37 s**, cell 4 **448 -> 104 s**, cell 7 **258 -> 49 s**, all states
+   unchanged.
+
+**The trap, which would have shipped as a 4.6x win: XLA does not compute a batch
+of `n` in float32 the way it computes a batch of 1.** `z` differs ~7e-5, `mu`
+~9e-7. Differencing batched perturbations against an `r0` from the *single* path
+put that in the numerator over a step of `1e-3 c` and made **the Jacobian wrong by
+a relative 7e+07** — larger than the derivative itself. The unperturbed medium now
+rides in the same batch. Same family as §13.4's FD-step bug: a small denominator
+manufacturing the error. After the fix, cosine **0.9999999999**; individual
+entries still differ up to 10% at the float32 noise floor, in both versions.
+
+**Next:** (1) measure true `k` via `--roster` on one state — it is what would
+reopen the whole multiplicity branch; (2) cell 10 (n=21), now affordable at ~4x
+faster; (3) `filter_jit` on the heads, worth a further 30% and bit-identical.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

@@ -4404,6 +4404,56 @@ per free metabolite** -- 355 of them per Jacobian. The growth rows are already
 analytic (`_head_mu_rows`); this is the other block, it is pure implementation,
 and it is what makes n=21 affordable at all. Independent of every question above.
 
+##### Making a solve cheap: profile first, and the batch is not the single — 2026-09-05
+
+The plan called for an analytic pool-block Jacobian via `jacfwd` through Head B.
+**It is not the small change it looked like**: `mu_and_z` interleaves numpy with
+JAX -- `np.maximum`, and an active-set NNLS in `_element_balance` -- so it is not
+traceable end to end, and `jacfwd` needs that projection rewritten first. Two
+cheaper things were found by measuring instead.
+
+**1. 27% of every right-hand side was an allocation storm.** `cProfile` on
+`rhs_surrogate`: Head A's `_mu` 54%, `_element_balance` **27%**, Head B's flux --
+which had been the assumed bottleneck -- inside the remaining 19%. Almost all of
+the 27% was **1100 `np.asarray` calls per evaluation**: the masked element matrix,
+the `z_scale` metric and the dual's `Q` were rebuilt on every call although they
+depend only on the organism. Caching them per organism takes the right-hand side
+from **23.9 ms to 17.1 ms** with `dc` and `mu` bit-identical, and it helps every
+caller, not only the steady state.
+
+Built in `__init__`, not lazily: a lazy cache of `_E`/`mask`/`z_scale` goes
+silently stale if any of them is reassigned, which is exactly what the unit tests
+do and how the first version was caught.
+
+**2. Batching the Jacobian's finite differences, 2.3x.** Both heads already carry
+a medium axis -- `mu_and_z` merely passes `B = 1` -- and evaluating them one
+medium at a time is nearly all JAX dispatch. Measured on Head A: **11.6 ms for one
+medium against 0.143 ms each for 64 at once, 81x**. The finite-differenced
+Jacobian is exactly that shape, one medium per free metabolite differing in a
+single coordinate, so `Surrogate.mu_and_z_batch` / `rhs_surrogate_batch` feed a
+`residual_b` that `_jacobian` uses when it is available.
+
+Per Jacobian **3.96 s -> 1.70 s**, and end to end on the three cells with known
+answers: cell 1 **101 s -> 37 s**, cell 4 **448 s -> 104 s**, cell 7 **258 s ->
+49 s**, every survivor, margin and convergence flag unchanged (cells 4 and 7 shift
+residual 5.3e-08 -> 1.5e-07 and 7.3e-08 -> 1.3e-07, both far under tolerance).
+
+**The trap, and it would have shipped as a 4.6x win.** XLA does **not** compute a
+batch of `n` in float32 the way it computes a batch of 1: `z` differs by ~7e-5
+between the two paths, and `mu` by ~9e-7. The first version differenced batched
+perturbations against an `r0` computed by the *single* path, which put that
+discrepancy in the numerator over a step of `1e-3 c` -- **the Jacobian was wrong
+by a relative 7e+07**, larger than the derivative being measured, while running
+4.6x faster. The unperturbed medium now goes in the same batch so both sides come
+from one kernel. Same family as the finite-difference step bug in §13.4: the error
+is manufactured by a small denominator, not by the model.
+
+After the fix the two Jacobians agree at **cosine 0.9999999999**. Individual
+entries still differ by up to 10% where the response sits at the float32 noise
+floor -- those entries are ill-determined in the loop version too, so this is the
+same accuracy rather than new error, and it is worth knowing before anyone reads a
+single `J` entry as meaningful.
+
 ##### What is next, in order
 
 | # | Job | Why here |
