@@ -2486,9 +2486,35 @@ rides in the same batch. Same family as §13.4's FD-step bug: a small denominato
 manufacturing the error. After the fix, cosine **0.9999999999**; individual
 entries still differ up to 10% at the float32 noise floor, in both versions.
 
-**Next:** (1) measure true `k` via `--roster` on one state — it is what would
-reopen the whole multiplicity branch; (2) cell 10 (n=21), now affordable at ~4x
-faster; (3) `filter_jit` on the heads, worth a further 30% and bit-identical.
+**`k = 1` confirmed against the LP, and the fixed point is true to <1% —
+2026-09-05** (`20hm_bands/true_k.py`). The caveat that could have reopened
+everything — a max-affine gradient *is* one active plane, so `k` might be the
+model class — is settled: set §3.3's MM bounds from `c*`, solve, count exchanges
+binding with a non-dust **reduced cost**.
+
+| state | `mu_LP(c*)` | `D` | rel err | `k_LP` | limiter |
+| --- | --- | --- | --- | --- | --- |
+| cell 4 | 2.446 | 2.448 | **0.08%** | **1** | `EX_k_e` |
+| cell 7 | 1.066 | 1.068 | **0.19%** | **1** | `EX_trp__L_e` |
+| cell 1 | 0.1524 | 0.1538 | **0.9%** | **1** | `EX_k_e` |
+
+1. **`k = 1` is the medium, not the head** — two independent derivations agree,
+   the top limiter carries the whole dual. Competitive exclusion applies, and the
+   enumeration branch (deflation, convex pre-screen, semismooth rewrite) stays
+   closed on evidence rather than on an artefact.
+2. **The surrogate's fixed point is a fixed point of the true LP to 0.08–0.9%.**
+   This is §13.4's missing accuracy statement, measured where the use case
+   evaluates. §13.7 called the steady state the most exposed use case and `reach`
+   1.0–5.5 (held-out ~0.10) made it look severe; it is not. **`reach` is a proxy
+   for distance from the design — prefer this direct measurement wherever a fixed
+   point exists to solve.**
+3. **Trap that failed loudly, the good kind:** cobra's `shadow_prices` is indexed
+   by *metabolite*; sensitivity to an *exchange bound* is `reduced_costs`, by
+   reaction. The wrong one reported `k = 0` — visibly broken, not plausibly wrong.
+
+**Next:** (1) cell 10 (n=21), now affordable at ~4x faster; (2) `filter_jit` on
+the heads, a further 30% and bit-identical; (3) `mu_LP(c*)` on the remaining
+cells, since it is the honest §13.4 accuracy number.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

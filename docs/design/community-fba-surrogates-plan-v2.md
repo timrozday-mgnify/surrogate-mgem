@@ -4454,6 +4454,42 @@ floor -- those entries are ill-determined in the loop version too, so this is th
 same accuracy rather than new error, and it is worth knowing before anyone reads a
 single `J` entry as meaningful.
 
+##### `k = 1` confirmed against the LP, and the fixed point is true to <1% — 2026-09-05
+
+The `k = 1` measurement came with a caveat that could have reopened everything: a
+max-affine head's gradient at a point **is** one active plane, so counting
+limiters from Head A may measure the model class rather than the medium. The LP
+settles it (`20hm_bands/true_k.py`): set §3.3's Michaelis-Menten bounds from the
+converged `c*`, solve, and count exchanges whose bound binds with a non-dust
+reduced cost.
+
+| state | survivor | `mu_LP(c*)` | `D` | rel. error | `k_LP` | limiter |
+| --- | --- | --- | --- | --- | --- | --- |
+| cell 4 | CR626927.1 | 2.446 | 2.448 | **0.08%** | **1** | `EX_k_e` |
+| cell 7 | CP001726.1 | 1.066 | 1.068 | **0.19%** | **1** | `EX_trp__L_e` |
+| cell 1 | CR626927.1 | 0.1524 | 0.1538 | **0.9%** | **1** | `EX_k_e` |
+
+**1. `k = 1` is the medium, not the head.** Two independent derivations agree, and
+the top limiter carries the whole dual in each case. So competitive exclusion
+applies for real: one limiting resource, one survivor, chosen by R*. The
+enumeration branch -- deflation, convex pre-screening, the semismooth rewrite --
+stays closed, and now on evidence rather than on a model artefact.
+
+**2. The surrogate's fixed point is a fixed point of the true LP, to 0.08-0.9% in
+growth rate.** This is the §13.4 accuracy statement that was missing, measured
+where the use case actually evaluates rather than on held-out design media. §13.7
+called the steady state "the most exposed use case" and `reach` at `c*` of
+1.0-5.5, against a held-out ~0.10, made that look severe. It is not: at the state
+itself the growth rate is right to under a percent. **`reach` measures distance
+from the design, and this is a direct measurement of the thing `reach` was a proxy
+for -- prefer it wherever a fixed point exists to solve.**
+
+**A trap that returned zero rather than a wrong answer, which is the good kind.**
+cobra's `solution.shadow_prices` is indexed by **metabolite**; the sensitivity of
+growth to an *exchange bound* is `solution.reduced_costs`, indexed by reaction.
+Using the former found no binding exchange at all and reported `k = 0` -- visibly
+broken, rather than a plausible-looking count.
+
 ##### What is next, in order
 
 | # | Job | Why here |
