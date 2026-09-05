@@ -3958,6 +3958,45 @@ coexistence result**, and treat any cell with `max invasion > 0` as unconverged
 whatever `residual_max_scaled` says -- the report has both and the convergence
 flag currently reflects only the second.
 
+##### The near-ties are not solver failures — 2026-09-05
+
+Job 1 of the list below. Three of the four invadable cells are ties the surrogate
+cannot resolve, and the fix is a threshold, not an algorithm.
+
+| cell | n | `D` | max `mu_j(c*) - D`, excluded | as a fraction of `D` |
+| --- | --- | --- | --- | --- |
+| 8 | 5 | 3.83 | +5.6e-5 | **1.5e-05** |
+| 6 | 3 | 9.35 | +5.4e-4 | **5.8e-05** |
+| 1 | 2 | 0.154 | +2.5e-4 | **1.6e-03** |
+| 9 | 10 | 11.1 | **+41.0** | **3.7** |
+
+**Head A's own `mu_rel` at these fixed points is 1e-4 to 9e-3** (measured in the
+mixed-residual arm above). Three of the four margins sit at or below that, so
+"this excluded member can invade" is a claim the model cannot support -- and the
+fourth is **four orders larger**. The split is clean; there is nothing in between.
+
+`--invade-rel` (default **1e-2**) is therefore the threshold for both the
+re-admission test and the `invadable` report, and deliberately the *same* number
+for both: the loop must never decline to chase a member it then calls an invader.
+At the default, cells 1, 6 and 8 are exclusions and only cell 9 is a failure.
+
+**A bounded re-admission budget was built first and it does not fix the ties.**
+`--readmits` (default 1) replaces the permanent anti-cycling ban with a per-member
+allowance -- termination only needs re-admissions to be *finite*, not forbidden.
+On cell 1 it changes nothing: the member is re-admitted, the two-survivor Newton
+fails to converge, the "inconsistent survivor set" branch drops it again, and the
+budget is spent reaching the same state (11 iterations, identical residual). So at
+a genuine tie there is **no two-survivor fixed point the solver can reach**, which
+is the same answer the threshold gives, arrived at 75 seconds more expensively.
+Kept at 1 because it costs nothing where it does not fire, and because cell 9's
+margin is real and is exactly the case it was built for.
+
+**What this does not settle.** Whether cells 1, 6 and 8 *actually* coexist is
+beyond this surrogate: at 1.5e-5 to 1.6e-3 of `D` the question needs the LP, and
+`--roster`/`--mix-mu-rel` is how to ask it -- an equilibrium is one state, so the
+solves are affordable. Until then "one survivor at every size" should be read as
+"one survivor, with three cells too close to call".
+
 ##### What is next, in order
 
 | # | Job | Why here |

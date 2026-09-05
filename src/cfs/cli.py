@@ -664,6 +664,23 @@ def build_parser() -> argparse.ArgumentParser:
         "bisection warm start alone.",
     )
     ss.add_argument(
+        "--readmits",
+        type=int,
+        default=1,
+        help="Re-admissions per member before the anti-cycling ban becomes "
+        "permanent. 0 = the original permanent ban, which returns states an "
+        "excluded member can invade on 4 of 10 roster cells.",
+    )
+    ss.add_argument(
+        "--invade-rel",
+        type=float,
+        default=1e-2,
+        help="An excluded member counts as invading only if mu_j(c*) exceeds D by "
+        "this fraction. Default 1e-2 because Head A's own mu error at a fixed "
+        "point is 1e-4 to 9e-3: below that, exclusion and coexistence are not "
+        "distinguishable and the tie is not a solver failure.",
+    )
+    ss.add_argument(
         "--fd-check",
         type=int,
         default=20,
@@ -932,6 +949,8 @@ def main(argv: list[str] | None = None) -> int:
             solver=args.solver,
             ptc=args.ptc,
             d_steps=args.d_steps,
+            readmits=args.readmits,
+            invade_rel=args.invade_rel,
             seed=args.seed,
             scales=args.scales,
             fd_check=args.fd_check,

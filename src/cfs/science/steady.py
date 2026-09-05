@@ -68,6 +68,8 @@ def solve_steady(
     backtracks: int = 40,
     solver: str = "newton",
     ptc: float = 0.0,
+    readmits: int = 1,
+    invade_rel: float = 1e-2,
 ) -> dict:
     """Newton + active set on the chemostat fixed point.
 
@@ -97,12 +99,19 @@ def solve_steady(
     # down, rather than from the full roster.
     alive = X > 1e-6 * X.max()
     X[~alive] = 0.0
-    # Anti-cycling: a member dropped in this solve is never re-admitted. Without
-    # it two members whose `mu` differ by 1e-4 at `c*` trade places forever --
-    # dropped for a negative X, re-admitted for `mu > D` at the next iterate --
-    # and the loop exits on its pass budget with whichever state it happened to be
-    # in. It is the same rule Bland's does for the simplex, for the same reason.
-    banned = np.zeros_like(alive)
+    # Anti-cycling. Two members whose `mu` differ by 1e-4 at `c*` will otherwise
+    # trade places forever -- dropped for a negative X, re-admitted for `mu > D` at
+    # the next iterate -- and the loop exits on its pass budget with whichever
+    # state it happened to be in. It is the problem Bland's rule solves for the
+    # simplex.
+    #
+    # A *permanent* ban was the first version and it is too strong: measured over
+    # the roster, 4 of 10 cells then returned a state an excluded member can
+    # invade -- three within 0.2% of `D` of a genuine tie, one at `mu - D` = +41.
+    # Termination only needs the re-admissions to be *finite*, not forbidden, so
+    # each member gets `readmits` of them and the ban falls back to permanent once
+    # they are spent. `readmits = 0` is the original rule.
+    readmit = np.full(len(x0), int(readmits))
 
     def _res(f):
         def residual(c, X):
@@ -131,7 +140,7 @@ def solve_steady(
         "solver": solver,
     }
     J = None
-    for _ in range(G + 2):
+    for _ in range(G * (1 + int(readmits)) + 2):
         info["active_set_passes"] += 1
         rscale = np.concatenate([D * np.maximum(scale[idx], 1e-30), np.full(int(alive.sum()), D)])
         if solver != "newton":
@@ -158,24 +167,32 @@ def solve_steady(
             # An inconsistent survivor set does not have to produce a negative X;
             # it just fails to converge. Drop the least abundant member and retry.
             k = np.flatnonzero(alive)[int(np.argmin(X[alive]))]
-            alive[k], banned[k], X[k] = False, True, 0.0
+            alive[k], X[k] = False, 0.0
             continue
         if (drop := alive & (X <= 1e-9 * X[alive].max(initial=1e-300))).any():
-            alive, banned, X[drop] = alive & ~drop, banned | drop, 0.0
+            alive, X[drop] = alive & ~drop, 0.0
             continue
         _, mu = rhs(c, X)
         # A washed-out member is only consistent if it cannot grow at c*.
-        if (back := (~alive) & ~banned & (mu > D * (1 + 1e-8))).any():
+        if (back := (~alive) & (readmit > 0) & (mu > D * (1 + invade_rel))).any():
             alive = alive | back
+            readmit[back] -= 1
             X[back] = 1e-9 * max(X[alive].max(initial=0.0), 1.0)
             continue
-        # A *banned* member that can grow at `c*` is the anti-cycling rule's price:
-        # Bland's guarantees the loop terminates, not that it terminates on a state
-        # satisfying complementarity, and on a near-tie it does not. Measured over
-        # the roster, 4 of 10 cells return `mu_j(c*) > D` for an excluded member --
-        # one of them by 4.7x -- so this is not a corner case. Report it as
-        # unconverged rather than as a coexistence result.
-        info["invadable"] = bool((~alive & (mu > D * (1 + 1e-8))).any())
+        # An excluded member that can grow at `c*` means the active set is wrong,
+        # so the state is not a fixed point however small the residual is. Measured
+        # over the roster at a 1e-8 threshold, 4 of 10 cells reported one.
+        #
+        # **But the threshold has to be the head's own accuracy, not machine
+        # epsilon.** Those four split cleanly: three at 1.5e-5 to 1.6e-3 of `D` and
+        # one at **3.7x `D`**. Head A's `mu_rel` at these fixed points is measured
+        # at 1e-4 to 9e-3 (§13.4's mixed-residual arm), so the three small ones are
+        # ties this surrogate cannot resolve -- reporting them as invasions claims
+        # a precision the model does not have, and chasing them only spends the
+        # re-admission budget re-deriving the same state. `invade_rel` is
+        # deliberately used for *both* the re-admission test and this report, so
+        # the loop never declines to chase a member it then calls an invader.
+        info["invadable"] = bool((~alive & (mu > D * (1 + invade_rel))).any())
         info["converged"] = bool(ok) and not info["invadable"]
         break
     LOGGER.info(
@@ -643,6 +660,8 @@ def run(
     solver: str = "newton",
     ptc: float = 0.0,
     d_steps: int = 0,
+    readmits: int = 1,
+    invade_rel: float = 1e-2,
     seed: int = 0,
     scales: Path | None = None,
     fd_check: int = 20,
@@ -776,6 +795,8 @@ def run(
             dmu_dc=dmu_dc,
             solver=solver,
             ptc=ptc,
+            readmits=readmits,
+            invade_rel=invade_rel,
         )
         LOGGER.info("continuation: D %.4g converged=%s", Dk, sol["converged"])
         # A failed rung is not fatal: its iterate is still closer to the next
@@ -804,6 +825,8 @@ def run(
         "solver": solver,
         "ptc": ptc,
         "d_steps": d_steps,
+        "readmits": readmits,
+        "invade_rel": invade_rel,
         "jac_temp": jac_temp,
         "residual_max": float(np.abs(_r_used).max()),
         # The dimensionless one the solver actually tests: pool rows over `D*Km`,

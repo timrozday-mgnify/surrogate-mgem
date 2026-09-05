@@ -36,6 +36,13 @@ def test_fixed_point_matches_the_closed_form_and_excludes_the_slow_member():
     assert np.isclose(sol["X"][0], YIELD * (FEED - c_star), rtol=1e-6)
     assert sol["X"][1] == 0.0
 
+    # The structural check, and the one that actually failed on 4 of 10 roster
+    # cells: an excluded member must not be able to grow at `c*`. A clean residual
+    # says only that the *assumed* active set is self-consistent.
+    assert not sol["invadable"]
+    mu_star = MUMAX * sol["c"][0] / (K + sol["c"][0])
+    assert (mu_star[~sol["alive"]] <= D).all()
+
     # Stability of a Monod chemostat's coexistence-free fixed point.
     J = sol["J"].copy()
     J[1:, :] *= sol["X"][sol["alive"]][:, None]

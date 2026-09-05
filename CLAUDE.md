@@ -2228,13 +2228,35 @@ guarantees termination, not termination on a state satisfying complementarity.
 `solve_steady` now reports `invadable` and **gates `converged` on it**, so a
 coexistence result can no longer be quoted off a residual alone.
 
-**Next:** (1) let a near-tie *return* coexistence instead of being banned —
-solve the two-survivor system once when a re-admission is within tolerance of
-`D`; (2) cell 9's +41, which is neither a tie nor the pool collapse; (3) a
-per-cell grid over `--jac-temp` / `--d-steps` / `--ptc`, since none is a default;
-(4) keystone leave-one-out, no code; (5) re-seed abundances per continuation
-rung; (6) whether cells 2/3/10 have a fixed point at all — still open, but cell
-3 reaching 4.5e-5 under continuation is evidence *for*.
+**Three of the four invadable cells are ties the surrogate cannot resolve, and
+the fix is a threshold — 2026-09-05.** The four split cleanly by margin: cells
+8/6/1 at **1.5e-5 / 5.8e-5 / 1.6e-3** of `D`, cell 9 at **3.7**. Head A's own
+`mu_rel` at these fixed points is 1e-4 to 9e-3, so the first three are *inside
+the head's error bar* — calling them invasions claims a precision the model does
+not have. **`--invade-rel` (default 1e-2)** is now the threshold for both the
+re-admission test and the `invadable` report, deliberately the same number for
+both so the loop never declines to chase a member it then calls an invader. At
+the default only cell 9 is a failure.
+
+**A bounded re-admission budget (`--readmits`, default 1) was built first and
+does not fix a tie.** It replaces the permanent ban — termination only needs
+re-admissions to be *finite*, not forbidden. On cell 1 it changes nothing: the
+member is re-admitted, the two-survivor Newton fails, the inconsistent-set branch
+drops it again, and the budget is spent reaching the identical state (11
+iterations, same residual). So at a genuine tie **there is no two-survivor fixed
+point the solver can reach**. Kept at 1 because it costs nothing where it does
+not fire and cell 9's margin is exactly what it is for.
+
+Whether cells 1/6/8 *actually* coexist is beyond this surrogate; that question
+needs `--roster`/`--mix-mu-rel`, and an equilibrium is one state so the LP is
+affordable. Read "one survivor at every size" as "one survivor, three too close
+to call".
+
+**Next:** (1) cell 9's +3.7x`D`, the one real invasion; (2) a per-cell grid over
+`--jac-temp` / `--d-steps` / `--ptc`, since none is a default; (3) keystone
+leave-one-out, no code; (4) re-seed abundances per continuation rung; (5) whether
+cells 2/3/10 have a fixed point at all — still open, but cell 3 reaching 4.5e-5
+under continuation is evidence *for*.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
