@@ -2512,9 +2512,20 @@ binding with a non-dust **reduced cost**.
    by *metabolite*; sensitivity to an *exchange bound* is `reduced_costs`, by
    reaction. The wrong one reported `k = 0` — visibly broken, not plausibly wrong.
 
-**Next:** (1) cell 10 (n=21), now affordable at ~4x faster; (2) `filter_jit` on
-the heads, a further 30% and bit-identical; (3) `mu_LP(c*)` on the remaining
-cells, since it is the honest §13.4 accuracy number.
+**Cell 10 (n=21) is measured, and it is a tie, not a size failure — 2026-09-05.**
+Three earlier attempts blew a one-hour wall; at ~4x cheaper per solve it finishes
+in **17 min**. `--seed-probes 0` (the old bisection) gives **9.9e+00**;
+R*-ordered monoculture seeding gives **3.87e-03**, survivor ABYJ02, margin
++2.26e-05, 4 probes. Three orders, same story as cells 2 and 3. It does not
+converge because **four members are tied in R* to within 0.015%**
+(`3.4771e-02, 3.4771e-02, 3.4772e-02, 3.4776e-02`) — the early stop never fires
+because no strictly valid state exists to find. **Every unconverged cell in the
+M12 gate now has one explanation: a sub-resolution R\* tie.**
+
+**Next:** (1) `filter_jit` on the heads, a further 30% and bit-identical;
+(2) `mu_LP(c*)` on the remaining cells — the honest §13.4 accuracy number;
+(3) re-run the flag grid on one code version, since the existing one straddles
+several.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

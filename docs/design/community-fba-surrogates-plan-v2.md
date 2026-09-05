@@ -4490,6 +4490,29 @@ growth to an *exchange bound* is `solution.reduced_costs`, indexed by reaction.
 Using the former found no binding exchange at all and reported `k = 0` -- visibly
 broken, rather than a plausible-looking count.
 
+##### Cell 10 (n=21), finally measured — 2026-09-05
+
+Three earlier attempts exceeded a one-hour wall (uncapped, 2 probes, 1 probe). At
+~4x cheaper per solve it completes in **17 minutes** with the default four
+R*-ordered probes:
+
+| cell 10 | residual | survivor | margin | probes |
+| --- | --- | --- | --- | --- |
+| `--seed-probes 0` (the old bisection) | **9.9e+00** | — | −1.00 | 0 |
+| R*-ordered monoculture seeding | **3.87e-03** | ABYJ02 | +2.26e-05 | 4 |
+
+**Three orders, and the same story as cells 2 and 3**: the bisection commits to a
+survivor and collapses the pool; a monoculture seed does not. It does not
+converge, and the R* values say why --
+
+    R* = [3.4771e-02, 3.4771e-02, 1.0000e+00, 3.4772e-02, 3.4776e-02, 1.0510e-01, ...]
+
+**four members tied to within 0.015%.** The early stop never fires because no
+strictly valid state exists to find, all four probes run, and the final margin is
+a tie at +2.3e-05. So the roster-scale cell is **not** a size failure either: it is
+the same sub-resolution tie as cells 1, 2 and 7, with more members inside it. That
+is now the single explanation for every unconverged cell in the gate.
+
 ##### What is next, in order
 
 | # | Job | Why here |
