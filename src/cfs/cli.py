@@ -681,6 +681,15 @@ def build_parser() -> argparse.ArgumentParser:
         "distinguishable and the tie is not a solver failure.",
     )
     ss.add_argument(
+        "--warm-start",
+        type=Path,
+        default=None,
+        help="steady_state.npz from another solve: start from its (c, X) instead "
+        "of the bisection. Members it does not name enter dead, so the loop's own "
+        "re-admission test decides whether they can invade — which is the direct "
+        "test for multiple fixed points.",
+    )
+    ss.add_argument(
         "--fd-check",
         type=int,
         default=20,
@@ -951,6 +960,7 @@ def main(argv: list[str] | None = None) -> int:
             d_steps=args.d_steps,
             readmits=args.readmits,
             invade_rel=args.invade_rel,
+            warm_start=args.warm_start,
             seed=args.seed,
             scales=args.scales,
             fd_check=args.fd_check,

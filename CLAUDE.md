@@ -2287,13 +2287,36 @@ the steady state rather than the posterior.
 extra solve per excluded member and it separates an ecological finding from a
 solver artifact. Cell 7 passes it; cell 8 fails it.
 
-**Next:** (1) confirm multiplicity directly — re-solve the *full* community warm
--started at each leave-one-out's answer; (2) `--readmits 0` on cell 8, since more
-reachable paths may be what made it path-sensitive; (3) a per-cell grid over
-`--jac-temp` / `--d-steps` / `--ptc`, since none is a default; (4) re-seed
-abundances per continuation rung; (5) whether cells 2/3/10 have a fixed point at
-all — still open, but cell 3 reaching 4.5e-5 under continuation is evidence
-*for*.
+**Multiplicity is confirmed, not inferred — 2026-09-05.** `--warm-start` takes
+another solve's `steady_state.npz` as the starting `(c, X)`, with members it does
+not name entering **dead** so the loop's own re-admission test decides whether
+they can invade. Handing each cell-8 leave-one-out's answer back to the **full**
+five-member community at the same feed and `D` gives **three distinct, converged,
+non-invadable fixed points**: `AAXE02` alone (9.2e-08), `GCA_000209935.1` alone
+(1.7e-07), and `AAXE02 + DACTBY01` coexisting (2.8e-07). Two more warm starts
+land on a fourth, non-converged candidate (both at 4.6e-03, so the same point).
+
+1. **The coexistence is real and belongs to the full community** — restoring the
+   deleted `CP027002.1` does not destroy it, because it cannot invade. Cell 8's
+   keystone reading was an artifact only in *which* attractor the deletion moved
+   the solver to.
+2. **It is not `--readmits`** — the obvious suspect, being this session's own
+   change. `--readmits 0` returns `AAXE02` at 9.2e-08 exactly as before.
+3. **There is no such thing as *the* steady state of these communities.** Every
+   number quoted at one — coexistence, stability, invasion, `dy*/dc_feed`,
+   §13.5's interaction rate, §13.6's forward map — is conditional on the warm
+   start that selected it. P6 expected multiple equilibria to surface as
+   clustered HMC divergences; they surface for the price of three solves.
+4. **The instrument exists**: a multiplicity scan is `--warm-start` from a few
+   structured starts (each member's own monoculture equilibrium is the obvious
+   basis), counting distinct converged non-invadable states. No LP, no new code.
+   **Quote a steady-state result with the size of that set, or say it was not
+   measured.**
+
+**Next:** (1) the multiplicity scan over the converging cells, and whether cells
+2/3/10 fail because they have no fixed point or because they have several; (2) a
+per-cell grid over `--jac-temp` / `--d-steps` / `--ptc`, since none is a default;
+(3) re-seed abundances per continuation rung.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

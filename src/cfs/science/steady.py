@@ -662,6 +662,7 @@ def run(
     d_steps: int = 0,
     readmits: int = 1,
     invade_rel: float = 1e-2,
+    warm_start: Path | None = None,
     seed: int = 0,
     scales: Path | None = None,
     fd_check: int = 20,
@@ -765,6 +766,20 @@ def run(
     if not x0.any():
         x0 = np.full(len(organisms), 1e-6)
     LOGGER.info("warm start: theta %.3e, X %s", hi, np.array2string(x0))
+
+    if warm_start is not None:
+        # Continue from another solve's state instead. Members absent from that
+        # run enter at `X = 0`, i.e. dead, so the active-set loop's own
+        # re-admission test decides whether they can invade it -- which makes this
+        # the direct check for multiple fixed points: re-insert the member a
+        # leave-one-out dropped and ask whether the state it found is still an
+        # equilibrium of the *full* community. `c` is aligned by the frozen index,
+        # `X` by genome id.
+        z = np.load(warm_start)
+        prev = dict(zip([str(g) for g in z["genome_ids"]], z["X"].tolist(), strict=True))
+        c0 = z["c"].astype(float).copy()
+        x0 = np.array([prev.get(g, 0.0) for g in organisms])
+        LOGGER.info("warm start from %s: X %s", warm_start, np.array2string(x0))
 
     # Natural-parameter continuation in `D`, off by default. The measured failure
     # is not a bad Newton direction -- a Levenberg-Marquardt trust region fires on

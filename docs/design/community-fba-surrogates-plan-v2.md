@@ -4078,6 +4078,55 @@ there too, multiple fixed points are demonstrated rather than inferred. Untested
 made cell 8 path-sensitive; the `readmits 0` comparison is one flag and was not
 run.
 
+##### The chemostat steady state is not unique — confirmed, 2026-09-05
+
+`--warm-start` takes another solve's `steady_state.npz` as the starting `(c, X)`;
+members it does not name enter **dead**, so the active-set loop's own re-admission
+test decides whether they can invade. That makes the multiplicity check exact:
+hand each cell-8 leave-one-out's answer back to the **full five-member**
+community, same feed, same `D` = 3.8316, and ask whether it is still an
+equilibrium.
+
+| warm-started from | that sub-community's survivors | full-community result | conv | invadable | residual |
+| --- | --- | --- | --- | --- | --- |
+| −AAXE02 | GCA_000209935.1 | **GCA_000209935.1** | yes | no | 1.7e-07 |
+| −CP027002.1 | AAXE02 + DACTBY01 | **AAXE02 + DACTBY01** | yes | no | 2.8e-07 |
+| −FNPN01 | AAXE02 | **AAXE02** | yes | no | 3.6e-07 |
+| −DACTBY01 | CP027002.1 | CP027002.1 | no | no | 4.6e-03 |
+| −GCA_000209935.1 | CP027002.1 | CP027002.1 | no | no | 4.6e-03 |
+| default warm start, `--readmits` 0 **or** 1 | — | **AAXE02** | yes | no | 9.2e-08 |
+
+**Three distinct, converged, non-invadable fixed points of the identical system**:
+`AAXE02` alone, `GCA_000209935.1` alone, and `AAXE02 + DACTBY01` coexisting. Two
+more warm starts land on a fourth candidate that does not converge (both at the
+same 4.6e-03, so they are the same point). The previous section inferred
+multiplicity from the extinct-member argument; this measures it.
+
+**1. The coexistence is real, and it belongs to the full community.** It was found
+by deleting `CP027002.1`, but restoring that member does not destroy it -- it
+cannot invade. So cell 8's keystone reading was an artifact only in *which*
+attractor the deletion moved the solver to; the state it found is a genuine
+equilibrium the default warm start never reaches.
+
+**2. It is not `--readmits`.** The budget was the obvious suspect, being this
+session's own change and a way to reach more states. `--readmits 0` returns
+`AAXE02` at 9.2e-08 exactly as before, so the path sensitivity predates it.
+
+**3. What this costs the downstream sections.** §13.4 says the steady state "is
+the right place to quote numbers, to define objectives, and to differentiate
+through". It still is -- but **there is no such thing as *the* steady state of
+these communities**, and every number quoted at one (coexistence, stability,
+invasion, `dy*/dc_feed`, §13.5's interaction rate, §13.6's forward map) is
+conditional on the warm start that selected it. P6 anticipated multiple equilibria
+as "clustered divergences" in HMC; they are visible far earlier and for three
+solves rather than a chain.
+
+**4. The cheap instrument already exists.** A multiplicity scan is
+`--warm-start` from a handful of structured starting points -- each single-member
+monoculture's own equilibrium is the obvious basis -- counting distinct converged
+non-invadable states. No LP, no new code. Quote a steady-state result with the
+size of that set, or say it was not measured.
+
 ##### What is next, in order
 
 | # | Job | Why here |
@@ -4220,7 +4269,7 @@ must budget a matched control.
 | M9 | `cfs simulate`, batch + chemostat | **done 2026-08-30**; agrees with `cfs community`'s surrogate path on `D = 0` |
 | M10 | §13.2 growth maximisation, convex solver | Optimum survives V5 round-trip on 20 cases — **built 2026-08-30; 19/20 at the default trust region, 20/20 at 0.25 and at 1.0 decades.** Median true gain +2.2%, median optimism 0.3%. The one failure is a `mu = 2.0` start medium, the head's known weak band; it is not monotone in the trust radius. **Under an additive trust region 3/20 collapse to `mu_true = 0`, and under none at all 2 of the first 4** — P21, and the mechanism is zeroing an essential trace metabolite |
 | M11 | §13.3 static minimal medium | **built 2026-08-30; the essentiality blocker is closed 2026-08-31, V6 still short.** `cfs minimal-medium`: convex penalty solve + a greedy cardinality prune, one case per medium draw. **Head A cannot represent essentiality** — knocking a trace metal (`EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e`) out of a rich medium takes the true LP to `mu = 0` and moves the head by <1%, 6 of 37 free metabolites on a 3-member community. Unrestricted, the program exploits exactly that: 273 -> **41** components with every surrogate floor satisfied and `mu_true` 55/70/38 -> **0/0/0**. With the lethal singles pinned from the models (`--keep-essential`, default; one FBA per free metabolite, a static property of the GEM), 273 -> 251 and 2 of 3 members clear a 0.5 floor under the LP, the misses being 0.489/0.485 — i.e. ~2% short — and one real failure at 0.334 on the community's slow member (`mu_true` 3.5 against 55 and 70), Head A's known weak low-`mu` band. **The cause is `SamplingConfig.log10_lo = -4`**: the trace metals' limiting regime is at `c/Km ~ 1e-9..1e-6`, outside the probe's bracket, so the probe omits them, `band_scales` defaults them to 1.0, the design never makes them scarce, `_kink_scale` defaults `x_scale` to 1.0 and the head has no resolution left in that coordinate. The four missed essentials are exactly the four `"source": "default"` bands in the sidecar. **Fixed by `probe_lo = -12` (§4.7) and a relabel: `n_missed_essential` 6 -> 0**, and unrestricted the design no longer collapses the LP (2/3, 0/3, 3/3 members clearing the floor, worst true fraction 0.436 against 0.000). V6 still does not pass at a 0.5 floor — 0.491 / 0.436 / 0.512 — so what remains is a few-percent accuracy question, not a structural one |
-| M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 passes on every converged cell (5.6e-7 to 3.1e-6), the Newton failure rate is 60% against the 1% gate, and 4 of 10 cells return a state an excluded member can invade** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
+| M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 passes on every converged cell (5.6e-7 to 3.1e-6), the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the fixed point is not unique — one cell has three distinct converged non-invadable equilibria at one feed and one `D`** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
 
