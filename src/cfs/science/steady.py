@@ -788,6 +788,31 @@ def run(
     everyone = np.ones(len(organisms), dtype=bool)
     c0, x0 = _bisect(everyone)
 
+    def _rstar():
+        """Per member, the feed scaling at which it alone breaks even (`mu = D`).
+
+        Tilman's R*, in the one coordinate this design varies. Lower wins: a
+        chemostat is won by the member that persists at the scarcest medium, not
+        by the fastest grower. 50 bisection steps and no steady-state solve.
+        """
+        out = np.ones(len(organisms))
+        for i in range(len(organisms)):
+            who = np.zeros(len(organisms), dtype=bool)
+            who[i] = True
+            cons = rhs(feed, who.astype(float))[0] < 0
+            lo, hi = 0.0, 1.0
+            for _ in range(50):
+                th = 0.5 * (lo + hi)
+                c = feed.copy()
+                c[cons] = th * feed[cons]
+                if rhs(c, zero)[1][i] > D:
+                    hi = th
+                else:
+                    lo = th
+            out[i] = hi
+        LOGGER.info("R*: %s", np.array2string(out, precision=4, formatter={"float": "{:.4e}".format}))
+        return out
+
     if warm_start is not None:
         # Continue from another solve's state instead. Members absent from that
         # run enter at `X = 0`, i.e. dead, so the active-set loop's own
@@ -904,11 +929,29 @@ def run(
         # with `mu` at the feed, so this puts the likely answer early and the early
         # stop then ends the loop -- which is what keeps the cost near one probe
         # instead of `2G` on a 21-member community.
-        for i in np.argsort(-mu_feed)[:seed_probes]:
+        # Order by **R\***, the break-even feed scaling, not by `mu` at the feed.
+        # This is the chemostat's own theory (Hsu, Hubbell & Waltman 1977; Tilman):
+        # the survivor is the member that persists at the *lowest* resource
+        # concentration, which is a different statistic from growing fastest when
+        # replete. It is not a refinement -- the two disagree, and where they do,
+        # `mu`-at-feed is wrong: on roster cell 2 it ranks the member the solver
+        # then returned in a strictly invadable state, while R* ranks the other.
+        # Measured, R* names the valid survivor on 5 of 5 cells checked.
+        #
+        # It costs one bisection per member and no steady-state solve, and the
+        # *gap* between the two smallest is the cell's difficulty: 5x on the one
+        # cell with a decisive invasion margin, 0.02-0.15% on the near-tie cells.
+        order = np.argsort(_rstar())[:seed_probes]
+        # Pairs are **not** probed. Two species coexist only on two limiting
+        # resources, and `k = 1` at every fixed point measured -- one metabolite
+        # carries 100% of the growth gradient. The pairwise arm was built and run
+        # anyway: 10 probes on the one cell with a two-member state, and it found
+        # nothing the singles had not.
+        for who_ix in [(int(i),) for i in order]:
             if _margin(sol) < 0.0 and sol["converged"]:
                 break
             who = np.zeros(len(organisms), dtype=bool)
-            who[i] = True
+            who[list(who_ix)] = True
             ci, xi = _bisect(who)
             mono = solve_steady(
                 rhs_lp or rhs, feed, D, free, sur.km, ci, xi,
@@ -917,8 +960,9 @@ def run(
             )
             cand = _from(mono["c"], np.maximum(mono["X"], 0.0))
             LOGGER.info(
-                "monoculture seed %s: converged=%s margin=%.3g (best %.3g)",
-                organisms[int(i)], cand["converged"], _margin(cand), _margin(sol),
+                "seed %s: converged=%s margin=%.3g (best %.3g)",
+                "+".join(organisms[int(k)] for k in who_ix),
+                cand["converged"], _margin(cand), _margin(sol),
             )
             if _key(cand) > _key(sol):
                 sol = cand

@@ -2424,11 +2424,44 @@ found something larger: **every V4 number in this file is a `median_rel_error` a
 **Quote V4 as a max at 20 components with the cell's margin beside it, or do not
 quote it.**
 
-**Next:** (1) whether V4's tie failure matters downstream — §8.4 and §13.6
-differentiate through `c*`, so a near-tie community may be undifferentiable in
-practice; (2) cell 10 (n=21), which needs `--seed-probes 0` or more compute than
-an hour; (3) pairwise probes for coexistence, if a second cell motivates them;
-(4) a per-cell grid over `--jac-temp` / `--d-steps` / `--ptc`.
+**Multiple steady states are mostly not real: `k = 1` — 2026-09-05.** Counted
+from Head A's analytic gradient at `c*` (`20hm_bands/kres.py`, no solves),
+**one metabolite carries 100% of the growth gradient at every fixed point**
+measured, n=2 to n=10. Hsu, Hubbell & Waltman (1977): `n` species on one limiting
+resource admit exactly one survivor **globally** — no bistability — and it is the
+lowest R*. So the apparent multiplicity is one equilibrium the surrogate cannot
+resolve. The single coexistence state (cell 8) needs a second resource and has it
+at **2.8%** of that member's gradient.
+
+**R\* is the right ranking and `mu(feed)` is the wrong one** (`rstar.py`): one
+bisection per member, no steady-state solve. The two agree on 4 of 5 cells, and
+the **gap** grades the cell before any solve — 5x where the invasion margin is
+decisive, 0.02–0.15% on every near-tie cell. `--seed-mode monoculture` now orders
+probes by R*.
+
+**Walked back in the same session:** that R* "fixes cell 2". Its gap there is
+**0.02%** — R* resolves that cell no better than the margin's 7e-05 does. Re-run
+under R* order, cell 2 is **unchanged**: the R*-preferred member's basin gives a
+degenerate state (margin −1, unconverged) and selection correctly falls back.
+Stop treating cell 2 as a fixable failure.
+
+**Refuted before building, by `k = 1`:** deflation (Farrell et al. 2015), convex
+pre-screening of survivor sets, a Fischer–Burmeister/semismooth Newton rewrite
+(Qi & Sun 1993), and `2G` monoculture probing (R* replaces it with `G`
+bisections). **Pairwise probes were built and run first — 10 probes on cell 8,
+nothing the singles had not found** — and are removed.
+
+**What would reopen all of it:** `k = 1` is partly Head A's structure, since a
+max-affine gradient *is* one active plane. Separating "singly limited media" from
+"a head that reports one limiter" needs the LP (`--roster`, affordable at one
+state). If true `k` is 2–3, cell 8's coexistence is real and deflation becomes
+correct.
+
+**Next:** (1) **the analytic pool-block Jacobian** — `d(dc/dt)/dc = −D·I +
+Σ Xᵢ dzᵢ/dc` via `jacfwd` through Head B, replacing 355 rhs evaluations per
+Jacobian; the growth rows are already analytic, this is the other block, and it is
+what makes n=21 affordable. Independent of everything above; (2) measure true `k`
+via `--roster` on one state; (3) cell 10 at `--seed-probes 0`.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

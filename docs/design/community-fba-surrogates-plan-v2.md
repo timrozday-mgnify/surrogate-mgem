@@ -4327,6 +4327,83 @@ announced for free by the invasion margin going to zero. **A steady-state
 optimiser or sampler should refuse, or shorten, a step that would change the
 survivor set.** Not built.
 
+##### Multiple steady states: the answer is competitive exclusion, not a better solver — 2026-09-05
+
+The session had been treating "several fixed points" as a numerical problem to be
+attacked with better globalisation and more probing. Two measurements, both free
+and neither needing a solve, say it is mostly not one.
+
+**1. `k = 1`: one metabolite carries the whole growth gradient, at every fixed
+point.** Counted from Head A's own analytic gradient at `c*`
+(`20hm_bands/kres.py`), over states from n=2 to n=10:
+
+| state | survivors | `k` at 1% of the top | top share |
+| --- | --- | --- | --- |
+| cells 4, 7, 1, 9, 8 (single-survivor) | 1 | **1** | **1.000** |
+| cell 8's coexistence | 2 | 1 and **2** | 1.000 / 0.972 |
+
+Hsu, Hubbell & Waltman (1977) prove that `n` species on **one** limiting resource
+with monotone growth admit exactly one survivor, *globally* -- no bistability, no
+basin structure, and the winner is the lowest R*. Tilman's R* theory bounds
+coexistence by the number of limiting resources. At `k = 1` there is nothing to
+enumerate: the apparent multiplicity is one equilibrium the surrogate cannot
+resolve, not several the solver must find. The single coexistence state needs its
+second resource, and has it at **2.8%** of that member's gradient -- inside the
+model's own error.
+
+**2. R\* is the right ranking statistic and `mu` at the feed is the wrong one.**
+R* here is `theta*`, the feed scaling at which a member alone reaches `mu = D`:
+one bisection per member, 50 right-hand-side evaluations, **no steady-state
+solve**. Against `mu(feed)`, which is what the probe order used:
+
+| cell | R* (theta*) | gap | R* winner | `mu(feed)` winner |
+| --- | --- | --- | --- | --- |
+| 4 | 0.1995 / 1.000 | **5x** | CR626927.1 | CR626927.1 |
+| 3 | 2.791e-4 / 2.860e-4 | 2.4% | ABCC02 | ABCC02 |
+| 1 | 0.1985 / 0.1988 | 0.15% | CR626927.1 | CR626927.1 |
+| 7 | 0.1996 / 0.1997 | 0.05% | CP001726.1 | CP001726.1 |
+| 2 | 4.544e-4 / 4.545e-4 | **0.02%** | CP001726.1 | **CP001820.1** |
+
+They agree except on cell 2, and the **gap** is the cell's difficulty measured
+before any solve: 5x on the one cell with a decisive invasion margin, 0.02-0.15%
+on every near-tie cell. `--seed-mode monoculture` now orders its probes by R*.
+
+**A claim made here and immediately walked back:** that R* "gets cell 2 right where
+the solver gets it wrong". Its gap there is **0.02%** -- R* is not resolving that
+cell either, and neither is the invasion margin at 7e-05. Cell 2 is unresolvable
+at every statistic available, and the solver returning either member is
+defensible. Re-running it under R* order confirmed this: the R*-preferred member's
+basin leads to a *degenerate* state (margin −1, unconverged) and selection
+correctly falls back to the other on residual. **Cell 2 is unchanged and should
+stop being treated as a fixable failure.**
+
+**What this refutes, before it was built.** Five methods were on the plan for
+enumerating multiple equilibria and `k = 1` removes the motivation for all of
+them: deflation (Farrell, Birkisson & Funke 2015 -- the standard way to find
+distinct roots from one start), convex pre-screening of candidate survivor sets
+(available because `{c : mu_i(c) >= D}` is convex when Head A is concave),
+a Fischer-Burmeister/semismooth Newton reformulation that would delete the
+active-set loop and its path dependence (Qi & Sun 1993), pairwise seed probes, and
+the `2G` monoculture probing that R* replaces with `G` bisections. **Pairwise
+probes were the one that had already been built and run: 10 probes on cell 8, and
+they found nothing the singles had not** -- consistent with the theory, and removed.
+
+**The caveat that would reopen all of it.** `k = 1` is partly Head A's structure
+rather than biology: a max-affine head's gradient at a point *is* a single active
+plane, so a top share of 1.000 is what the model class produces whatever the
+medium does. Separating "these media are singly limited" from "this head reports
+one limiter at a time" needs the LP, and `--roster` is how to ask -- an equilibrium
+is one state, so the solves are affordable. If the true `k` is 2-3, cell 8's
+coexistence is real, deflation becomes the right tool, and the convex pre-screen
+becomes worth its complexity.
+
+**What is worth building regardless: the analytic pool-block Jacobian.**
+`d(dc/dt)/dc = -D I + sum_i X_i dz_i/dc`, and Head B is a JAX MLP, so `jacfwd`
+gives it exactly where the code currently spends **one right-hand-side evaluation
+per free metabolite** -- 355 of them per Jacobian. The growth rows are already
+analytic (`_head_mu_rows`); this is the other block, it is pure implementation,
+and it is what makes n=21 affordable at all. Independent of every question above.
+
 ##### What is next, in order
 
 | # | Job | Why here |
