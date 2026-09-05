@@ -4227,12 +4227,19 @@ probe, which removes a member from the system rather than starting it dead. So
 monoculture seeding explores alternative **monoculture** equilibria only. Covering
 coexistence needs pairwise probes, `G^2`, and one cell is not evidence enough.
 
-**2. The cost is bounded by two knobs, and both were needed.** Probes run
-fastest-grower-at-the-feed first (a chemostat's survivor usually has the lowest
-break-even concentration, which tracks `mu` at the feed) and stop at the first
-strictly valid state. Even so, **the 21-member cell does not finish in an hour
-uncapped**, against ~15 min for the bisection alone, so `--seed-probes` (default
-4) caps it at `2N` extra solves regardless of size.
+**2. The cost is bounded by two knobs, and at n=21 that is still not enough.**
+Probes run fastest-grower-at-the-feed first (a chemostat's survivor usually has
+the lowest break-even concentration, which tracks `mu` at the feed) and stop at
+the first strictly valid state; `--seed-probes` (default 4) caps them.
+
+**Cell 10 (n=21) is not measured on the new default.** It was attempted at
+uncapped, 2 and 1 probes and exceeded a one-hour wall each time -- the bisection
+solve alone is ~15 min there, and even one probe adds a monoculture plus a second
+full solve on a 21-member system. So the honest statement is that monoculture
+seeding is affordable to about n=10 (cell 9 took 28 min) and **not measured
+beyond it**. `--seed-probes 0` gives exactly the old bisection behaviour without
+changing mode, and is the escape hatch for a large community; the roster-scale
+cell should be re-run there or on better hardware before M12 is quoted at n=21.
 
 **3. Two false starts, both worth keeping.** *Ranking on the margin alone prefers
 the degenerate state*: a collapsed pool has `c ~ 0`, so `mu ~ 0` for everybody,

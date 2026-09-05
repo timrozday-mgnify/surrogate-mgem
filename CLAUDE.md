@@ -2363,10 +2363,14 @@ collapsed-pool 9.8 / 10.0 (with the *other* member surviving), and cell 9 now
    starting it dead. Monoculture seeding explores alternative **monoculture**
    equilibria only; coexistence needs pairwise probes (`G^2`), and one cell is
    not enough evidence to build them.
-2. **Cost needs both knobs.** Probes go fastest-grower-at-the-feed first and stop
-   at the first strictly valid state; even so the **21-member cell does not
-   finish in an hour uncapped** (~15 min for the bisection alone), so
-   `--seed-probes` (default 4) caps it at `2N` extra solves.
+2. **Cost: affordable to ~n=10, and n=21 is NOT measured.** Probes go
+   fastest-grower-at-the-feed first and stop at the first strictly valid state,
+   with `--seed-probes` (default 4) capping them. Cell 9 (n=10) took 28 min; cell
+   10 (n=21) exceeded a one-hour wall at uncapped, 2 **and** 1 probes, since the
+   bisection solve alone is ~15 min there. **`--seed-probes 0` is exactly the old
+   bisection behaviour** and is the escape hatch for a large community — re-run
+   the roster-scale cell there, or on better hardware, before quoting M12 at
+   n=21.
 3. **Two false starts, both instructive.** *Ranking on margin alone prefers the
    degenerate state* — a collapsed pool has `c ~ 0`, so nobody can invade it and
    it scores the most negative margin (−0.948); the key is
@@ -2378,9 +2382,10 @@ collapsed-pool 9.8 / 10.0 (with the *other* member surviving), and cell 9 now
    point, so not like-for-like, but two orders is not noise — do not call M12's
    V4 half met on cell 1 until it is understood. Cells 4 and 7 are unmoved.
 
-**Next:** (1) cell 1's V4 regression; (2) cell 10 (n=21) at a probe cap, the one
-cell not yet re-run; (3) pairwise probes for coexistence, if a second cell ever
-motivates them; (4) a per-cell grid over `--jac-temp` / `--d-steps` / `--ptc`.
+**Next:** (1) cell 1's V4 regression, 9.1e-07 -> 8.5e-05; (2) cell 10 (n=21),
+which needs `--seed-probes 0` or more compute than an hour; (3) pairwise probes
+for coexistence, if a second cell ever motivates them; (4) a per-cell grid over
+`--jac-temp` / `--d-steps` / `--ptc`.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
