@@ -142,6 +142,11 @@ class Surrogate:
         )
         self.km = _km_vector(self.exchanges)
         self._E = _element_matrix(self.exchanges)  # (4, M), the §8.6g(2) bound
+        # Per-organism `(E_k, w_k, Q_k)` for `_element_balance`. Built here, from the
+        # same values this constructor just set, rather than lazily on first call:
+        # a lazy cache of `_E`/`mask`/`z_scale` goes silently stale if any of them
+        # is reassigned afterwards, which the unit tests do deliberately.
+        self._eb = None if self._E is None else _eb_operators(self._E, self.mask, self.z_scale)
         self._bears = (self._E > 0).any(0) if self._E is not None else None
         self._jnp = jnp
         self.members = (
@@ -254,16 +259,26 @@ class Surrogate:
         """
         if self._E is None:
             return z
+        # `E_k`, the metric `w_k` and the dual's `Q_k` depend only on the organism,
+        # never on `z`, so they are built once in `__init__`; rebuilding them per
+        # call was 27% of every right-hand side -- 1100 `np.asarray` calls per
+        # evaluation, which the Jacobian then pays once per free metabolite.
+        # An object that skipped `__init__` (the unit tests) has no cache and takes
+        # the direct path, which is the same arithmetic.
+        eb = getattr(self, "_eb", None) or _eb_operators(self._E, self.mask, self.z_scale)
         out = z.copy()
-        w = self.z_scale.astype(np.float64) ** 2  # (G, M), the metric
-        for k in range(z.shape[0]):
-            E = self._E * self.mask[k]
+        for k, (E, w_k, Q) in enumerate(eb):
             g = E @ z[k]  # net export per element; > 0 is the violation
             if (g <= 1e-12).all():
                 continue
-            lam = _dual_nnls((E * w[k]) @ E.T, g)
-            out[k] = z[k] - w[k] * (E.T @ lam)
+            out[k] = z[k] - w_k * (E.T @ _dual_nnls(Q, g))
         return out
+
+
+def _eb_operators(E_all: np.ndarray, mask: np.ndarray, z_scale: np.ndarray) -> list:
+    """Per organism, the masked element matrix, the `z_scale` metric and the dual's Q."""
+    w = z_scale.astype(np.float64) ** 2
+    return [(E, w[k], (E * w[k]) @ E.T) for k, E in enumerate(E_all * mask[:, None, :])]
 
 
 _ELEMENTS = ("C", "N", "P", "S")
