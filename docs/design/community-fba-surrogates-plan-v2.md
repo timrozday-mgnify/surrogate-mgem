@@ -4256,6 +4256,51 @@ It is measured at a different (now valid) fixed point so it is not like-for-like
 but two orders is not noise and M12's V4 half should not be called met on cell 1
 until it is understood. Cells 4 and 7 are unmoved at 3.1e-06 and 5.6e-07.
 
+##### V4 was never established: it is a median at 5 components — 2026-09-05
+
+Chasing cell 1's apparent V4 regression found something larger. `_fd_check`
+reports `median_rel_error` and `max_rel_error`, and every V4 number this document
+carries is the **median** at 5 or 10 components. At 20:
+
+| cell | margin | `X` | V4 median | **V4 max** |
+| --- | --- | --- | --- | --- |
+| 4 | **−8.83e-01** (decisive) | 4.89e-05 | 3.1e-06 | **6.2e-05** |
+| 7 | −2.09e-04 (tie) | 2.14e-05 | 5.6e-07 | **3.8e-01** |
+| 1, bisect state | +1.64e-03 (tie, invalid) | 6.20e-07 | 6.8e-07 | **4.5e-02** |
+| 1, monoculture state | −1.64e-03 (tie, valid) | 6.21e-07 | 8.5e-05 | **9.1e-03** |
+
+**1. Only cell 4 passes V4 on the max, and it is the only cell with a decisive
+invasion margin.** The medians are all 5.6e-07 to 8.5e-05 and say nothing about
+this; the tail is four to six orders worse on the tie cells. **"V4 passes wherever
+the solve converges" is retracted** -- it was measured on medians, at a quarter of
+this depth.
+
+**2. The mechanism is the tie, and it is not a solver defect.** A feed
+perturbation at a near-tie can push the community across the survivor swap, so the
+"finite difference" differences two states on *different branches* rather than
+approximating a derivative. `_fd_check` already guards the visible half of this by
+skipping any component whose active set changed -- which is exactly why cells 1 and
+7 report `n=19` of 20 and cell 4 reports 20 -- and what survives the guard is the
+component that stayed on one branch while `J` was near-singular in the swap
+direction. Near a transcritical point `dy*/dc_feed` is genuinely ill-conditioned;
+the number is bad because the object is.
+
+**3. So the invasion margin's magnitude predicts V4, though it does not predict
+multiplicity.** Cell 4 at −8.8e-01 is clean, cells 7 and 1 at −2.1e-04 and
+±1.6e-03 are not. That is the opposite of the earlier reading, where magnitude
+failed to predict uniqueness and only the sign worked -- the two questions want
+different things from the same number, and both are free.
+
+**4. Cell 1's "regression" was not one.** The new fixed point is 125x worse on the
+median and **5x better on the max** (4.5e-02 -> 9.1e-03). The 9.1e-07 -> 8.5e-05
+comparison reported earlier was a 5-component median against a 20-component one on
+a cell whose V4 is dominated by its tail. Monoculture seeding did not degrade V4.
+
+**What M12's V4 half can actually claim:** V4 passes on cells with a decisive
+invasion margin (1 of 3 measured, max 6.2e-05) and does **not** pass on near-tie
+cells (max 4.5e-02 to 3.8e-01). Quote V4 as a max at 20 components with the cell's
+margin beside it, or do not quote it.
+
 ##### What is next, in order
 
 | # | Job | Why here |
@@ -4398,7 +4443,7 @@ must budget a matched control.
 | M9 | `cfs simulate`, batch + chemostat | **done 2026-08-30**; agrees with `cfs community`'s surrogate path on `D = 0` |
 | M10 | §13.2 growth maximisation, convex solver | Optimum survives V5 round-trip on 20 cases — **built 2026-08-30; 19/20 at the default trust region, 20/20 at 0.25 and at 1.0 decades.** Median true gain +2.2%, median optimism 0.3%. The one failure is a `mu = 2.0` start medium, the head's known weak band; it is not monotone in the trust radius. **Under an additive trust region 3/20 collapse to `mu_true = 0`, and under none at all 2 of the first 4** — P21, and the mechanism is zeroing an essential trace metabolite |
 | M11 | §13.3 static minimal medium | **built 2026-08-30; the essentiality blocker is closed 2026-08-31, V6 still short.** `cfs minimal-medium`: convex penalty solve + a greedy cardinality prune, one case per medium draw. **Head A cannot represent essentiality** — knocking a trace metal (`EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e`) out of a rich medium takes the true LP to `mu = 0` and moves the head by <1%, 6 of 37 free metabolites on a 3-member community. Unrestricted, the program exploits exactly that: 273 -> **41** components with every surrogate floor satisfied and `mu_true` 55/70/38 -> **0/0/0**. With the lethal singles pinned from the models (`--keep-essential`, default; one FBA per free metabolite, a static property of the GEM), 273 -> 251 and 2 of 3 members clear a 0.5 floor under the LP, the misses being 0.489/0.485 — i.e. ~2% short — and one real failure at 0.334 on the community's slow member (`mu_true` 3.5 against 55 and 70), Head A's known weak low-`mu` band. **The cause is `SamplingConfig.log10_lo = -4`**: the trace metals' limiting regime is at `c/Km ~ 1e-9..1e-6`, outside the probe's bracket, so the probe omits them, `band_scales` defaults them to 1.0, the design never makes them scarce, `_kink_scale` defaults `x_scale` to 1.0 and the head has no resolution left in that coordinate. The four missed essentials are exactly the four `"source": "default"` bands in the sidecar. **Fixed by `probe_lo = -12` (§4.7) and a relabel: `n_missed_essential` 6 -> 0**, and unrestricted the design no longer collapses the LP (2/3, 0/3, 3/3 members clearing the floor, worst true fraction 0.436 against 0.000). V6 still does not pass at a 0.5 floor — 0.491 / 0.436 / 0.512 — so what remains is a few-percent accuracy question, not a structural one |
-| M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 passes on every converged cell (5.6e-7 to 3.1e-6), the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the default warm start returns a *strictly invadable* state on 2 of the 4 converging cells — seeding from each member's monoculture instead finds the valid one, and takes the two hardest cells from residual 10 to 1e-5** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
+| M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 does NOT pass in general — those 5.6e-7 to 3.1e-6 figures are *medians* at 5 components, and at 20 the max is 6.2e-05 on the one cell with a decisive invasion margin but 4.5e-02 to 3.8e-01 on the near-tie cells, where a feed perturbation crosses the survivor swap and the difference quotient spans two branches; the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the default warm start returns a *strictly invadable* state on 2 of the 4 converging cells — seeding from each member's monoculture instead finds the valid one, and takes the two hardest cells from residual 10 to 1e-5** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
 

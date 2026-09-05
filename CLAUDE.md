@@ -2382,10 +2382,41 @@ collapsed-pool 9.8 / 10.0 (with the *other* member surviving), and cell 9 now
    point, so not like-for-like, but two orders is not noise — do not call M12's
    V4 half met on cell 1 until it is understood. Cells 4 and 7 are unmoved.
 
-**Next:** (1) cell 1's V4 regression, 9.1e-07 -> 8.5e-05; (2) cell 10 (n=21),
-which needs `--seed-probes 0` or more compute than an hour; (3) pairwise probes
-for coexistence, if a second cell ever motivates them; (4) a per-cell grid over
-`--jac-temp` / `--d-steps` / `--ptc`.
+**V4 was never established — 2026-09-05.** Chasing cell 1's apparent regression
+found something larger: **every V4 number in this file is a `median_rel_error` at
+5 or 10 components**, and `_fd_check` also reports a max. At 20 components:
+
+| cell | margin | V4 median | **V4 max** |
+| --- | --- | --- | --- |
+| 4 | **−8.83e-01** (decisive) | 3.1e-06 | **6.2e-05** |
+| 7 | −2.09e-04 (tie) | 5.6e-07 | **3.8e-01** |
+| 1 bisect / monoculture | ±1.64e-03 (tie) | 6.8e-07 / 8.5e-05 | 4.5e-02 / 9.1e-03 |
+
+1. **"V4 passes wherever the solve converges" is RETRACTED.** Only cell 4 passes
+   on the max, and it is the only cell with a decisive invasion margin. The
+   medians are 5.6e-07 to 8.5e-05 everywhere and say nothing.
+2. **The mechanism is the tie, not a solver defect.** A feed perturbation at a
+   near-tie crosses the survivor swap, so the difference quotient spans two
+   *branches*. `_fd_check` already skips components whose active set changed —
+   which is why the tie cells report `n=19` of 20 and cell 4 reports 20 — and what
+   gets through is a component that stayed on one branch with `J` near-singular in
+   the swap direction. Near a transcritical point `dy*/dc_feed` genuinely is
+   ill-conditioned.
+3. **The margin's magnitude predicts V4, though only its *sign* predicts
+   multiplicity.** Two free questions, two different readings of the same number.
+4. **Cell 1's regression was not one**: the new state is 125x worse on the median
+   and **5x better on the max**. I had compared a 5-component median against a
+   20-component one on a cell whose V4 is all tail. Monoculture seeding did not
+   degrade V4.
+
+**Quote V4 as a max at 20 components with the cell's margin beside it, or do not
+quote it.**
+
+**Next:** (1) whether V4's tie failure matters downstream — §8.4 and §13.6
+differentiate through `c*`, so a near-tie community may be undifferentiable in
+practice; (2) cell 10 (n=21), which needs `--seed-probes 0` or more compute than
+an hour; (3) pairwise probes for coexistence, if a second cell motivates them;
+(4) a per-cell grid over `--jac-temp` / `--d-steps` / `--ptc`.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
