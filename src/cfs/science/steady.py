@@ -875,6 +875,11 @@ def run(
     Path(out).mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         Path(out) / "steady_state.npz",
+        # The feed is drawn from the *union* of the members' active subspaces, so
+        # dropping a member silently redraws it. Any follow-up that compares
+        # communities -- keystone leave-one-out above all -- has to hold it fixed,
+        # and cannot unless it is written down.
+        feed=feed,
         c=c,
         X=X,
         alive=alive,

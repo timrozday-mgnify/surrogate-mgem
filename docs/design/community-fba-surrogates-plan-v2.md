@@ -3997,6 +3997,87 @@ beyond this surrogate: at 1.5e-5 to 1.6e-3 of `D` the question needs the LP, and
 solves are affordable. Until then "one survivor at every size" should be read as
 "one survivor, with three cells too close to call".
 
+##### Cell 9, and keystone leave-one-out — 2026-09-05
+
+**The re-admission budget fixes the one real invasion, which is what it was built
+for.** Cell 9 (n=10), the only cell whose excluded member cleared `--invade-rel`:
+
+| cell 9 | permanent ban | `--readmits 1` |
+| --- | --- | --- |
+| max `mu_j(c*) - D`, excluded | **+41.0** (3.7x `D`) | **+3.2e-05** (2.9e-6 x `D`) |
+| `invadable` | yes | **no** |
+| `residual_max_scaled` | 4.2e-03 | 3.2e-02 |
+| iterations / active-set passes | 76 / 8 | 96 / 10 |
+
+Reproduced exactly on a second run. **The residual gets worse and that is not a
+regression**: the old number was a well-solved *wrong* active set, the new one is
+the right active set solved less well. Read the two together or the arrow points
+backwards.
+
+So `--readmits` and `--invade-rel` divide the four invadable cells cleanly between
+them -- the budget cannot manufacture a fixed point at a tie (cell 1 is unchanged),
+and the threshold does not excuse a genuine invasion (cell 9 clears it by 370x).
+
+##### Keystone members, at a fixed feed
+
+The §13.4 job that needs no code -- except one line, because it was confounded:
+the feed is drawn over the **union** of the members' active subspaces, so dropping
+a member silently redraws the chemostat being compared against.
+`steady_state.npz` now records `feed`, and every leave-one-out below runs at the
+full community's own feed *and* its `D`, via `--medium` and `--dilution`.
+
+**Cell 7 (n=3), and it is textbook.**
+
+| removed | conv | survivors | `X` |
+| --- | --- | --- | --- |
+| — | yes | CP001726.1 | 2.14e-05 |
+| **CP001726.1** | yes | **DACTBY01 + GCA_000007325.1** | 2.14e-05, 2.11e-05 |
+| DACTBY01 | yes | CP001726.1 | 2.14e-05 *(identical)* |
+| GCA_000007325.1 | yes | CP001726.1 | 2.14e-05 *(identical)* |
+
+**This is the first coexistence anywhere in the project**, and it settles a
+question the M12 roster left open: the active-set loop *can* return a two-survivor
+fixed point, cleanly (residual 5.0e-7, not invadable). "One survivor at every
+size" is therefore a fact about these communities under a dominant member, not a
+limitation of the solver -- and it strengthens the near-tie reading above, since
+here a reachable two-survivor state plainly exists and at cell 1's tie none does.
+
+**Cell 8 (n=5), and it is not textbook at all.**
+
+| removed | conv | survivors | `X` |
+| --- | --- | --- | --- |
+| — | yes | AAXE02 | 1.7e-05 |
+| AAXE02 | yes | GCA_000209935.1 | 1.59e-05 |
+| **CP027002.1** | yes | **AAXE02 + DACTBY01** | 1.14e-05, 5.08e-06 |
+| **DACTBY01** | no (4.6e-03) | **CP027002.1** | 1.74e-05 |
+| FNPN01 | yes | AAXE02 | 1.7e-05 *(identical)* |
+| **GCA_000209935.1** | no (4.6e-03) | **CP027002.1** | 1.74e-05 |
+
+Removing the dominant member is the expected result: a clean succession to the
+runner-up. **The other three are not.** `CP027002.1`, `DACTBY01` and
+`GCA_000209935.1` are all *extinct* in the full solve, and removing any of them
+changes the answer -- one into coexistence, two into a different survivor
+entirely. `FNPN01`, equally extinct, is inert to three significant figures.
+
+**An extinct member contributes `X_i z_i = 0` to the pool balance and `X_i = 0`
+satisfies its own growth row, so it cannot change the fixed-point equations.**
+What it changes is the *path*: which member the inconsistent-set branch drops
+first, and in what order re-admissions are spent. So the equilibrium this solver
+returns on cell 8 is **path-dependent**, which means cell 8 has **multiple fixed
+points** and the loop selects among them by history. That is P6 arriving in the
+steady state rather than in the posterior.
+
+**Consequences, in order.** (a) A keystone result is only interpretable where the
+extinct members are inert -- cell 7 passes that check, cell 8 fails it -- so
+**report the inert-removal control alongside every keystone claim**; it costs one
+extra solve per excluded member and it is the difference between an ecological
+finding and a solver artifact. (b) The cheap confirmation is to re-solve the
+*full* community warm-started at each leave-one-out's answer: if it converges
+there too, multiple fixed points are demonstrated rather than inferred. Untested.
+(c) `--readmits` raises the number of reachable paths, so it may itself be what
+made cell 8 path-sensitive; the `readmits 0` comparison is one flag and was not
+run.
+
 ##### What is next, in order
 
 | # | Job | Why here |

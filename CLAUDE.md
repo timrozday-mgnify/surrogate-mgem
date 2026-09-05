@@ -2252,11 +2252,48 @@ needs `--roster`/`--mix-mu-rel`, and an equilibrium is one state so the LP is
 affordable. Read "one survivor at every size" as "one survivor, three too close
 to call".
 
-**Next:** (1) cell 9's +3.7x`D`, the one real invasion; (2) a per-cell grid over
-`--jac-temp` / `--d-steps` / `--ptc`, since none is a default; (3) keystone
-leave-one-out, no code; (4) re-seed abundances per continuation rung; (5) whether
-cells 2/3/10 have a fixed point at all — still open, but cell 3 reaching 4.5e-5
-under continuation is evidence *for*.
+**Cell 9 and keystone, 2026-09-05.** `--readmits 1` fixes the one genuine
+invasion: cell 9's excluded member goes **+41.0 -> +3.2e-05** (3.7x`D` ->
+2.9e-6x`D`), `invadable` false, reproduced exactly. **Its residual gets *worse*,
+4.2e-3 -> 3.2e-2, and that is not a regression** — the old number was a
+well-solved *wrong* active set. So the two knobs divide the four invadable cells
+cleanly: the budget cannot manufacture a fixed point at a tie, the threshold does
+not excuse a real invasion.
+
+**Keystone leave-one-out needed one line of code, not none:** the feed is drawn
+over the **union** of the members' active subspaces, so dropping a member
+silently redraws the chemostat. `steady_state.npz` now records `feed`; every
+leave-one-out runs at the full community's own feed and `D` (`--medium`,
+`--dilution`).
+
+**Cell 7 (n=3) is textbook and gives the project its first coexistence.**
+Removing `CP001726.1` leaves `DACTBY01` + `GCA_000007325.1` both alive at
+2.14e-5 / 2.11e-5, converged (5e-7), not invadable; removing either extinct
+member changes `X` by nothing. So **the active-set loop can return a two-survivor
+fixed point** — "one survivor at every size" is about these communities under a
+dominant member, not about the solver, and cell 1's tie having no reachable
+two-survivor state is a stronger statement than it looked.
+
+**Cell 8 (n=5) is path-dependent, and that is the important one.** Three of its
+four *extinct* members change the answer when removed — `CP027002.1` into
+coexistence, `DACTBY01` and `GCA_000209935.1` into a different survivor — while
+`FNPN01` is inert to 3 s.f. An extinct member contributes `X_i z_i = 0` and
+satisfies its own growth row, so **it cannot change the fixed-point equations**;
+it only changes which member the inconsistent-set branch drops first. Cell 8
+therefore has **multiple fixed points** and the loop selects by history. P6, in
+the steady state rather than the posterior.
+
+**So report the inert-removal control with every keystone claim** — it is one
+extra solve per excluded member and it separates an ecological finding from a
+solver artifact. Cell 7 passes it; cell 8 fails it.
+
+**Next:** (1) confirm multiplicity directly — re-solve the *full* community warm
+-started at each leave-one-out's answer; (2) `--readmits 0` on cell 8, since more
+reachable paths may be what made it path-sensitive; (3) a per-cell grid over
+`--jac-temp` / `--d-steps` / `--ptc`, since none is a default; (4) re-seed
+abundances per continuation rung; (5) whether cells 2/3/10 have a fixed point at
+all — still open, but cell 3 reaching 4.5e-5 under continuation is evidence
+*for*.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
