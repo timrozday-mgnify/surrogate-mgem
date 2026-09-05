@@ -2398,10 +2398,22 @@ found something larger: **every V4 number in this file is a `median_rel_error` a
 2. **The mechanism is the tie, not a solver defect.** A feed perturbation at a
    near-tie crosses the survivor swap, so the difference quotient spans two
    *branches*. `_fd_check` already skips components whose active set changed —
-   which is why the tie cells report `n=19` of 20 and cell 4 reports 20 — and what
-   gets through is a component that stayed on one branch with `J` near-singular in
-   the swap direction. Near a transcritical point `dy*/dc_feed` genuinely is
-   ill-conditioned.
+   which is why the tie cells report `n=19` of 20 and cell 4 reports 20.
+2b. **"`J` is near-singular in the swap direction" is RETRACTED** — measured, and
+   it cost no solves because `J` and `S` are both in `steady_state.npz`
+   (`20hm_bands/jcond.py`). The analytic object is **well conditioned at every
+   converged fixed point, tie cells included**: `cond(J)` 8.7e+02–4.4e+04,
+   `max|S|` 1.0e+02–4.2e+03, neither tracking the margin — the smallest margin in
+   the set (cell 8, +1.5e-05) has the *best* conditioning — and the smallest
+   singular vector puts only 0.20–0.41 of its mass in the abundance block.
+2c. **So the derivative is fine and the *function* is not.** `y*(c_feed)` is
+   discontinuous across the survivor swap: `S` is usable within a branch, and a
+   step that crosses the swap lands somewhere the gradient never described. §8.4
+   and §13.6 can differentiate through `c*`; what they cannot do is step across a
+   tie. Same shape as P21 — a locally-correct gradient plus a step leaving the
+   region it was valid in — and the boundary is announced for free by the invasion
+   margin going to zero. **A steady-state optimiser or sampler should refuse or
+   shorten a step that changes the survivor set.** Not built.
 3. **The margin's magnitude predicts V4, though only its *sign* predicts
    multiplicity.** Two free questions, two different readings of the same number.
 4. **Cell 1's regression was not one**: the new state is 125x worse on the median

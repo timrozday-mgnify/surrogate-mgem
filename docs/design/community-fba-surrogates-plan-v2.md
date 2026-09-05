@@ -4280,10 +4280,18 @@ perturbation at a near-tie can push the community across the survivor swap, so t
 "finite difference" differences two states on *different branches* rather than
 approximating a derivative. `_fd_check` already guards the visible half of this by
 skipping any component whose active set changed -- which is exactly why cells 1 and
-7 report `n=19` of 20 and cell 4 reports 20 -- and what survives the guard is the
-component that stayed on one branch while `J` was near-singular in the swap
-direction. Near a transcritical point `dy*/dc_feed` is genuinely ill-conditioned;
-the number is bad because the object is.
+7 report `n=19` of 20 and cell 4 reports 20.
+
+**The other half of that explanation was wrong and is retracted.** It said the
+surviving error is a component that stayed on one branch while `J` went
+near-singular in the swap direction. `J` and `dy*/dc_feed` are both stored in
+`steady_state.npz`, so this cost no solves to check (`20hm_bands/jcond.py`), and
+**the analytic object is well conditioned at every converged fixed point,
+tie cells included**: column-equilibrated `cond(J)` is 8.7e+02 to 4.4e+04 and
+`max |S|` is 1.0e+02 to 4.2e+03. Neither tracks the margin -- the *smallest*
+margin in the set, cell 8's +1.47e-05, has the **best** conditioning of all
+(8.66e+02) -- and the smallest singular vector puts only 0.20-0.41 of its mass in
+the abundance block, so it is not a swap direction either.
 
 **3. So the invasion margin's magnitude predicts V4, though it does not predict
 multiplicity.** Cell 4 at −8.8e-01 is clean, cells 7 and 1 at −2.1e-04 and
@@ -4300,6 +4308,24 @@ a cell whose V4 is dominated by its tail. Monoculture seeding did not degrade V4
 invasion margin (1 of 3 measured, max 6.2e-05) and does **not** pass on near-tie
 cells (max 4.5e-02 to 3.8e-01). Quote V4 as a max at 20 components with the cell's
 margin beside it, or do not quote it.
+
+**5. What it means downstream, which is the reason to care.** §8.4 and §13.6 both
+differentiate through `c*`, and the conditioning above says **they can**: `S` is
+finite and well conditioned everywhere measured, so the implicit derivative is
+usable *within* a branch. What fails at a near-tie is not the derivative but the
+**function** -- `y*(c_feed)` is discontinuous across the survivor swap, so a feed
+step that crosses it lands on a different branch and the gradient that was correct
+up to the boundary predicts nothing beyond it. V4's max is detecting that
+discontinuity, which is why it is four orders worse than the median while the
+Jacobian is fine.
+
+That makes it the same shape as P21, where §13.2's medium designer walks out of
+the design and the true LP does not grow: a locally-correct gradient plus a step
+that leaves the region it was valid in. The remedy is the same too -- a trust
+region, in the coordinate the boundary lives in -- and the boundary here is
+announced for free by the invasion margin going to zero. **A steady-state
+optimiser or sampler should refuse, or shorten, a step that would change the
+survivor set.** Not built.
 
 ##### What is next, in order
 
