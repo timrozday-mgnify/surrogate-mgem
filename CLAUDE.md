@@ -2949,6 +2949,51 @@ ratio. **Prefer OD**: 16x better on the scale at a quarter of the vessel time, a
 the only arm to reach its own noise floor; the horizon arm is budget-limited, since
 the steeper ratio direction eats the simplex's contractions. They compose.
 
+
+**And under model error the scale is gone, while the ratio survives
+(`--lp`) — 2026-09-06.** All three arms above generated their data from the
+*same surrogate* that then fit it, so each measured identifiability against the
+**integrator's** noise and nothing else. `--lp` takes the truth from the real LP
+instead (`rhs_truth`, one FBA + elastic-net solve per member per rhs call, each
+model's exchange lower bounds scaled by `lam_i` — `apply_mm_bounds` reads Vmax
+off `|lower_bound|`, so that scaling *is* the rate scale on the LP side). That
+is §13.10's blockers 4 and 5, measured. The truth costs 1963 rhs calls / 573 s
+and is cached to an npz; the fit is unchanged.
+
+| | surrogate truth | **LP truth** |
+| --- | --- | --- |
+| floor, ratio / OD channel | 7.6e-07 / 1.3e-06 (integrator) | **4.2e-03 / 1.2e-02** (model discrepancy, **5484x / 9498x**) |
+| ratio direction, +10% on one | 346571x floor | **79x** |
+| scale direction, +10% on both | 323x / OD 515x | **0.65x** / OD **1.51x** |
+| `lam_hat` (truth 1.0, 0.4) | (0.9986, 0.3994) | **(0.7265, 0.2835)** |
+| ratio / scale error | -0.01% / -0.14% | **+2.5% / -28%** |
+| `sse_hat` / `sse` at `lam_true` | below its own floor | **0.06** |
+
+1. **The ratio survives, the global scale does not.** Both degrade in exactly
+   the ratio of their signal to the *discrepancy*. A 10% error in the common
+   factor moves the residual **less than the surrogate's own bias does**, in
+   both channels — it is not identifiable here at all.
+2. **The confound is explicit: the fit beats the truth 17-fold.** The simplex is
+   not recovering a parameter, it is spending `lambda` on Head A/B error.
+   **`sse` at the true parameter is the reference every misspecified fit needs**
+   — without it a converged, low-residual, badly biased fit looks like a good
+   one, and the evaluation budget is irrelevant to the conclusion.
+3. **OD does not rescue the scale once the floor is model error.** Its whole
+   advantage was 515x over an *integrator* floor; against a discrepancy floor
+   ~9500x higher it carries 1.51x. Same for the window lever, whose
+   scale-direction signal is flat in window length by construction.
+4. **So "prefer OD" and "both identified at n=2" are upper bounds on what a
+   perfect model would give**, not results about this one. Report per-organism
+   rate **ratios**; do not report the global scale at this model accuracy.
+   Fixing it needs the discrepancy reduced, not the data enriched —
+   `--fallback-depth`'s LP is the affordable correction, and a chemostat visits
+   few enough states to afford it.
+5. **The reusable half:** a self-consistent identifiability test cannot see any
+   of this — it reported the scale at 323-1998x its floor and the fit recovering
+   it to 0.15%. The floor it measured was the wrong one. **Any inverse problem
+   posed on a surrogate must quote its residual at the true parameter before it
+   quotes its estimate.**
+
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
 After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3

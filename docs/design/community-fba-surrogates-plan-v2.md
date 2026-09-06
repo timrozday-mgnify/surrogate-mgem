@@ -4929,7 +4929,7 @@ must budget a matched control.
 | M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 does NOT pass in general — those 5.6e-7 to 3.1e-6 figures are *medians* at 5 components, and at 20 the max is 6.2e-05 on the one cell with a decisive invasion margin but 4.5e-02 to 3.8e-01 on the near-tie cells, where a feed perturbation crosses the survivor swap and the difference quotient spans two branches; the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the default warm start returns a *strictly invadable* state on 2 of the 4 converging cells — seeding from each member's monoculture instead finds the valid one, and takes the two hardest cells from residual 10 to 1e-5** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
-| M15 | §13.10 kinetic-parameter inference from a chemostat time series | **not started.** Gate: recover a known per-organism `lambda` from synthetic `cfs simulate --stiff` data on a 2-member chemostat, before any adjoint work. Blocked downstream on the same error model as M14 |
+| M15 | §13.10 kinetic-parameter inference from a chemostat time series | **gate met on synthetic data 2026-09-06, and it does not survive model error.** `Surrogate.lam` is the per-organism rate scale (nine lines, no relabelling, no retraining). Against surrogate-generated data both directions clear the integrator's noise floor by 2-5 orders and an 80-evaluation simplex recovers `lambda` to 0.15% once OD is added (a longer window does the same, with 15x *worse* conditioning -- the outcome tracks the weak direction's signal-to-noise, not the curvature ratio). Against **LP-generated** data (`--lp`, blockers 4+5) the model discrepancy is 5484x the integrator floor, and the two directions split: the ratio still carries 79x the floor and comes out +2.5%, while the scale direction moves the residual **less than the surrogate's own bias does** (0.65-1.5x) and comes out **-28%**, with `sse_hat` at 0.06 of the residual at `lam_true` -- i.e. `lambda` absorbing head error rather than being identified. **Report ratios, not the global scale.** Gate: recover a known per-organism `lambda` from synthetic `cfs simulate --stiff` data on a 2-member chemostat, before any adjoint work. Blocked downstream on the same error model as M14 |
 
 M9–M11 need nothing that does not already exist. M12 is M6. M13, M14 and M15 are the
 research half, and M14 is blocked on a piece of work — the error model — that is
@@ -5171,6 +5171,72 @@ And that is enough. Matched 80-eval fits, same start `(1.6, 0.24)`:
 3. **Practical reading:** prefer OD if the instrument exists, since it is cheaper
    in vessel time and better conditioned per evaluation; use a longer run if it
    does not. They are independent and compose.
+
+#### And under model error the scale is gone, while the ratio survives — 2026-09-06
+
+Every arm above generated its data from the *same surrogate* that then fit it, so
+each measured identifiability against the **integrator's** noise and nothing
+else. `lambda_ident.py --lp` replaces the truth with the real thing: `rhs_truth`,
+one FBA + elastic-net solve per member per rhs call, with each model's exchange
+lower bounds scaled by `lam_i` (`apply_mm_bounds` reads Vmax off
+`|lower_bound|`, so that scaling *is* §13.10's rate scale on the LP side). The
+fit is unchanged. That is blockers 4 and 5 — model error where the data lives,
+and `lambda` absorbing it — measured instead of assumed.
+
+The truth trajectory is deterministic and costs 1963 rhs calls / 573 s (BDF
+finite-differences all M+1 columns and each is a fresh LP per member, ~0.4 s a
+call, against ~11 s for a whole surrogate trajectory), so it is cached to an npz
+keyed by its own parameters. Cell 1, `lam_true = (1.0, 0.4)`, `D = 0.0616`,
+5 turnovers, log-ratio + OD, the same 80-evaluation simplex from the same start.
+
+| | self-consistent (surrogate truth) | **LP truth** |
+| --- | --- | --- |
+| floor, ratio channel | 7.59e-07 (integrator) | **4.16e-03** (model discrepancy, **5484x**) |
+| floor, OD channel | 1.29e-06 | **1.23e-02** (**9498x**) |
+| ratio direction, +10% on one | 2.63e-01 = 346571x floor | 3.28e-01 = **79x** floor |
+| scale direction, +10% on both | 2.45e-04 = 323x / OD 515x | 2.71e-03 = **0.65x** / OD **1.51x** |
+| `lam_hat` | (0.9986, 0.3994) | **(0.7265, 0.2835)** |
+| **ratio error** | -0.01% | **+2.5%** |
+| **scale error** | -0.14% | **-28%** |
+| `sse_hat` / `sse` at `lam_true` | below its own floor | **0.06** |
+
+1. **The ratio survives model error; the global scale does not.** The two
+   directions degrade in exactly the ratio of their signal to the *discrepancy*:
+   79x buys +2.5% on the ratio, 0.65-1.5x buys -28% on the scale. A 10% error in
+   the common factor moves the residual **less than the surrogate's own bias
+   does**, in both channels, so it is not identifiable at all here.
+2. **The confound is explicit: the fit beats the truth 17-fold.** `sse_hat` is
+   0.06 of the residual at `lam_true`, so the simplex is not recovering a
+   parameter, it is spending `lambda` on Head A/B error. **`sse` at the true
+   parameter is the reference every misspecified fit needs** — without it a
+   converged, low-residual, badly biased fit is indistinguishable from a good
+   one, and the 80-evaluation budget is irrelevant to the conclusion.
+3. **OD does not rescue the scale once the floor is model error.** Its whole
+   advantage in the self-consistent arm was 515x over an *integrator* floor;
+   against a discrepancy floor ~9500x higher it carries 1.51x, and the fit is
+   28% out with it switched on. The same applies to the horizon lever, whose
+   scale-direction signal is flat in window length by construction.
+4. **This generalises the session's own rule.** "The outcome tracks the weak
+   direction's signal-to-noise, not the curvature ratio" was measured with noise
+   = the integrator; it holds with noise = model discrepancy, and that is the
+   version that matters, since the discrepancy is 3-4 orders larger and is what
+   a real experiment faces.
+
+**Design consequence, superseding the previous two sections.** Report
+per-organism rate **ratios** from a chemostat series; do **not** report the
+global scale from surrogate-based inference at this model accuracy, with or
+without OD. Recovering it needs the discrepancy reduced, not the data enriched —
+`--fallback-depth`'s LP is the affordable correction (§8.6g(4)) and an equilibrium
+or a short transient is cheap enough to afford it. Until then §13.10's
+identifiability table should read **yes to the ratio, no to the scale**, and the
+two earlier arms should be read as upper bounds on what a perfect model would
+give.
+
+**Trap, and it is the reusable half.** A self-consistent identifiability test
+cannot see this at all: it reports the scale at 323-1998x its floor and the fit
+recovering it to 0.15%. The floor it measured was the wrong one. **Any inverse
+problem posed on a surrogate has to quote its residual at the true parameter
+before it quotes its estimate.**
 
 ## Appendix — repository layout
 
