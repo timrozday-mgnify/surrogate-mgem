@@ -146,7 +146,7 @@ class Surrogate:
         # same values this constructor just set, rather than lazily on first call:
         # a lazy cache of `_E`/`mask`/`z_scale` goes silently stale if any of them
         # is reassigned afterwards, which the unit tests do deliberately.
-        self._eb = None if self._E is None else _eb_operators(self._E, self.mask, self.z_scale)
+        self._eb = _eb_operators(self._E, self.mask, self.z_scale)
         self._bears = (self._E > 0).any(0) if self._E is not None else None
         self._jnp = jnp
         self.members = (
@@ -316,8 +316,16 @@ class Surrogate:
         return out
 
 
-def _eb_operators(E_all: np.ndarray, mask: np.ndarray, z_scale: np.ndarray) -> list:
-    """Per organism, the masked element matrix, the `z_scale` metric and the dual's Q."""
+def _eb_operators(E_all: np.ndarray | None, mask: np.ndarray, z_scale: np.ndarray | None):
+    """Per organism, the masked element matrix, the ``z_scale`` metric and the dual's Q.
+
+    ``None`` when there is nothing to build. **``z_scale`` is None for a Head-A-only
+    ``Surrogate``** -- §13.2 and §13.3 build one, since neither needs behaviour --
+    and dereferencing it here took `cfs minimal-medium` and `cfs maximise-growth`
+    from working to an `AttributeError` at construction.
+    """
+    if E_all is None or z_scale is None:
+        return None
     w = z_scale.astype(np.float64) ** 2
     return [(E, w[k], (E * w[k]) @ E.T) for k, E in enumerate(E_all * mask[:, None, :])]
 

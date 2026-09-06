@@ -293,3 +293,21 @@ def test_traj_anchor_is_normalised_per_leaf():
     small_only = P(base.big, base.small * 1.1)
     assert float(_anchor(small_only, base, 1.0)) == pytest.approx(0.01, rel=1e-4)  # float32
     assert float(_anchor(moved, base, 0.0)) == 0.0
+
+
+def test_the_element_balance_cache_tolerates_a_head_a_only_surrogate():
+    """§13.2 and §13.3 build a `Surrogate` with no behaviour checkpoint.
+
+    Regression: caching the element-balance operators in `__init__` dereferenced
+    `z_scale`, which is None for those callers, and took `cfs minimal-medium` and
+    `cfs maximise-growth` from working to an AttributeError at construction. Every
+    unit test supplied a behaviour dir, so nothing caught it.
+    """
+    from cfs.compose import dfba
+
+    E = np.array([[1.0, 6.0, 0.0], [0.0, 0.0, 0.0]])
+    mask = np.ones((2, 3), dtype=bool)
+    assert dfba._eb_operators(E, mask, None) is None  # Head A only
+    assert dfba._eb_operators(None, mask, np.ones((2, 3))) is None  # no element data
+    built = dfba._eb_operators(E, mask, np.ones((2, 3)))
+    assert len(built) == 2 and built[0][2].shape == (2, 2)
