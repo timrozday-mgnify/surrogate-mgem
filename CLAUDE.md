@@ -2924,10 +2924,30 @@ direction is only 2.6x steeper. Do not read a sensitivity table as a fit outcome
 run the fit. So §13.10's "quote the scale with a wide interval" applies to
 relative-abundance-**only** series; with the OD a chemostat already produces, both
 are identified at n=2, and the adjoint (blocker 1) is needed for roster scale and
-for a posterior rather than to see the scale at all. **Not run:** the
-window-length arm (`--turnovers N`, new) — a stale 20-turnover fit on disk
-recovers both from log-ratio alone, so the horizon looks like a second,
-independent lever on the same anisotropy.
+for a posterior rather than to see the scale at all.
+
+**The window is the second lever, and it makes the same point harder
+(`--turnovers 20`).** The scale direction's *raw* sensitivity is **flat** in
+window length (2.45e-4 -> 2.52e-4 at +10%; 4.204e-3 -> 4.201e-3 at +60%) while the
+ratio's grows 16x — the uniform scale is only visible in the opening transient,
+because once the vessel reaches quasi-steady state the medium adjusts so `mu = D`
+whatever `lambda` is. So the anisotropy goes **1073:1 -> 16743:1, 15x worse**, and
+all a longer run buys the scale is a 6x lower noise floor (323x -> 1998x).
+
+**That is enough, which is the point.** Matched 80-eval fits from the same start:
+
+| | scale-dir signal | `lam_hat` | ratio | scale | final `sse` |
+| --- | --- | --- | --- | --- | --- |
+| 5 turnovers, log-ratio | 323x floor | (1.599, 0.647) | -1.2% | **+60%** | stalled |
+| **20 turnovers, log-ratio** | 1998x floor | (0.9769, 0.3907) | +0.01% | **-2.3%** | 46x above floor |
+| **5 turnovers, + OD** | 838x floor | (0.9986, 0.3994) | -0.01% | **-0.14%** | *below* floor |
+
+The 20-turnover arm succeeds with conditioning **15x worse** than the arm that
+failed. Across all three the outcome tracks the weak direction's
+**signal-to-noise** — 323x fails, 838x and 1998x succeed — and not the curvature
+ratio. **Prefer OD**: 16x better on the scale at a quarter of the vessel time, and
+the only arm to reach its own noise floor; the horizon arm is budget-limited, since
+the steeper ratio direction eats the simplex's contractions. They compose.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

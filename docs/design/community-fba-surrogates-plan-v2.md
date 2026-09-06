@@ -5127,10 +5127,50 @@ The observation is the log-ratio alone (total biomass unobserved), which runs
    scale and for anything wanting a posterior; it is no longer needed to make the
    scale visible at all.
 
-**Not run:** the window-length arm. An older 20-turnover fit on disk
-(`lambda_ident.json`, 123 evals) recovers both to 3e-5 from log-ratio alone, which
-suggests the horizon is a second, independent lever on the same anisotropy;
-`--turnovers N` exposes it. Untested against the corrected noise floor.
+#### The window is the second lever, and it confirms the rule — 2026-09-06
+
+`--turnovers 20`, everything else held. The scale direction's **raw** sensitivity
+is flat in window length while the ratio's grows 16x, so the horizon makes the
+conditioning *worse*, not better:
+
+| | 5 turnovers | 20 turnovers |
+| --- | --- | --- |
+| noise floor, ratio channel | 7.59e-07 | **1.26e-07** (6x lower) |
+| ratio direction (+10% on one) | 2.63e-01 | **4.22** (16x larger) |
+| **scale direction (+10% on both)** | 2.45e-04 | **2.52e-04** (unchanged) |
+| scale direction (+60%) | 4.204e-03 | 4.201e-03 (unchanged) |
+| **anisotropy, ratio channel** | 1073:1 | **16743:1** (15x worse) |
+
+The uniform-scale information **saturates**: once the chemostat reaches its
+quasi-steady state the medium adjusts so `mu = D` whatever `lambda` is, so the
+common factor is only visible in the opening transient, whose length does not
+depend on the window. The log-ratio, by contrast, keeps accumulating displacement
+for as long as the vessel runs. What the longer window buys for the scale is
+entirely the **6x lower noise floor**: 323x -> 1998x.
+
+And that is enough. Matched 80-eval fits, same start `(1.6, 0.24)`:
+
+| | scale-dir signal | `lam_hat` | ratio err | scale err | final `sse` |
+| --- | --- | --- | --- | --- | --- |
+| 5 turnovers, log-ratio | 323x floor | (1.599, 0.647) | -1.2% | **+60%** | stalled |
+| **20 turnovers, log-ratio** | 1998x floor | (0.9769, 0.3907) | +0.01% | **-2.3%** | 46x above its floor |
+| **5 turnovers, + OD** | 838x floor | (0.9986, 0.3994) | -0.01% | **-0.14%** | *below* its floor |
+
+1. **Both levers close the fit, and neither does it by improving the
+   conditioning.** The 20-turnover run succeeds with an anisotropy **15x worse**
+   than the 5-turnover run that failed. Across the three arms the outcome tracks
+   the weak direction's **signal-to-noise**, not the curvature ratio: 323x fails,
+   838x and 1998x both succeed.
+2. **OD is the better of the two here** — 16x more accurate on the scale at a
+   quarter of the vessel time, and it is the only arm that reaches its own noise
+   floor. The 20-turnover fit is **budget-limited** (`sse` still 46x above floor at
+   80 evaluations), which is what the steeper ratio direction costs: the simplex
+   spends its contractions there. The stale `lambda_ident.json` on disk is the same
+   run given 123 evaluations and a `fatol` of 1e-12, and it reaches 3e-5 — so the
+   horizon arm converges, just slowly.
+3. **Practical reading:** prefer OD if the instrument exists, since it is cheaper
+   in vessel time and better conditioned per evaluation; use a longer run if it
+   does not. They are independent and compose.
 
 ## Appendix — repository layout
 
