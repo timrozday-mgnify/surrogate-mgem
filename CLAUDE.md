@@ -2617,6 +2617,263 @@ it is unavailable in the surrogate-only setting §13.3 targets.
 abundance splits, which is the question the equilibrium cannot answer;
 (4) re-run the flag grid on one code version.
 
+### The repaired head IS a valid upper bound off-distribution — 2026-09-06
+
+`20hm_bands/bound_gap.py`. `--gm-repair` restores the max-affine validity invariant
+**on the training rows**; nothing had ever checked it anywhere else, and both design
+programs built today depend on it (`min(head, cuts)` is a valid upper bound only
+where the head is one). 182 (point, organism) pairs against the true LP:
+
+| point set | n | valid (`mu_hat >= mu_true`) | median gap | median rel | worst rel |
+| --- | --- | --- | --- | --- | --- |
+| held-out design media | 72 | 0.986 | 0.00226 | 4.2e-04 | **-8.3e-03** |
+| §4.3 community-regime draws | 26 | **1.000** | 2.3e-04 | 4.2e-06 | 1.6e-06 |
+| §13.2 designed optima | 20 | **1.000** | 3.7e-04 | 7.8e-06 | 1.3e-08 |
+| §13.3 minimal media | 63 | **1.000** | 0.464 | 1.3e-02 | 1.7e-05 |
+
+1. **109 of 109 off-distribution points are valid**, and the only violation in the
+   entire set is on *held-out design media* (ABCC02, -0.83%). **The bound is safer
+   away from the design, not less safe** — which is what a max-affine upper bound
+   must do, being loosest where no tangent is nearby.
+2. **It turns a premise into a measurement.** §13.2's bundle TRF and §13.3's cut
+   loop both need the model to be a valid upper bound; it is, at exactly the point
+   sets they generate.
+3. **One fact explains both use cases' error directions.** For §13.2's
+   *maximisation* an upper bound makes the reported optimum optimistic — measured
+   0.3-0.7%. For §13.3's *constraint* `mu >= target` it is the **unsafe** direction:
+   the model can be satisfied while the truth is not, which is V6's failure mode and
+   the reason `--lp-repair` and the cut loop exist at all. The gap grades it — the
+   minimal media are loosest (1.3% median, 14% on one member), exactly where the
+   design is most aggressive.
+4. **P20's error model now has a certified half.** `mu_hat` is a certified upper
+   bound with **no LP at all**; `mu_hat - mu_LP` is a certified *and tight* error bar
+   for one LP. The missing half is a lower bound, which needs a feasible primal
+   completion of Head B (§13.6, `docs/hybrid-framing.md` §5).
+
+### M11 with Kelley cutting planes: a second route to V6, and it does not replace the repair — 2026-09-06
+
+`cfs minimal-medium --cuts N` (`science.minimal.cut_loop`). §13.2's trust-region
+machinery does not transfer, because here the surrogate is in the **constraints**
+and the objective `cost . c` is exact. What transfers is the bundle: `mu_true_i` is
+concave, so an LP tangent at `c_j` satisfies
+`mu_true_i(c) <= mu_ij + g_ij . (c - c_j)` **everywhere**, and demanding that affine
+function clear the floor is *necessary* for the true constraint. Adding cuts can
+only remove points the truth does not admit — an outer approximation of the true
+feasible set, tightening monotonically — so the program stays convex and the cost
+rises toward the true minimum instead of wandering. Each round costs one FBA per
+member and excludes the design it just checked. `mu_and_grads` gained a `cuts`
+argument and applies the per-member min; `minimise`/`_descend`/`_prune`/`_restore`
+thread it through, so the greedy prune tests feasibility against the *cut* model too.
+
+4 communities x 3 draws, on the ruler the `--lp-repair` numbers were taken on
+(base and `--lp-repair` reproduce that table exactly):
+
+| cell | n | base | `--lp-repair` | `--cuts 6` | cuts + repair |
+| --- | --- | --- | --- | --- | --- |
+| 6 | 3 | **fail** 0.4999 | pass, 247/250/252 | **pass, 247/247/247** | pass, 247/247/247 |
+| 7 | 3 | pass, 228 | pass, 228 | pass, 228 | pass, 228 |
+| 8 | 5 | pass, 298 | pass, 298 | pass, 298 | pass, 298 |
+| 9 | 10 | **fail** -0.000 | **pass, 370/372/375** | fail, 402 | pass, 370/406/404 |
+
+1. **Cell 6 is the optimality claim landing.** V6 passes on cuts alone, with **no
+   LP repair**, at 247 components on all three draws where the repair needs 250 and
+   252. Putting the LP's tangent *inside* the convex program beats bolting a
+   correction on afterwards — which is the whole difference between an optimality
+   method and a feasibility one.
+2. **Cells 7 and 8 are the correct null**: one round, no change. A design that is
+   already feasible pays only for the check (~3 FBAs per member).
+3. **Cell 9 is a loss**: 406/404 components against the repair's 372/375. Cuts
+   tighten the constraint set, and where the head was not the binding problem that
+   tightening is paid for in components and buys nothing. **Off by default.**
+
+**The transferable pitfall: a cut carries no information at a dead member.** At
+`mu_true = 0` every dual is zero, so the tangent is the constraint `0 >= target` —
+flat and satisfiable nowhere. The model goes infeasible and the penalty walks the
+design back toward rich with no direction: cell 9 went 369 -> **402** components and
+still failed V6, and `_lp_restore` could not undo it either, because its
+single-component scan cannot revive a synthetically-lethal state. `cut_loop` now
+skips any member with `mu_true <= 0` or a zero gradient and stops when every
+violated member is dead, handing the case to the repair — which is what takes cell 9
+from fail to pass. **Anyone applying cutting planes to a constraint whose function
+can reach zero needs this guard.**
+
+**So M11's position is unchanged in pass/fail** (V6 4/4 with `--lp-repair`, as
+before) and improved in *what it costs where the members stay alive*. The two
+methods cover different failures: cuts for a feasible-but-marginal design, repair
+for one that kills a member.
+
+### The exact Hessian is free, diagonal, and not the LP's — 2026-09-06
+
+`solve.mu_curvature`. `mu_max` is piecewise **linear** in `u`, so `d2mu/du2 = 0`
+inside every critical region and the whole second derivative is the chain rule's
+remaining term:
+
+`d2mu/dc_m dc_n = delta_mn (dmu/du_m)(d2u_m/dc_m^2)`, i.e.
+**`H_mm = -2 (dmu/dc_m)/(Km_m + c_m)`** — diagonal, negative, and free wherever the
+gradient is. Verified against central differences of the true LP on **12/12**
+(organism, medium, limiting metabolite) cases across 2 organisms: agreement to
+**6 significant figures**, unchanged over a 10x range of step size.
+
+1. **Nothing needs to *estimate* a second derivative.** Where it exists it is
+   exact; where it does not (the kinks) it is a Dirac measure, not a function.
+2. **`master_jacobian`'s "rank 10-25 of 365" now has a mechanism.** The head's
+   Hessian is entirely smoothing artefact (curvature ~ 1/T) plus this diagonal MM
+   term. It is a **mollification of the kinks**, not an approximation of a
+   curvature that is there — consistent with the already-measured result that `T`
+   buys no conditioning in `J`.
+3. A **second-order** consistent trust-region method (Hameed et al., AIChE 2026) is
+   therefore possible here, which it usually is not. Not needed for convergence.
+
+### M10: bundle-corrected trust-region model management beats the single ascent on every axis — 2026-09-06
+
+`cfs maximise-growth --trf N [--trf-mode bundle|shift]` (`science.growth.trf`,
+`lp_value_and_grad`). Alexandrov/Dennis/Lewis/Torczon first-order consistency in
+Eason & Biegler's glass-box/black-box form: correct the head to the LP at the
+trust-region centre, solve the same convex subproblem, ratio-test the step, adapt
+the radius. Cheap and clean here because **the LP is a first-order oracle** (the
+dual *is* the gradient, so one FBA gives both halves of the consistency condition).
+Default `--trf 0` = the single-ascent behaviour every earlier number was measured
+with; `maximise` gained `grad_shift`/`c_ref`/`cuts`/`head_lift` and is otherwise
+unchanged.
+
+20 V5 cases, paired against the baseline:
+
+| | median true gain | max | better/eq/worse | max optimism | LPs |
+| --- | --- | --- | --- | --- | --- |
+| single ascent | +2.34% | 22.79x | — | 0.0730 | 0 |
+| `--trf-mode shift` | +2.12% | 6.79x | 7/10/3 | 0.00712 | 219 |
+| **`--trf-mode bundle`** | **+2.35%** | **23.15x** | **7/11/2** | **0.00686** | **70** |
+
+**The bundle dominates: same-or-better true gain on 18/20, better median and better
+max, a 10.6x tighter optimism bound, at a median of 3 LP solves per case.** V5
+passes. The two arms differ only in the model:
+
+* `shift` adds the affine term `(gt - g_h).(c - c_k)`;
+* `bundle` takes `min(head + lift, min_j [mu_j + g_j.(c - c_j)])` over the LP
+  tangents collected so far — **including from rejected steps**, which is the whole
+  point. Each tangent is a supporting hyperplane of a concave function, so the min
+  is concave, exact at every visited point, and the subproblem stays §13.0's convex
+  program.
+
+**Why `shift` fails, which is the more useful result.**
+
+1. **The LP's gradient at a kink is a subgradient *selection*.** With the model
+   matched to the LP in value *and* gradient at the centre, `rho -> 1` as the step
+   shrinks — unless the function is not differentiable there. Instrumented: the
+   radius shrank 16x, `predicted` tracked it exactly, `actual` stayed **pinned at
+   0.0046**. TRF correctly refuses and halts *at the kink* (`mu_true` 9.29 against
+   the ascent's 22.0). The smoothed head walks through because smoothing averages
+   both sides — **the same fact as `solve.mu_curvature`, as an optimiser failure:
+   what the surrogate offers over the exact oracle is not accuracy, it is a usable
+   direction at a corner.** The bundle is the textbook remedy and it works: that
+   case goes 6.79 -> **23.15**, and `CP027002.1` 0.0064 -> **0.0334**.
+2. **An additive correction is the wrong form at eight decades of gradient range.**
+   `dmu/dc` reaches 1e8 on the ions, so `shift` oscillates between norm ~1 and ~5e6
+   and swamps the concave head: `predicted` reaches **129** against an actual 1.2.
+   The bundle has no such term, which is why rejects fall from 6-18 per case to 0-1
+   and it needs 3x fewer LPs.
+
+**What still limits the bundle — the inner solver, not the model.** The two residual
+losses (`GCA_000164675.2` 0.0171 -> 0.0143) were blamed here on the head reading
+below the truth at a designed medium. **Refuted the same day** by
+`20hm_bands/bound_gap.py`: the head is a valid upper bound at all 20 bundle optima
+*and* all 20 baseline optima, both loss cases included (gap +2.2e-05, +1.9e-07). A
+cut is a valid upper bound too, so `min(head, cuts)` is one everywhere and its
+maximum over the region is at least the true maximum — the better point was **inside
+the model's feasible set**. So the subproblem solver did not find its own model's
+maximum: `maximise` is projected subgradient ascent with a backtracking line search,
+and with cuts the objective is a nonsmooth `min` that stalls at its own kinks. **The
+bundle fixes the outer kink and introduces an inner one** — which is exactly why
+bundle methods solve their subproblem as an LP/QP over the epigraph rather than by
+subgradient steps. A softmin over the cuts, what Head A already does internally, is
+the cheap fix in this codebase's idiom. Not built.
+
+**One transferable trap.** The textbook expansion rule grows the radius only when
+the step reaches the trust-region *face*. Here the binding constraint is usually the
+**budget**, so steps are interior, expansion never fires, and the radius ratchets
+down until the loop stops on `min_decades` with gains remaining — 9 of 20 cases
+ended at exactly six halvings, one losing 0.095 -> 0.069 of true gain. Expansion is
+now on the ratio test alone, capped at `max_decades` (the cap, not the face test, is
+what stops `10**decades` overflowing).
+
+**So §13.2's verdict changes.** P21 becomes the mechanism rather than a pitfall (a
+step that zeroes an essential has `mu_true = 0`, so `rho < 0`, so it is rejected and
+the radius shrinks), every reported optimum is LP-verified at *every* step rather
+than once at the end, and the M3 gate no longer constrains this use case: the model
+is exact at the centre by construction and the bundle keeps it honest away from it.
+
+### The QP is differentiable, and its derivative is Head A's — 2026-09-06
+
+Chapman et al. (Bioinformatics 2025, `DifferentiableMetabolism.jl`) implicitly
+differentiate a *pruned* GEM's KKT system for exact `d(flux)/d(param)`. Their
+pruning theorem exists to manufacture a unique optimum; **D4's elastic net already
+gives us one**, so the same derivative is available here without it. That reopened
+the one Head B arm never tried — **Sobolev training** — since reading-map Part 3d
+had ruled it out on "the argmin has no dual to supervise it", which is true of a
+plain LP and false of the elastic-net QP.
+
+**Built** (`solve.flux_sensitivity` / `solve.exchange_jacobian`,
+`tests/test_cfs_flux_sensitivity.py`). At the optimum each reaction is *at a bound*
+(`dv = dbound`), *at zero by the L1 term* (`dv = 0`, correct lasso behaviour), or
+*free*, where `eps*dv_F = S_F' dy`; with `S dv = 0` that is
+`dv_F = argmin ||d|| s.t. S_F d = -S_B dbound_B`, the minimum-norm restoration of
+mass balance — and **`eps` cancels**. Both concentration routes are in: the
+metabolite's own uptake bound, and the fixed biomass flux `alpha * mu_max` through
+the FBA dual (`data`'s sign convention and clamp).
+
+**Validated** against central FD that re-solves the QP, 3 organisms x 25 held-out
+media (`20hm_bands/dz_check.py`). Columns gated on the FD's *own* step-independence
+— a derivative is unchanged when the step triples, noise/step falls to a third —
+which is non-circular and rejects half of them:
+
+| organism | resolvable | median cosine | median magnitude ratio |
+| --- | --- | --- | --- |
+| AAXE02 | 6/6 | **0.999991** | 0.9998 |
+| CR626927.1 | 6/7 | **1.000000** | 0.9999 |
+| GCA_000007325.1 | 6/12 | **1.000000** | 1.0000 |
+
+**And then it is null.** Two measurements, and both are structural:
+
+1. **`dz/dc` is zero in nearly every direction** — nonzero only where an uptake
+   bound binds or the LP dual is nonzero: **1-3 live columns of 167-181**, median
+   2. Perturbing a slack bound cannot move the optimum. An independent
+   confirmation of `kres.py`'s `k = 1`, from the QP rather than from Head A.
+2. **In the live columns, 96-99% of it is a proportional rescale.** Split into
+   `(z/mu) * dmu/dc` — the flux vector scaling with growth rate, which Head A
+   supplies exactly — plus a residual, the residual share is median **0.037 /
+   0.011 / 0.024**. Head B's *composed* Jacobian therefore already matches the
+   labels at Frobenius cosine median **0.973 / 0.955 / 0.973**, magnitude ratio
+   0.95-1.00: it scores well because Head A carries it.
+
+So the argmin is differentiable and the derivative is not new supervision. Same
+fact as §8.6e's reparametrisation ("one constant per metabolite times `mu_max`
+explains a median 0.807 of the held-out `z` variance"), measured locally and far
+more sharply. It also re-derives §8.6g's conclusion without a composition run:
+Head B's residual is not a local-derivative deficit, it is the **level** of `z/mu`
+off-distribution.
+
+**`d(z/mu)/dc` is not computable at these media** — a ~9-digit cancellation between
+two terms of order 1e8 whose difference is order 1. An early version of this check
+scored the head against exactly that quantity and reported cosine ~0, which was the
+cancellation, not the head. Anything supervising Head B's derivative must use raw
+`dz/dc`, where Head A dominates, or nothing.
+
+**Open:** measured at *design* media only. The residual share at community-regime
+states is unmeasured and is the one thing that would reopen this. Two of 18
+gate-passing FD columns disagree (`EX_zn2_e`, `EX_bz_e`, both at `c ~ 1e-6`, the
+analytic 1e4-1e6 larger than FD) — unexplained.
+
+**Framing consequence, and the ranked plan that follows from it:
+`docs/hybrid-framing.md`.** The short version: do not frame this project as a
+Jacobian estimator — Chapman et al. compute those exactly, and at **7.48 s
+(yeastGEM) / 6.24 s (iML1515)** per full Jacobian against this repo's 1.70 s for a
+whole 21-member community, they are a *sensitivity-analysis* tool and this is a
+many-query one. Frame it as a **smooth, globally concave relaxation** of a
+piecewise-linear LP value function. The live imports are trust-region model
+management (Alexandrov; Eason & Biegler) for §13.2/§13.3, which would retire the
+unmet M3 gate for those use cases, and inexact-Newton forcing terms + JFNK for
+§13.4.
+
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
 After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3

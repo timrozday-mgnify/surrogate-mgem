@@ -107,7 +107,9 @@ def trust_box(sur, c0: np.ndarray, k: int, decades: float) -> tuple[np.ndarray, 
     medium, if adding one is the question.
     """
     x0 = np.asarray(sur._x(c0)[k, 0], dtype=np.float64)
-    f = 10.0**decades
+    # `x` lives in (0, 1), so past a few decades the upper face is saturated at 1
+    # and only the lower one moves; 300 is well past that and keeps 10**d finite.
+    f = 10.0 ** min(float(decades), 300.0)
     lo, hi = x0 / f, np.clip(x0 * f, 0.0, 1.0 - 1e-9)
     return _c_of_x(sur, k, lo), _c_of_x(sur, k, hi)
 
@@ -129,20 +131,54 @@ def maximise(
     c_hi: np.ndarray,
     iters: int = 300,
     tol: float = 1e-9,
+    grad_shift: np.ndarray | None = None,
+    c_ref: np.ndarray | None = None,
+    cuts: list[tuple[float, np.ndarray, np.ndarray]] | None = None,
+    head_lift: float = 0.0,
 ) -> tuple[np.ndarray, list[float]]:
     """Projected gradient ascent with a backtracking step. Returns ``(c*, mu path)``.
 
     The step is adapted rather than fixed because ``d mu/dc`` spans five decades
     within one organism (§7): a step that moves the ions at all overshoots every
     carbon source by orders of magnitude.
+
+    ``grad_shift`` adds the affine term ``s . (c - c_ref)`` to the objective, which
+    is how :func:`trf` makes the model *first-order consistent* with the true LP at
+    the trust-region centre. An affine term cannot break concavity, so the
+    subproblem is still a convex program with a unique optimum.
+
+    ``cuts`` is the bundle form of the same idea and the better one:
+    ``(mu_j, g_j, c_j)`` triples from true LP solves, entering as
+    ``min_j [mu_j + g_j . (c - c_j)]`` alongside the head. Each is a supporting
+    hyperplane of a concave function, hence an upper bound on ``mu_true``
+    everywhere and tight at ``c_j``, so the min is concave, is exact at every
+    visited point, and — unlike a single tangent — does not overstate the
+    achievable gain when the centre sits on a kink. ``head_lift`` is a constant
+    added to the head so the newest cut binds at the centre even if the head
+    happens to read below the LP there; a constant moves no argmax and breaks no
+    concavity.
     """
+    shift = None if grad_shift is None else np.asarray(grad_shift, dtype=np.float64)
+    ref = c0 if c_ref is None else np.asarray(c_ref, dtype=np.float64)
+
+    def value_and_grad(y):
+        v, gr = mu_and_grad(sur, y, k)
+        if shift is not None:
+            v, gr = v + float(shift @ (y - ref)), gr + shift
+        v += head_lift
+        for mu_j, g_j, c_j in cuts or ():
+            vj = mu_j + float(g_j @ (y - c_j))
+            if vj <= v:  # ties go to the cut: that is what pins consistency
+                v, gr = vj, g_j
+        return v, gr
+
     c = project(c0.astype(np.float64), cost, budget, c_lo, c_hi)
-    mu, g = mu_and_grad(sur, c, k)
+    mu, g = value_and_grad(c)
     path = [mu]
     step = 0.1 * float(np.linalg.norm(c_hi)) / max(float(np.linalg.norm(g)), 1e-30)
     for _ in range(iters):
         cand = project(c + step * g, cost, budget, c_lo, c_hi)
-        mu_c, g_c = mu_and_grad(sur, cand, k)
+        mu_c, g_c = value_and_grad(cand)
         if mu_c > mu:
             c, mu, g = cand, mu_c, g_c
             step *= 1.5
@@ -171,6 +207,194 @@ def mu_true(model, exchanges: list[str], c: np.ndarray) -> float:
     return 0.0 if v is None or not np.isfinite(v) else float(v)
 
 
+def lp_value_and_grad(model, exchanges: list[str], c: np.ndarray, km_cfg=None):
+    """``(mu_max, d mu_max/dc)`` from **one** FBA — the LP is a first-order oracle.
+
+    The optimal dual *is* the gradient, so the expensive model costs the same
+    whether you want its value, its gradient, or both. Same sign convention and
+    same clamp as :func:`cfs.surrogate.data._organism_arrays`: the stored dual is
+    ``d mu/d(supply)`` negated, and it is the bound's sensitivity only where the
+    bound binds -- elsewhere it is the metabolite's value in the network, which for
+    a waste product is positive and would claim that more nutrient lowers growth.
+    """
+    from cfs.groundtruth.solve import apply_mm_bounds, km_for_exchange, load_km_defaults
+
+    km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
+    conc = dict(zip(exchanges, c.tolist(), strict=True))
+    with model:
+        apply_mm_bounds(model, conc, km_cfg)
+        sol = model.optimize()
+        if sol.status != "optimal":
+            return 0.0, np.zeros_like(c)
+        mu = float(sol.objective_value or 0.0)
+        pi = {
+            ex.id: float(sol.shadow_prices[next(iter(ex.metabolites)).id])
+            for ex in model.exchanges
+        }
+    g = np.zeros_like(c)
+    for j, ex in enumerate(exchanges):
+        cv = float(c[j])
+        p = pi.get(ex, 0.0)
+        if cv > 0.0 and p < -1e-9:
+            km = km_for_exchange(ex, km_cfg)
+            g[j] = -p * 1000.0 * km / (km + cv) ** 2
+    return mu, g
+
+
+def trf(
+    sur,
+    model,
+    exchanges: list[str],
+    c0: np.ndarray,
+    k: int,
+    *,
+    cost: np.ndarray,
+    budget: float,
+    decades: float,
+    iters: int = 300,
+    max_it: int = 12,
+    eta1: float = 0.1,
+    eta2: float = 0.7,
+    gamma_dec: float = 0.5,
+    gamma_inc: float = 2.0,
+    min_decades: float = 1e-2,
+    max_decades: float = 8.0,
+    mode: str = "bundle",
+    km_cfg=None,
+) -> tuple[np.ndarray, dict]:
+    """Trust-region model management: converge to the **true** LP's optimum.
+
+    Alexandrov, Dennis, Lewis & Torczon's first-order-consistency framework, in the
+    glass-box/black-box form of Eason & Biegler (AIChE J 2016/2018). The surrogate
+    is never trusted globally; at each iteration it is corrected to match the LP's
+    value *and* gradient at the trust-region centre, and a ratio test decides
+    whether the step is kept and whether the radius grows or shrinks. That is what
+    buys convergence to a first-order critical point of the model we actually care
+    about, and it is why this needs no accuracy gate on the head: M3's worst-case
+    gradient cosine constrains a *globally* trusted surrogate, and the corrected
+    model is exact at the centre by construction.
+
+    Two properties of this problem make the correction unusually cheap and clean:
+
+    * **the LP is a first-order oracle** -- the dual is the gradient, so one FBA per
+      iteration supplies both halves of the consistency condition;
+    * the correction is **affine**, so ``mu_hat + s.(c - c_k)`` is still concave in
+      ``c`` and the subproblem is still the convex program of §13.0.
+
+    It also turns P21 from a pitfall into the mechanism. A step that zeroes an
+    essential metabolite has ``mu_true = 0``, hence ``rho < 0``, hence rejection and
+    a smaller radius -- the designer is *supposed* to walk to where the surrogate is
+    optimistic, and the ratio test is what makes that safe. The hand-tuned
+    ``--trust-decades`` becomes a starting radius rather than a result.
+
+    **Measured 2026-09-06, 20 V5 cases, paired against the single ascent:**
+
+    | mode | median gain | max | better/eq/worse | max optimism | LPs |
+    | --- | --- | --- | --- | --- | --- |
+    | single ascent | +2.34% | 22.79x | -- | 0.0730 | 0 |
+    | ``shift`` | +2.12% | 6.79x | 7/10/3 | 0.00712 | 219 |
+    | **``bundle``** | **+2.35%** | **23.15x** | **7/11/2** | **0.00686** | **70** |
+
+    ``bundle`` is the default and it dominates on both axes at once; ``shift`` is
+    kept because *why* it fails is the more useful result:
+
+    * **the LP's gradient at a kink is a subgradient *selection*.** ``mu_max`` is
+      piecewise linear in ``u``, so the dual is one element of the subdifferential.
+      Instrumented on the worst case under ``shift``: the radius shrinks 16x,
+      ``predicted`` tracks it exactly, and ``actual`` stays **pinned at 0.0046** --
+      ``rho`` never approaches 1, which cannot happen where the function is
+      differentiable. TRF correctly refuses and halts *at the kink* (true ``mu``
+      9.29 against the ascent's 22.0). The smoothed head walks through because the
+      smoothing averages both sides: this is the mollification argument of
+      :func:`cfs.groundtruth.solve.mu_curvature`, restated as an optimiser failure.
+      **The bundle is the textbook remedy and it works here** -- the same case goes
+      6.79 -> 23.15, and ``CP027002.1`` 0.0064 -> 0.0334;
+    * **the additive correction is also the wrong form when the gradient spans
+      eight decades.** ``d mu/dc`` reaches 1e8 on the ions, so ``shift = gt - g_h``
+      oscillates between norm ~1 and ~5e6, and where it is large the linear term
+      swamps the concave head: ``predicted`` reaches 129 against an actual 1.2. The
+      bundle has no such term, which is why its rejects fall from 6-18 per case to
+      0-1 and it needs 3x fewer LP solves.
+
+    **What still limits ``bundle``: the *inner* solver, not the model.** The two
+    remaining losses (``GCA_000164675.2`` 0.0171 -> 0.0143) were first blamed on the
+    head reading below the truth at a designed medium; ``20hm_bands/bound_gap.py``
+    **refutes that** -- the head is a valid upper bound at all 20 bundle optima and
+    all 20 baseline optima, including both loss cases (gap +2.2e-05 and +1.9e-07).
+    Since a cut is a valid upper bound too, ``min(head, cuts)`` is one everywhere,
+    so the model's maximum over the region is at least the true maximum and the
+    better point was inside the model's feasible set with a model value above what
+    was returned. **The subproblem solver did not find its own model's maximum**:
+    :func:`maximise` is projected subgradient ascent with a backtracking line
+    search, and with cuts the objective is a nonsmooth ``min`` that stalls at its
+    own kinks. The bundle fixes the *outer* kink and introduces an *inner* one,
+    which is exactly why bundle methods solve their subproblem as an LP/QP over the
+    epigraph rather than by subgradient steps. A softmin over the cuts -- what Head
+    A already does internally -- is the cheap fix in this codebase's idiom. Not
+    built.
+
+    Expansion is on the ratio test alone, capped at ``max_decades``. The textbook
+    rule also requires the step to reach the trust-region *face*, and that is wrong
+    here: the binding constraint is usually the **budget**, so steps are interior,
+    expansion never fires, and the radius ratchets down until the loop stops on
+    ``min_decades`` while gains remain (measured: 9 of 20 cases ended at exactly six
+    halvings, one losing 0.095 -> 0.069 of true gain).
+    """
+    c = project(c0.astype(np.float64), cost, budget, *trust_box(sur, c0, k, decades))
+    f, gt = lp_value_and_grad(model, exchanges, c, km_cfg)
+    bundle = [(f, gt, c.copy())]
+    radius, n_lp, hist, rejects = decades, 1, [f], 0
+    for _ in range(max_it):
+        if radius < min_decades:
+            break
+        mu_h, g_h = mu_and_grad(sur, c, k)
+        if mode == "bundle":
+            # Lift the head so the centre's own cut binds there; below it, the
+            # model would be consistent with neither the head nor the LP.
+            kw = {"cuts": bundle, "head_lift": max(f - mu_h, 0.0)}
+        else:
+            kw = {"grad_shift": gt - g_h, "c_ref": c}
+
+        def model_value(y, _kw=kw):
+            v, _ = mu_and_grad(sur, y, k)
+            if "grad_shift" in _kw:
+                return v + float(_kw["grad_shift"] @ (y - _kw["c_ref"]))
+            v += _kw["head_lift"]
+            return min([v] + [mj + float(gj @ (y - cj)) for mj, gj, cj in _kw["cuts"]])
+
+        lo, hi = trust_box(sur, c, k, radius)
+        cand, _ = maximise(
+            sur, c, k, cost=cost, budget=budget, c_lo=lo, c_hi=hi, iters=iters, **kw
+        )
+        predicted = model_value(cand) - model_value(c)
+        if predicted <= 1e-12 * max(abs(f), 1e-12):
+            break
+        f_new, gt_new = lp_value_and_grad(model, exchanges, cand, km_cfg)
+        n_lp += 1
+        # A rejected step is still a true tangent, and keeping it is the whole
+        # point of a bundle: it is what stops the next model overstating in the
+        # direction that just failed.
+        bundle.append((f_new, gt_new, cand.copy()))
+        rho = (f_new - f) / predicted
+        if rho >= eta1:
+            c, f, gt = cand, f_new, gt_new
+            hist.append(f)
+            # Expand on the ratio test alone, capped. Gating expansion on the step
+            # reaching the trust-region *face* is the textbook rule and it is wrong
+            # here: the binding constraint is usually the **budget**, so the step is
+            # interior, expansion never fires, and the radius can only ratchet down
+            # until the loop stops on `min_decades` while still improving. Measured:
+            # 9 of 20 cases ended at exactly 6 halvings, and one lost 0.095 -> 0.069
+            # of true gain against the ungated run.
+            if rho >= eta2:
+                radius = min(radius * gamma_inc, max_decades)
+        else:
+            rejects += 1
+            radius *= gamma_dec
+    return c, {"n_lp": n_lp, "trf_iters": len(hist) - 1, "trf_rejects": rejects,
+               "trf_radius": radius, "trf_cuts": len(bundle), "trf_path": hist}
+
+
 def run(
     roster_path: Path,
     labels_dir: Path,
@@ -184,6 +408,8 @@ def run(
     iters: int = 300,
     seed: int = 0,
     scales: Path | None = None,
+    trf_iters: int = 0,
+    trf_mode: str = "bundle",
 ) -> dict:
     """One case per (organism, medium draw): optimise, then V5 the answer."""
     import cobra
@@ -203,10 +429,18 @@ def run(
         cost = np.ones_like(c0)
         budget = budget_mult * float(cost @ c0)
 
-        c_star, path = maximise(
-            sur, c0, k, cost=cost, budget=budget, c_lo=c_lo, c_hi=c_hi, iters=iters
-        )
         model = cobra.io.read_sbml_model(str(roster[gid].model_path))
+        if trf_iters:
+            c_star, extra = trf(
+                sur, model, sur.exchanges, c0, k, cost=cost, budget=budget,
+                decades=trust_decades, iters=iters, max_it=trf_iters, mode=trf_mode,
+            )
+            path = extra.pop("trf_path")
+        else:
+            c_star, path = maximise(
+                sur, c0, k, cost=cost, budget=budget, c_lo=c_lo, c_hi=c_hi, iters=iters
+            )
+            extra = {"n_lp": 0}
         t0, t1 = mu_true(model, sur.exchanges, c0), mu_true(model, sur.exchanges, c_star)
         rows.append(
             {
@@ -224,6 +458,7 @@ def run(
                 "spend": float(cost @ c_star) / max(budget, 1e-30),
                 "n_changed": int((np.abs(c_star - c0) > 1e-9 * np.maximum(c0, 1.0)).sum()),
                 "n_zeroed": int(((c0 > 0) & (c_star <= 0)).sum()),
+                **extra,
             }
         )
         media.append((c0, c_star))

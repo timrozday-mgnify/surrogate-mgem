@@ -3661,6 +3661,96 @@ testable wet-lab claim.
 **Always round-trip the answer through the true LP (V5/P4).** An optimiser's whole
 job is to find where the surrogate is most optimistic.
 
+#### 13.2b Trust-region model management makes the answer the *LP's* — built 2026-09-06
+
+`cfs maximise-growth --trf N [--trf-mode bundle|shift]` (`growth.trf`,
+`growth.lp_value_and_grad`). The framing pass (`docs/hybrid-framing.md`) identified
+this as the highest-value import: Alexandrov, Dennis, Lewis & Torczon's
+first-order-consistency framework in Eason & Biegler's glass-box/black-box form
+(AIChE J 2016/2018). Correct the head to the LP's value **and** gradient at the
+trust-region centre, solve the same convex subproblem, ratio-test the step, adapt
+the radius — and the loop converges to a first-order critical point of the **true**
+problem, with no global accuracy requirement on the head.
+
+Two properties make it unusually cheap here: **the LP is a first-order oracle** (the
+dual *is* the gradient, so one FBA supplies both halves of the consistency
+condition), and the correction keeps the model concave, so the subproblem is still
+§13.0's convex program.
+
+20 V5 cases, paired against the single ascent:
+
+| | median true gain | max | better/eq/worse | max optimism | LPs |
+| --- | --- | --- | --- | --- | --- |
+| single ascent | +2.34% | 22.79x | — | 0.0730 | 0 |
+| `--trf-mode shift` (additive correction) | +2.12% | 6.79x | 7/10/3 | 0.00712 | 219 |
+| **`--trf-mode bundle`** (`min(head, LP tangents)`) | **+2.35%** | **23.15x** | **7/11/2** | **0.00686** | **70** |
+
+**The bundle dominates the baseline on both axes at once** and is the default.
+Default `--trf 0` is the single-ascent behaviour every earlier §13.2 number was
+measured with.
+
+**Why the textbook additive correction fails, which is the more useful result.**
+`mu_max` is piecewise linear in `u`, so **the LP's gradient at a kink is a
+subgradient *selection***. With the model matched to the LP in value and gradient at
+the centre, `rho -> 1` as the step shrinks — unless the function has a corner there.
+Instrumented under `shift`: the radius shrank 16x, `predicted` tracked it exactly,
+`actual` stayed **pinned at 0.0046**. TRF correctly refuses and halts *at the kink*
+(`mu_true` 9.29 against the ascent's 22.0). The smoothed head walks through because
+smoothing averages both sides — **the mollification argument of §13.2c as an
+optimiser failure, and the sharpest statement of what the surrogate buys over an
+exact oracle: not accuracy, a usable direction at a corner.** The bundle is the
+textbook remedy and it recovers exactly those cases (6.79 -> 23.15; 0.0064 ->
+0.0334). Separately, an additive correction is the wrong *form* when `d mu/dc` spans
+eight decades: `shift` oscillates between norm ~1 and ~5e6 and swamps the concave
+head (`predicted` 129 against an actual 1.2).
+
+**Residual, and it is the inner solver.** Two cases still lose to the plain ascent.
+This was first blamed on the head reading below the truth at a designed medium and
+**that is refuted** (§13.2c): the head is a valid upper bound at all 20 bundle optima
+*and* all 20 baseline optima. A cut is a valid upper bound too, so `min(head, cuts)`
+is one everywhere, its maximum over the region is at least the true maximum, and the
+better point was **inside the model's feasible set**. So `maximise` — projected
+subgradient ascent with a backtracking line search — did not find its own model's
+maximum, stalling on the nonsmooth `min`'s kinks. **The bundle fixes the outer kink
+and introduces an inner one**, which is why bundle methods solve their subproblem as
+an LP/QP over the epigraph. A softmin over the cuts is the cheap fix in this
+codebase's idiom. Not built.
+
+**Trap worth carrying out of this project.** The textbook expansion rule grows the
+radius only when the step reaches the trust-region *face*. Here the binding
+constraint is usually the **budget**, so steps are interior, expansion never fires,
+and the radius ratchets down until the loop halts with gains remaining — 9 of 20
+cases ended at exactly six halvings, one losing 0.095 -> 0.069 of true gain. Expand
+on the ratio test alone and cap the radius.
+
+#### 13.2c The head is a valid upper bound off-distribution — measured 2026-09-06
+
+`20hm_bands/bound_gap.py`. `--gm-repair` restores the max-affine validity invariant
+**on the training rows**; nothing had checked it elsewhere, and §13.2b and §13.3b
+both depend on it. 182 (point, organism) pairs against the true LP:
+
+| point set | n | valid (`mu_hat >= mu_true`) | median gap | median rel | worst rel |
+| --- | --- | --- | --- | --- | --- |
+| held-out design media | 72 | 0.986 | 0.00226 | 4.2e-04 | **-8.3e-03** |
+| §4.3 community-regime draws | 26 | **1.000** | 2.3e-04 | 4.2e-06 | 1.6e-06 |
+| §13.2 designed optima | 20 | **1.000** | 3.7e-04 | 7.8e-06 | 1.3e-08 |
+| §13.3 minimal media | 63 | **1.000** | 0.464 | 1.3e-02 | 1.7e-05 |
+
+1. **109 of 109 off-distribution points are valid**, and the only violation in the
+   set is on *held-out design* media. **The bound is safer away from the design, not
+   less safe** — a max-affine head is loosest where no tangent is nearby.
+2. **It turns both design programs' premise into a measurement.**
+3. **One fact explains both error directions.** For §13.2's *maximisation* an upper
+   bound makes the optimum optimistic (0.3-0.7%). For §13.3's *constraint*
+   `mu >= target` it is the **unsafe** direction — the model is satisfied while the
+   truth is not, which is V6's failure mode and the reason `--lp-repair` and the cut
+   loop exist. The gap grades it: minimal media are loosest (1.3% median, 14% on one
+   member), exactly where the design is most aggressive.
+4. **P20's error model has a certified half.** `mu_hat` is a certified upper bound
+   with **no LP at all**, and `mu_hat - mu_LP` is certified and tight for one LP. The
+   missing half is a lower bound, which needs a feasible primal completion of Head B
+   (`docs/hybrid-framing.md` §5).
+
 ### 13.3 Minimal medium — convex, and this is §9
 
 §9's program with the structure made explicit: `mu_community(c) >= mu_target` with
@@ -3741,6 +3831,47 @@ about alternative-route sets. The principled version is to pin synthetic-lethal
 ~1000 solves here, affordable for a design and worth measuring against the repair.
 And `--lp-repair` needs models, so it is unavailable in the surrogate-only setting
 the rest of §13.3 is designed for.
+
+#### 13.3b Kelley cutting planes on the growth constraints — built 2026-09-06
+
+`cfs minimal-medium --cuts N` (`minimal.cut_loop`). §13.2b's trust region does **not**
+transfer: here the surrogate is in the *constraints* and the objective `cost . c` is
+exact. What transfers is the bundle. `mu_true_i` is concave, so an LP tangent at
+`c_j` satisfies `mu_true_i(c) <= mu_ij + g_ij . (c - c_j)` everywhere, and demanding
+that affine function clear the growth floor is **necessary** for the true
+constraint — an outer approximation of the true feasible set, tightening
+monotonically, with the program still convex. Each round costs one FBA per member
+and excludes the design it just checked. `mu_and_grads` takes a `cuts` argument and
+applies the per-member min; `minimise`/`_descend`/`_prune`/`_restore` thread it
+through, so the greedy cardinality prune tests feasibility against the cut model too.
+
+4 communities x 3 draws, on the ruler the `--lp-repair` numbers were taken on (base
+and `--lp-repair` reproduce that table exactly):
+
+| cell | n | base | `--lp-repair` | `--cuts 6` | cuts + repair |
+| --- | --- | --- | --- | --- | --- |
+| 6 | 3 | **fail** 0.4999 | pass, 247/250/252 | **pass, 247/247/247** | pass, 247/247/247 |
+| 7 | 3 | pass, 228 | pass, 228 | pass, 228 | pass, 228 |
+| 8 | 5 | pass, 298 | pass, 298 | pass, 298 | pass, 298 |
+| 9 | 10 | **fail** -0.000 | **pass, 370/372/375** | fail, 402 | pass, 370/406/404 |
+
+**A second route to V6, not a replacement.** Cell 6 is the optimality claim landing:
+V6 passes on cuts alone, with **no LP repair**, at 247 components on all three draws
+where the repair needs 250 and 252 — putting the LP's tangent *inside* the convex
+program beats bolting a correction on afterwards. Cells 7 and 8 are the correct
+null. Cell 9 is a loss (406/404 against 372/375): where the head was not the binding
+problem, tightening the constraints is paid for in components and buys nothing.
+**Off by default.** Use cuts for a feasible-but-marginal design and `--lp-repair`
+where a member can die.
+
+**The transferable pitfall (P27).** A cut carries no information at a **dead**
+member: at `mu_true = 0` every dual is zero, so the tangent is `0 >= target` — flat
+and satisfiable nowhere. The model goes infeasible and the penalty walks the design
+back toward rich: cell 9 went 369 -> **402** components and still failed V6, and
+`_lp_restore` could not undo it either, its single-component scan being unable to
+revive a synthetically-lethal state. `cut_loop` now skips any member with
+`mu_true <= 0` or a zero gradient and stops when every violated member is dead,
+handing the case to the repair — which takes cell 9 from fail to pass.
 
 ### 13.4 Chemostat steady state, coexistence and stability — needs M6
 
@@ -4784,6 +4915,8 @@ must budget a matched control.
 | P23 | Optimising a batch-culture endpoint | The answer flips under changes that improve the right-hand side on every measure — the endpoint turns on which metabolite empties first | Optimise rates, or a chemostat steady state. Never a batch endpoint |
 | P24 | A relabel that improves every held-out metric and breaks composition | Worst grad cosine, value R², per-metabolite coverage and M11 all improve; §8.1 regresses 17x at n=21 | Held-out media come from the *same design that changed*, so they cannot see it. Score every design change on a **community-regime held-out set** (§8.5). The stratum-budget reading of P24 was measured and is wrong — see §4.3 |
 | P26 | Reading a fine-tune or a label round against its starting checkpoint | Every metric improves and the change looks earned; the same numbers appear with the new term at weight zero or the new rows absent | Two ablations, both measured to matter here: run the new loss term at **weight 0** (the trajectory term's entire gain was the label term's), and score a label round against a **matched retrain** (a fresh fit alone moves the 8-doubling mean 68% and the max 3.3x) |
+| P27 | A cutting plane taken where the constrained function is zero | The design walks *back toward rich* and still fails; the model is infeasible | A tangent at `mu_true = 0` has zero gradient, so the cut is `0 >= target` — satisfiable nowhere. Skip dead members and hand them to the LP repair (§13.3b) |
+| P28 | Subgradient ascent on your own piecewise model | The outer loop is correct and still returns a worse answer than a smoother model; the better point is *inside* the model's feasible set | Adding cuts makes the subproblem nonsmooth. Solve it as an LP/QP over the epigraph, or smooth the min — do not reuse the smooth-objective line search (§13.2b) |
 | P25 | Tuning a training distribution against a proxy metric | The proxy moves exactly as designed, three times, and the downstream number does not follow | Co-limitation count, near-onset count, NN-distance in `x` and per-metabolite limiting rows are all refuted as predictors of §8.1 (§8.5). Do not spend a 5 h relabel on a metric that has not first been shown to correlate with the composition on runs already on disk |
 
 ### 13.9 Milestones
@@ -4791,8 +4924,8 @@ must budget a matched control.
 | M | Deliverable | Gate |
 |---|---|---|
 | M9 | `cfs simulate`, batch + chemostat | **done 2026-08-30**; agrees with `cfs community`'s surrogate path on `D = 0` |
-| M10 | §13.2 growth maximisation, convex solver | Optimum survives V5 round-trip on 20 cases — **built 2026-08-30; 19/20 at the default trust region, 20/20 at 0.25 and at 1.0 decades.** Median true gain +2.2%, median optimism 0.3%. The one failure is a `mu = 2.0` start medium, the head's known weak band; it is not monotone in the trust radius. **Under an additive trust region 3/20 collapse to `mu_true = 0`, and under none at all 2 of the first 4** — P21, and the mechanism is zeroing an essential trace metabolite |
-| M11 | §13.3 static minimal medium | **built 2026-08-30; the essentiality blocker is closed 2026-08-31, V6 still short.** `cfs minimal-medium`: convex penalty solve + a greedy cardinality prune, one case per medium draw. **Head A cannot represent essentiality** — knocking a trace metal (`EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e`) out of a rich medium takes the true LP to `mu = 0` and moves the head by <1%, 6 of 37 free metabolites on a 3-member community. Unrestricted, the program exploits exactly that: 273 -> **41** components with every surrogate floor satisfied and `mu_true` 55/70/38 -> **0/0/0**. With the lethal singles pinned from the models (`--keep-essential`, default; one FBA per free metabolite, a static property of the GEM), 273 -> 251 and 2 of 3 members clear a 0.5 floor under the LP, the misses being 0.489/0.485 — i.e. ~2% short — and one real failure at 0.334 on the community's slow member (`mu_true` 3.5 against 55 and 70), Head A's known weak low-`mu` band. **The cause is `SamplingConfig.log10_lo = -4`**: the trace metals' limiting regime is at `c/Km ~ 1e-9..1e-6`, outside the probe's bracket, so the probe omits them, `band_scales` defaults them to 1.0, the design never makes them scarce, `_kink_scale` defaults `x_scale` to 1.0 and the head has no resolution left in that coordinate. The four missed essentials are exactly the four `"source": "default"` bands in the sidecar. **Fixed by `probe_lo = -12` (§4.7) and a relabel: `n_missed_essential` 6 -> 0**, and unrestricted the design no longer collapses the LP (2/3, 0/3, 3/3 members clearing the floor, worst true fraction 0.436 against 0.000). V6 still does not pass at a 0.5 floor — 0.491 / 0.436 / 0.512 — so what remains is a few-percent accuracy question, not a structural one |
+| M10 | §13.2 growth maximisation, convex solver | **Met 2026-09-06 with `--trf` (§13.2b).** Bundle-corrected trust-region model management beats the single ascent on 18/20 cases paired, median true gain +2.35% against +2.34%, max 23.15x against 22.79x, and **max optimism 0.0730 -> 0.00686** at a median of 3 LP solves per case. Every reported optimum is now LP-verified at *every* step rather than once at the end, P21 becomes the mechanism (a step that zeroes an essential has `mu_true = 0`, so `rho < 0`, so it is rejected), and **the unmet M3 gate no longer constrains this use case**. Residual: two cases lose to the plain ascent because the *inner* subproblem solver stalls on its own model's kinks (P28), not because the model is wrong — §13.2c measured the head to be a valid upper bound at all 40 optima. Original entry: Optimum survives V5 round-trip on 20 cases — **built 2026-08-30; 19/20 at the default trust region, 20/20 at 0.25 and at 1.0 decades.** Median true gain +2.2%, median optimism 0.3%. The one failure is a `mu = 2.0` start medium, the head's known weak band; it is not monotone in the trust radius. **Under an additive trust region 3/20 collapse to `mu_true = 0`, and under none at all 2 of the first 4** — P21, and the mechanism is zeroing an essential trace metabolite |
+| M11 | §13.3 static minimal medium | **V6 passes 4/4 with `--lp-repair`; `--cuts` (§13.3b) added 2026-09-06 as a second, independent route** — cell 6 passes V6 on cuts alone with no repair at 247 components against the repair's 250/252, cells 7/8 are the correct null, and cell 10 costs components, so cuts are off by default. New pitfall P27: a cut at a dead member is the unsatisfiable constraint `0 >= target`. Original entry: **built 2026-08-30; the essentiality blocker is closed 2026-08-31, V6 still short.** `cfs minimal-medium`: convex penalty solve + a greedy cardinality prune, one case per medium draw. **Head A cannot represent essentiality** — knocking a trace metal (`EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e`) out of a rich medium takes the true LP to `mu = 0` and moves the head by <1%, 6 of 37 free metabolites on a 3-member community. Unrestricted, the program exploits exactly that: 273 -> **41** components with every surrogate floor satisfied and `mu_true` 55/70/38 -> **0/0/0**. With the lethal singles pinned from the models (`--keep-essential`, default; one FBA per free metabolite, a static property of the GEM), 273 -> 251 and 2 of 3 members clear a 0.5 floor under the LP, the misses being 0.489/0.485 — i.e. ~2% short — and one real failure at 0.334 on the community's slow member (`mu_true` 3.5 against 55 and 70), Head A's known weak low-`mu` band. **The cause is `SamplingConfig.log10_lo = -4`**: the trace metals' limiting regime is at `c/Km ~ 1e-9..1e-6`, outside the probe's bracket, so the probe omits them, `band_scales` defaults them to 1.0, the design never makes them scarce, `_kink_scale` defaults `x_scale` to 1.0 and the head has no resolution left in that coordinate. The four missed essentials are exactly the four `"source": "default"` bands in the sidecar. **Fixed by `probe_lo = -12` (§4.7) and a relabel: `n_missed_essential` 6 -> 0**, and unrestricted the design no longer collapses the LP (2/3, 0/3, 3/3 members clearing the floor, worst true fraction 0.436 against 0.000). V6 still does not pass at a 0.5 floor — 0.491 / 0.436 / 0.512 — so what remains is a few-percent accuracy question, not a structural one |
 | M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 does NOT pass in general — those 5.6e-7 to 3.1e-6 figures are *medians* at 5 components, and at 20 the max is 6.2e-05 on the one cell with a decisive invasion margin but 4.5e-02 to 3.8e-01 on the near-tie cells, where a feed perturbation crosses the survivor swap and the difference quotient spans two branches; the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the default warm start returns a *strictly invadable* state on 2 of the 4 converging cells — seeding from each member's monoculture instead finds the valid one, and takes the two hardest cells from residual 10 to 1e-5** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |

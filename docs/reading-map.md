@@ -9,6 +9,10 @@ Ordered by the model's own dataflow — target, class, training, use, open — r
 field or date. Where a paper predicts something already measured here, the entry says so;
 those are the ones to read first.
 
+The **composition** of head and solver — the LP-in-the-loop hybrids, and whether the
+project should be reframed around them — is a separate map:
+[`hybrid-framing.md`](hybrid-framing.md).
+
 Also published as an artifact:
 <https://claude.ai/code/artifact/4b694fd0-287b-402f-9a5f-7bd768fb07ac>
 
@@ -306,6 +310,23 @@ moved the gate, and none of the four changed Head B as a model:
 
 ---
 
+## Part 4b — The hybrid: surrogate *and* solver, and the methods for it
+
+Added 2026-09-06, after three applications shipped with an LP in the loop. Full
+stock-take, prior-art comparison and the ranked plan: **[`hybrid-framing.md`](hybrid-framing.md)**.
+Read that first; this table is the bibliography for it.
+
+| Reference | Why it matters here |
+| --- | --- |
+| Alexandrov, Dennis, Lewis & Torczon, **trust-region model management** with first-order-consistency corrections; Eason & Biegler, **A trust region filter method for glass box/black box optimization**, [AIChE J 2016](https://aiche.onlinelibrary.wiley.com/doi/abs/10.1002/aic.15325), [2018 sequel](https://aiche.onlinelibrary.wiley.com/doi/abs/10.1002/aic.16364); Hameed et al., [AIChE 2026](https://aiche.onlinelibrary.wiley.com/doi/10.1002/aic.70236) (Hessian information) | **Built for §13.2 and it works** (§13.2b): correct the head to the LP's value *and* gradient at the trust-region centre and the loop converges to a KKT point of the *true* problem with no global accuracy requirement — which is why the unmet M3 gate stops constraining this use case. Read the 2018 sequel for the sampling-region variant that avoids shrinking the radius to zero. |
+| Kelley, **cutting-plane method** for convex programs; the bundle-method literature (Lemarechal, Nemirovskii & Nesterov 1995; Kiwiel) — also Part 3a | **Built for §13.3** (§13.3b). Where the surrogate is in the *constraints* and the objective is exact, the trust region does not transfer but the bundle does: a tangent to a concave `mu_true` is an upper bound everywhere, so requiring it to clear the growth floor is necessary for the true constraint. Note the two failure modes both literatures warn about and this project hit: a **single subgradient stalls at a kink** (§13.2b), and a **cutting-plane subproblem is nonsmooth**, so it wants an LP/QP over the epigraph rather than a subgradient step (P28). |
+| Dembo, Eisenstat & Steihaug, **Inexact Newton methods**, 1982; Eisenstat & Walker, **Choosing the forcing terms**, [SISC 1996](https://users.wpi.edu/~walker/Papers/forcing_terms,SISC_17,1996,16-32.pdf) | §13.4's `--mix-mu-rel` is a *fixed* forcing term where the theory says it should be a schedule, and "a pure LP residual with a surrogate Jacobian does not converge" is this literature's textbook failure, already observed. Jacobian-free Newton–Krylov needs only Jacobian-*vector* products, which the smoothed head supplies where the LP supplies nothing. **Not built.** |
+| Chapman, Kratochvíl, Ebenhöh & Wilken, **Algebraic differentiation for fast sensitivity analysis of optimal flux modes in metabolic models**, [Bioinformatics 2025](https://academic.oup.com/bioinformatics/article/41/6/btaf287/8125804) (`DifferentiableMetabolism.jl`) | **The reason not to call this project a Jacobian estimator.** Implicit differentiation of a pruned GEM's KKT system gives every `d(flux)/d(param)` exactly — but at **7.48 s / 6.24 s** per full Jacobian against this repo's 1.70 s for a whole 21-member community, it is a *sensitivity-analysis* tool and this is a many-query one. Their pruning theorem manufactures the unique optimum implicit differentiation needs; **D4's elastic net already provides one**, which is what made the Head B Sobolev arm testable — and it is refuted (§7d of the framing doc): `dz/dc` is zero in all but 1–3 of ~180 directions and 96–99% of what remains is a proportional rescale Head A already supplies. |
+| Bertsimas & Stellato (Part 3d); the GNN warm-start literature, e.g. [arXiv:2511.13174](https://arxiv.org/pdf/2511.13174) | The semi-amortized move the LP fallback makes available and has not taken: hand the solver a warm start or a predicted basis, so the surrogate *pays for* the LP it triggers rather than merely standing aside. B6's negative does not close this — it asked whether the limiting set discriminates failing states, not whether it saves simplex iterations. **Not built**; needs the optimal basis stored in the label shards. |
+| Höffner, Harwood & Barton, **DFBAlab** / lexicographic LP, [BMC Bioinformatics 2014](https://link.springer.com/article/10.1186/s12859-014-0409-8); **interior-point** and **NLP/KKT** reformulations of dFBA, Comput. Chem. Eng. [2019](https://www.sciencedirect.com/science/article/abs/pii/S0098135418309190) / [2022](https://www.sciencedirect.com/science/article/abs/pii/S0098135422004343) | The non-learned competitors for the *smoothness* this project gets by fitting. They make the embedded LP unique (lexicographic) or smooth (IPM/KKT) so an ODE/NLP solver can integrate and differentiate it. **Any differentiability or speed claim must be stated against these, not against a cold simplex.** What they do not have is global concavity, which is what makes §13.2/§13.3 convex programs. |
+
+---
+
 ## Part 5 — Open questions → what to read
 
 | Open question | Read | What it should tell you |
@@ -326,7 +347,16 @@ moved the gate, and none of the four changed Head B as a model:
 A search across the convex-regression, amortized-optimization and metabolic-modelling
 literatures turns up no published surrogate that is simultaneously **concave and monotone by
 construction**, **supervised on LP duals**, and **composed per-organism into a community
-simulation**. The nearest neighbours each drop one leg: the reactive-transport ANN has no
+simulation**.
+
+**Sharpened 2026-09-06.** State the claim as a *relaxation*, not an estimator: a smooth,
+globally concave, everywhere-defined relaxation of a piecewise-linear LP value function. The
+estimator framing is contested by Chapman et al. 2025 (Part 4b); the relaxation framing is
+contested only by the Barton-group reformulations, which are neither concave nor amortized.
+And the sharpest demonstration of what the relaxation buys is §13.2b: the exact LP oracle's
+gradient is a **subgradient selection at a kink**, and a trust-region method built on it
+*stalls there* while the smoothed head walks through. Not accuracy — a usable direction at a
+corner. The nearest neighbours each drop one leg: the reactive-transport ANN has no
 structure, GroupMax and the max-affine statistics have no biology, and the community-FBA
 methods keep the LP. If this is written up, that three-way intersection is the claim — and
 the concavity is what makes the §13 medium-design programs convex, which is the part a
@@ -334,4 +364,4 @@ reviewer will care about more than the speedup.
 
 ---
 
-*Compiled 2026-09-01.*
+*Compiled 2026-09-01; Part 4b and the hybrid stock-take added 2026-09-06.*

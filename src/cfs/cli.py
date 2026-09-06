@@ -547,6 +547,16 @@ def build_parser() -> argparse.ArgumentParser:
         "EX_trp__L_e and EX_indole_e kills a member with neither essential alone.",
     )
     mm.add_argument(
+        "--cuts",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Kelley cutting planes on the growth constraints: at most N rounds of "
+        "design -> true-LP check -> add the members' tangents. Each round costs one "
+        "FBA per member and tightens the model toward the true feasible set. 0 "
+        "(default) is the single design every earlier number was measured with.",
+    )
+    mm.add_argument(
         "--no-milp",
         action="store_true",
         help="Skip the per-organism exact MILP reference (cobra minimal_medium).",
@@ -1037,6 +1047,7 @@ def main(argv: list[str] | None = None) -> int:
             cases=args.cases,
             target_frac=args.target_frac,
             lp_repair=args.lp_repair,
+            cut_rounds=args.cuts,
             seed=args.seed,
             scales=args.scales,
             milp=not args.no_milp,

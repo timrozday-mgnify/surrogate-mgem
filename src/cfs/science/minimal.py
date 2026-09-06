@@ -47,13 +47,22 @@ LOGGER = logging.getLogger("cfs.science.minimal")
 _PRESENT = 1e-6
 
 
-def mu_and_grads(sur, c: np.ndarray, members: list[int]) -> tuple[np.ndarray, np.ndarray]:
+def mu_and_grads(
+    sur, c: np.ndarray, members: list[int], cuts: list[list] | None = None
+) -> tuple[np.ndarray, np.ndarray]:
     """``(mu, dmu/dc)`` for every member at once, **calibrated**.
 
     §13.2 evaluates the head raw because an increasing map cannot move an argmax.
     Here the constraint is on the *level* of ``mu``, so the calibration is what
     decides feasibility and has to be in both the value and the chain rule:
     ``g(m) = a m - d0 e^{-m/beta}``, ``g' = a + (d0/beta) e^{-m/beta} > 0``.
+
+    ``cuts[i]`` is a list of ``(mu_j, g_j, c_j)`` from true LP solves for member
+    ``i``, entering as ``min_j [mu_j + g_j . (c - c_j)]`` alongside the head.
+    ``mu_true`` is concave, so each tangent is an **upper** bound on it everywhere
+    and requiring the tangent to clear the floor is *necessary* for the true
+    constraint: the min can only remove points the truth does not admit, never
+    points it does. See :func:`cut_loop`.
     """
     from cfs.surrogate import calibrate
 
@@ -70,7 +79,13 @@ def mu_and_grads(sur, c: np.ndarray, members: list[int]) -> tuple[np.ndarray, np
     dcal = cal[:, 2:3] + (cal[:, 0:1] / cal[:, 1:2]) * np.exp(-raw / cal[:, 1:2])
     k = np.asarray(members)
     v = np.maximum(calibrate.apply(raw, cal)[:, 0] * scale[:, 0], 0.0)
-    return v[k], (ga * dxdu * dudc * scale * dcal)[k]
+    mu_k, g_k = v[k], (ga * dxdu * dudc * scale * dcal)[k]
+    for i, per_member in enumerate(cuts or ()):
+        for mu_j, g_j, c_j in per_member:
+            vj = mu_j + float(g_j @ (c - c_j))
+            if vj <= mu_k[i]:  # ties to the cut: it is the one that is exact
+                mu_k[i], g_k[i] = vj, g_j
+    return mu_k, g_k
 
 
 def _penalty(mu: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -87,20 +102,21 @@ def minimise(
     c_lo: np.ndarray | None = None,
     iters: int = 400,
     rounds: int = 8,
+    cuts: list[list] | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Return ``(c*, info)``: the smallest medium the surrogate says all members grow on."""
     c = c_hi.astype(np.float64).copy()
     c_lo = np.zeros_like(c) if c_lo is None else c_lo.astype(np.float64)
     rho = float(cost @ c_hi)  # penalty in the objective's own units
     for _ in range(rounds):
-        c = _descend(sur, c, c_lo, c_hi, members, target, cost, rho, iters)
-        mu, _ = mu_and_grads(sur, c, members)
+        c = _descend(sur, c, c_lo, c_hi, members, target, cost, rho, iters, cuts)
+        mu, _ = mu_and_grads(sur, c, members, cuts)
         if _penalty(mu, target).max() <= 0.0:
             break
         rho *= 4.0
-    c, restored = _restore(sur, c, c_lo, c_hi, members, target)
-    c, dropped = _prune(sur, c, c_lo, members, target, cost)
-    mu, _ = mu_and_grads(sur, c, members)
+    c, restored = _restore(sur, c, c_lo, c_hi, members, target, cuts)
+    c, dropped = _prune(sur, c, c_lo, members, target, cost, cuts)
+    mu, _ = mu_and_grads(sur, c, members, cuts)
     return c, {
         "rho": rho,
         "restored": restored,
@@ -110,11 +126,11 @@ def minimise(
     }
 
 
-def _descend(sur, c, c_lo, c_hi, members, target, cost, rho, iters):
+def _descend(sur, c, c_lo, c_hi, members, target, cost, rho, iters, cuts=None):
     """Projected subgradient descent on the exact penalty, backtracking step."""
 
     def obj(c):
-        mu, g = mu_and_grads(sur, c, members)
+        mu, g = mu_and_grads(sur, c, members, cuts)
         p = _penalty(mu, target)
         f = float(cost @ c) + rho * float((p**2).sum())
         # A *quadratic* penalty, so the objective is smooth: the exact (linear)
@@ -140,7 +156,7 @@ def _descend(sur, c, c_lo, c_hi, members, target, cost, rho, iters):
     return c
 
 
-def _prune(sur, c, c_lo, members, target, cost):
+def _prune(sur, c, c_lo, members, target, cost, cuts=None):
     """Greedily zero one component at a time, keeping the drop if all floors hold.
 
     The convex program above minimises ``cost . c``; V6 and §9.1 are about
@@ -156,13 +172,13 @@ def _prune(sur, c, c_lo, members, target, cost):
             continue
         trial = c.copy()
         trial[m] = c_lo[m]
-        mu, _ = mu_and_grads(sur, trial, members)
+        mu, _ = mu_and_grads(sur, trial, members, cuts)
         if _penalty(mu, target).max() <= 0.0:
             c, dropped = trial, dropped + 1
     return c, dropped
 
 
-def _restore(sur, c, c_lo, c_hi, members, target):
+def _restore(sur, c, c_lo, c_hi, members, target, cuts=None):
     """Walk back up the violated members' gradients until every floor is met.
 
     The penalty solution sits *on* the boundary and a subgradient method lands
@@ -170,7 +186,7 @@ def _restore(sur, c, c_lo, c_hi, members, target):
     answer, so feasibility is repaired rather than reported.
     """
     for n in range(200):
-        mu, g = mu_and_grads(sur, c, members)
+        mu, g = mu_and_grads(sur, c, members, cuts)
         p = _penalty(mu, target)
         if p.max() <= 0.0:
             return c, n
@@ -228,6 +244,109 @@ def _lp_restore(sur, models, c, c_hi, floors, max_restore: int = 8):
         c[best] = c_hi[best]
         restored.append(sur.exchanges[best])
     return c, restored
+
+
+def cut_loop(
+    sur,
+    models,
+    c_hi: np.ndarray,
+    members: list[int],
+    target: np.ndarray,
+    floors: list[float],
+    *,
+    cost: np.ndarray,
+    c_lo: np.ndarray,
+    rounds: int = 6,
+    km_cfg=None,
+) -> tuple[np.ndarray, dict, dict]:
+    """Kelley cutting planes on the growth constraints: design, check, cut, repeat.
+
+    §13.2's trust-region machinery does not transfer, because here the surrogate is
+    in the **constraints** and the objective ``cost . c`` is exact. What does
+    transfer is the bundle: ``mu_true_i`` is concave, so an LP tangent at ``c_j``
+    satisfies ``mu_true_i(c) <= mu_ij + g_ij . (c - c_j)`` *everywhere*, and
+    demanding that affine function clear the floor is therefore **necessary** for
+    the true constraint. Adding cuts can only remove points the truth does not
+    admit — an outer approximation of the true feasible set, tightening monotonically
+    — so the cost rises toward the true minimum rather than wandering.
+
+    Each round costs ``G`` FBAs (one per member) and excludes the design it just
+    checked: the fresh cut reads ``mu_true_i(c*) < target_i`` at ``c*`` itself.
+
+    This is the *optimality* half of the same economics :func:`_lp_restore` gives
+    the *feasibility* half of. The repair raises components until the LP is happy
+    and says nothing about how much it overpaid; the cut loop puts that knowledge
+    into the design and keeps the program convex while doing it.
+
+    **Measured 2026-09-06, 4 communities x 3 draws, against the same V6 the
+    `--lp-repair` numbers were taken on. It is a second route to V6, not a
+    replacement, and it is cell-dependent:**
+
+    | cell | n | base | ``--lp-repair`` | ``--cuts 6`` | cuts + repair |
+    | --- | --- | --- | --- | --- | --- |
+    | 6 | 3 | **fail** 0.4999 | pass, 247/250/252 | **pass, 247/247/247** | pass, 247/247/247 |
+    | 7 | 3 | pass, 228 | pass, 228 | pass, 228 | pass, 228 |
+    | 8 | 5 | pass, 298 | pass, 298 | pass, 298 | pass, 298 |
+    | 9 | 10 | **fail** -0.000 | **pass, 370/372/375** | fail, 402 | pass, 370/406/404 |
+
+    * **Cell 6 is the win and it is the optimality claim landing**: V6 passes on
+      cuts alone, with **no LP repair**, at 247 components on all three draws where
+      the repair needs 250 and 252. Putting the LP's tangent *in* the program beats
+      bolting a correction on afterwards.
+    * **Cells 7 and 8 are the correct null** -- one round, no change, ~3 FBAs per
+      member. A design that is already feasible pays only for the check.
+    * **Cell 9 is a loss**: 406/404 components against the repair's 372/375. Cuts
+      tighten the constraint set, and where the head was not the binding problem
+      that tightening is paid for in components with nothing bought.
+
+    Off by default (``--cuts 0``) for that reason. Use it where the design is
+    feasible-but-marginal; use ``--lp-repair`` where a member can die.
+    """
+    from cfs.science.growth import lp_value_and_grad
+
+    cuts: list[list] = [[] for _ in members]
+    c_star, info = minimise(sur, c_hi, members, target, cost=cost, c_lo=c_lo)
+    trace = []
+    for r in range(rounds):
+        vals, grads = [], []
+        for m in models:
+            v, g = lp_value_and_grad(m, sur.exchanges, c_star, km_cfg)
+            vals.append(v)
+            grads.append(g)
+        short = [i for i, (v, f) in enumerate(zip(vals, floors, strict=True)) if v < f - 1e-9]
+        trace.append(
+            {
+                "round": r,
+                "n_short": len(short),
+                "worst_true_frac": float(
+                    min(v / max(f, 1e-30) for v, f in zip(vals, floors, strict=True))
+                ),
+                "spend": float(cost @ c_star),
+                "n_components": int((c_star > _PRESENT * np.maximum(c_hi, 0.0)).sum()),
+            }
+        )
+        if not short:
+            break
+        # A **dead** member carries no cut. At `mu_true = 0` the LP's duals are all
+        # zero, so the tangent is the constraint `0 >= target` -- flat and
+        # satisfiable nowhere. Adding it makes the model infeasible and the penalty
+        # then walks the design back toward rich with no direction: measured on a
+        # 10-member community, 369 -> 402 components and V6 still failing, where
+        # `_lp_restore` alone passes at 0.538. That is the synthetic-lethal case,
+        # and it is the repair's job, not the cut loop's.
+        alive = [i for i in short if vals[i] > 1e-12 and np.linalg.norm(grads[i]) > 0.0]
+        if not alive:
+            trace[-1]["stopped"] = "a violated member is dead; no informative cut"
+            break
+        # Cut every *live* member, not only the violated ones: a tangent is valid
+        # regardless, and the ones that pass now are what stop the next design
+        # paying for them twice.
+        for i in range(len(members)):
+            if vals[i] > 1e-12 and np.linalg.norm(grads[i]) > 0.0:
+                cuts[i].append((vals[i], grads[i], c_star.copy()))
+        c_star, info = minimise(sur, c_hi, members, target, cost=cost, c_lo=c_lo, cuts=cuts)
+    return c_star, info, {"cut_rounds": len(trace), "cut_trace": trace,
+                          "n_cuts": sum(len(x) for x in cuts)}
 
 
 def milp_components(model, exchanges: list[str], c_hi: np.ndarray, min_growth: float) -> int | None:
@@ -294,6 +413,7 @@ def run(
     cases: int = 5,
     target_frac: float = 0.5,
     lp_repair: bool = False,
+    cut_rounds: int = 0,
     seed: int = 0,
     scales: Path | None = None,
     milp: bool = True,
@@ -336,11 +456,19 @@ def run(
         # rather than anything the design has to search. Off, V6 fails outright.
         keep = np.array([e in lethal for e in sur.exchanges]) & keep_essential
         c_lo = np.where(free & ~keep, 0.0, c_hi)
-        c_star, info = minimise(sur, c_hi, members, target, cost=cost, c_lo=c_lo)
+        t_hi = [mu_true(m, sur.exchanges, c_hi) for m in models]
+        if cut_rounds:
+            c_star, info, cut_info = cut_loop(
+                sur, models, c_hi, members, target,
+                [target_frac * h for h in t_hi],
+                cost=cost, c_lo=c_lo, rounds=cut_rounds,
+            )
+            info |= cut_info
+        else:
+            c_star, info = minimise(sur, c_hi, members, target, cost=cost, c_lo=c_lo)
         present = c_star > _PRESENT * np.maximum(c_hi, 0.0)
         # V6: does the *true* LP hit the floor on the designed medium, member by
         # member? A dropped essential shows up here as mu_true = 0.
-        t_hi = [mu_true(m, sur.exchanges, c_hi) for m in models]
         t_star = [mu_true(m, sur.exchanges, c_star) for m in models]
         repaired: list[str] = []
         if lp_repair:
