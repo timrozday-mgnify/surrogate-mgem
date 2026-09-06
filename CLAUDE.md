@@ -2874,6 +2874,39 @@ management (Alexandrov; Eason & Biegler) for §13.2/§13.3, which would retire t
 unmet M3 gate for those use cases, and inexact-Newton forcing terms + JFNK for
 §13.4.
 
+### M15: `lambda` is identifiable from a chemostat log-ratio — the ratio, at least — 2026-09-06
+
+§13.10's smallest test, run. **`Surrogate.lam` is a per-organism rate scale**: the
+LP sees §3.3's bound only as `Vmax * u`, so scaling an organism's `Vmax` is exactly
+scaling its own saturation coordinate — nine lines (the heads' input, the MM clamp,
+and the same factor on `steady._head_mu_rows`), **no relabelling and no
+retraining**, and every existing checkpoint reads `lam = 1`.
+`20hm_bands/lambda_ident.py`, cell 1, `lam_true = (1.0, 0.4)`, chemostat at
+`D = 0.2 min(mu0)` over 5 turnovers, 21 points, BDF in `log X`, observation =
+log-ratio only. ~11 s per trajectory at n=2.
+
+| perturbation from the truth | sse | x the noise floor |
+| --- | --- | --- |
+| **integrator noise floor** (`rtol` 1e-6 vs 1e-9) | 7.6e-07 | 1 |
+| uniform x1.1 (global rate scale) | 2.4e-04 | 323 |
+| uniform x1.6 | 4.2e-03 | 5 537 |
+| **one organism x1.1** (the ratio) | **2.6e-01** | **308 674** |
+
+1. **The gate passes** — both directions clear the integrator's own noise by 2-5
+   orders, so the trajectory carries the signal and the adjoint is worth building.
+2. **The two directions differ ~1000x in curvature.** §13.10 predicted `D` would
+   pin the global scale, and it does — but weakly. Quote **ratios as identified
+   and the overall scale with a wide interval** unless a second data type (OD, or
+   the metabolomics route) is added.
+3. **Nelder-Mead recovers the ratio and crawls on the scale**: 72 evaluations from
+   a start 60%/-40% off give `lam_hat = (1.599, 0.647)` — **ratio 2.470 against
+   2.500 (-1.2%)** — with the scale still +60% out and the point sliding *along*
+   the valley (sse 1.7e-3 -> 1.5e-4). That is the argument for §13.10's blocker 1
+   (gradients) rather than for more evaluations.
+4. **Take the noise floor from the integrator, not from a repeat.** The same
+   `lambda` on the same solver path scores sse **exactly 0** — a circular floor.
+   Re-integrating the truth at a tighter `rtol` is the honest one.
+
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
 After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3

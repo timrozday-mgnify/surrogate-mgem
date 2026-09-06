@@ -119,6 +119,12 @@ class Surrogate:
                 )
             )
         self.mask = np.array(vmeta["mask"], dtype=bool)
+        # §13.10: a per-organism rate scale. The LP sees §3.3's bound only as
+        # `Vmax_m * u_m`, so scaling an organism's Vmax is *exactly* scaling its
+        # own saturation coordinate -- no relabelling, no retraining. 1.0 is the
+        # nominal 1000 mmol/gDW/h every roster GEM carries. Set it directly
+        # (`sur.lam = ...`) to refit rates against a time series.
+        self.lam = np.ones(len(vmeta["genome_ids"]), dtype=np.float64)
         self.x_scale = np.asarray(vmeta["x_scale"], dtype=np.float32)
         self.mu_scale = np.asarray(vmeta["mu_scale"], dtype=np.float32)
         # Head A over-predicts slow media, and `d(log X)/dt = mu` integrates exactly
@@ -155,9 +161,13 @@ class Surrogate:
             else [self.genome_ids.index(g) for g in organisms]
         )
 
+    def _u(self, c: np.ndarray) -> np.ndarray:
+        """Saturation, per organism: ``lam_i c/(Km+c)``, i.e. §13.10's rate scale."""
+        return self.lam[:, None] * (c / (self.km + c))[None, :]  # (G, M)
+
     def _x(self, c: np.ndarray):
         """Concentration -> the heads' input, per organism: ``u/(u + x_scale)``."""
-        u = c / (self.km + c)  # (M,)
+        u = self._u(c)  # (G, M)
         return (u / (u + self.x_scale))[:, None, :].astype(np.float32)  # (G, 1, M)
 
     def _mu(self, x) -> np.ndarray:
@@ -182,8 +192,8 @@ class Surrogate:
         if self._bheads is None:
             raise ValueError("this Surrogate was built without a behaviour checkpoint")
         jnp, G, B = self._jnp, len(self.genome_ids), len(C)
-        u = C / (self.km + C)  # (B, M)
-        x = (u[None] / (u[None] + self.x_scale[:, None, :])).astype(np.float32)  # (G,B,M)
+        u = self.lam[:, None, None] * (C / (self.km + C))[None]  # (G, B, M)
+        x = (u / (u + self.x_scale[:, None, :])).astype(np.float32)  # (G,B,M)
         xj = jnp.asarray(x)
         a = jnp.asarray(np.broadcast_to(np.asarray(alpha)[:, None], (G, B)), dtype=jnp.float32)
 
@@ -202,7 +212,7 @@ class Surrogate:
                              dtype=jnp.float32)
         )
         z = np.asarray(self._B.flux(self._bheads, xj, a, jnp.asarray(self.z_scale), zmu))
-        z = np.maximum(z, -(self._B.VMAX * u)[None]) * self.mask[:, None, :]
+        z = np.maximum(z, -self._B.VMAX * u) * self.mask[:, None, :]
         # The projection is a per-state active-set solve, so it stays a loop -- but
         # it is now a small share of the cost rather than 27% of it.
         out = np.empty_like(z)
@@ -233,7 +243,7 @@ class Surrogate:
         # exactly where the composition went wrong: at the worst M5 community the
         # head predicted `EX_glyc3p_e` uptake of -329 against a physical floor of
         # -14, on 28 of one member's 213 exchanges at once.
-        z = np.maximum(z, -self._B.VMAX * (c / (self.km + c))) * self.mask
+        z = np.maximum(z, -self._B.VMAX * self._u(c)) * self.mask
         return mu, self._element_balance(z)
 
     def reach(self, c: np.ndarray) -> np.ndarray | None:
@@ -273,7 +283,7 @@ class Surrogate:
             else jnp.asarray(np.maximum(mu, self.mu_floor)[:, None], dtype=jnp.float32)
         )
         z = np.asarray(self._B.flux(self._bheads, x, a, jnp.asarray(self.z_scale), zmu))[:, 0]
-        return np.maximum(z, -self._B.VMAX * (c / (self.km + c))) * self.mask
+        return np.maximum(z, -self._B.VMAX * self._u(c)) * self.mask
 
     def _element_balance(self, z: np.ndarray) -> np.ndarray:
         """§8.6g(2): project onto `E z <= 0` for C, N, P and S.

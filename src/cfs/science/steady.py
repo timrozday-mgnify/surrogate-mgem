@@ -550,7 +550,7 @@ def _head_mu_rows(sur, c, heads=None):
     gx = np.asarray(g, dtype=np.float64)[:, 0]  # d(raw)/dx
     xk = np.asarray(x, dtype=np.float64)[:, 0]
     dxdu = (1.0 - xk) ** 2 / sur.x_scale
-    dudc = sur.km / (sur.km + c) ** 2
+    dudc = sur.lam[:, None] * (sur.km / (sur.km + c) ** 2)[None]  # §13.10's rate scale
     dcal = calibrate.deriv(raw[:, None], sur.value_cal)[:, 0]
     rows = gx * dxdu * dudc * (sur.mu_scale * dcal)[:, None]
     return rows[sur.members]

@@ -311,3 +311,31 @@ def test_the_element_balance_cache_tolerates_a_head_a_only_surrogate():
     assert dfba._eb_operators(None, mask, np.ones((2, 3))) is None  # no element data
     built = dfba._eb_operators(E, mask, np.ones((2, 3)))
     assert len(built) == 2 and built[0][2].shape == (2, 2)
+
+
+def test_lam_rescales_the_saturation_coordinate():
+    """§13.10: `lam_i` is a per-organism `Vmax`, which the LP sees only as `Vmax*u`.
+
+    So doubling `lam` must be identical to doubling `u`, in the heads' input *and*
+    in §3.3's clamp -- and the batch path must agree with the single-medium one,
+    since the two compute `u` separately.
+    """
+    import numpy as np
+
+    from cfs.compose.dfba import Surrogate
+
+    sur = Surrogate.__new__(Surrogate)
+    sur.genome_ids = ["a", "b"]
+    sur.km = np.array([1.0, 4.0])
+    sur.x_scale = np.array([[0.5, 0.5], [0.5, 0.5]])
+    sur.lam = np.array([1.0, 2.0])
+    c = np.array([1.0, 12.0])
+
+    u = sur._u(c)
+    base = c / (sur.km + c)
+    assert np.allclose(u[0], base)
+    assert np.allclose(u[1], 2.0 * base)  # organism b sees twice the saturation
+    assert np.allclose(sur._x(c)[:, 0, :], u / (u + sur.x_scale))
+
+    ub = sur.lam[:, None, None] * (c[None] / (sur.km + c[None]))[None]  # the batch path
+    assert np.allclose(ub[:, 0, :], u)

@@ -4929,10 +4929,164 @@ must budget a matched control.
 | M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 does NOT pass in general — those 5.6e-7 to 3.1e-6 figures are *medians* at 5 components, and at 20 the max is 6.2e-05 on the one cell with a decisive invasion margin but 4.5e-02 to 3.8e-01 on the near-tie cells, where a feed perturbation crosses the survivor swap and the difference quotient spans two branches; the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the default warm start returns a *strictly invadable* state on 2 of the 4 converging cells — seeding from each member's monoculture instead finds the valid one, and takes the two hardest cells from residual 10 to 1e-5** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
+| M15 | §13.10 kinetic-parameter inference from a chemostat time series | **not started.** Gate: recover a known per-organism `lambda` from synthetic `cfs simulate --stiff` data on a 2-member chemostat, before any adjoint work. Blocked downstream on the same error model as M14 |
 
-M9–M11 need nothing that does not already exist. M12 is M6. M13 and M14 are the
+M9–M11 need nothing that does not already exist. M12 is M6. M13, M14 and M15 are the
 research half, and M14 is blocked on a piece of work — the error model — that is
-small and has not been started.
+small and has not been started. M15 needs that same error model to become a
+posterior, but its identifiability check (§13.10) needs nothing at all.
+
+### 13.10 Fitting kinetic parameters to a chemostat abundance time series — not built
+
+The use cases above all take the model's parameters as given and ask a question
+about the medium or the community. This one inverts that: **given an observed
+time series of relative abundance from a chemostat (or a tube series), infer the
+kinetic parameters the GEMs cannot supply.** It is §13.6(a)'s inverse problem
+with the unknown moved from `c` to `theta`, and it is the natural home for the
+`Vmax` gap recorded in §3.3.
+
+**The parameter this is for.** A GEM gives the **yield**, never the **rate**:
+`mu = uptake x yield`, and the uptake bound is imposed. Every exchange of every
+roster GEM carries `|lower_bound| = 1000 mmol/gDW/h`, ~100x physiological, which
+is why `mu_max` runs to 57.6 /h and absolute timescales are inflated ~30x.
+Per-organism (ideally per organism x metabolite) `Vmax` is the missing input, and
+it is the one that changes *who wins* rather than how fast the clock runs.
+
+**Why it is cheap to parametrise.** The LP sees the bound only as `Vmax_m * u_m`,
+so a `Vmax` rescale is **exactly a rescale of Head A's own input coordinate** — no
+relabelling, no retraining, no new solves. Measured: 10x medium -> 9.9x `mu` in
+the scarce regime. `Km` enters the same way through `u = c/(Km+c)`. And the fit
+direction is the favourable one: real values are ~0.01 of the nominal 1000, i.e.
+`u` scaled *down*, inside the head's trained range rather than past it. Caveat:
+that moves the operating point into the scarce regime, where `reach` degrades and
+Head B is worst (§13.7).
+
+`VMAX` is currently a module scalar (`cfs.surrogate.behaviour.VMAX = 1000.0`)
+read at five sites — `compose/dfba.py` (the MM clamp, three call paths),
+`science/steady.py` (the analytic dual rows), `surrogate/traj.py` (the JAX rhs).
+Making it a per-organism vector is small and localised; `surrogate/data.py`
+already carries per-exchange `vmax_side` plumbing at label time.
+
+#### Why the *transient* and not the fixed point
+
+**Relative abundance obeys `d/dt log(X_i/X_j) = mu_i(c(t)) - mu_j(c(t))`.** `D`
+cancels exactly, so compositional data measures differences in growth rate along
+the realised medium path — a continuous signal at every timepoint. The §13.4
+fixed point gives far less, for a measured reason: **`k = 1`** (one metabolite
+carries 100% of the growth gradient at every fixed point, confirmed independently
+against the true LP), so competitive exclusion applies and the predicted
+composition is `(1, 0, ...)`. That is *ordinal* data — one inequality
+`R*_winner < R*_others` per tube — against hundreds of parameters.
+
+Three further structural points, in the order they matter:
+
+1. **The time axis identifies the global rate scale, which the fixed point
+   discards.** A uniform `Vmax` rescale by `lambda` scales every `mu` by
+   `lambda`, hence the rate of competitive displacement by `lambda`. In batch
+   that is nearly degenerate with the unknown inoculum; in a chemostat **`D` is a
+   known external rate that does not scale**, so `lambda` is pinned against it.
+   This is the argument for a chemostat series over serial transfer.
+2. **The data leans on the accurate head.** Composition depends on `mu` directly
+   (Head A: `mu_rel_median <= 5e-4` on all 30 §8.1 cells) and on Head B only
+   indirectly, through the latent `c(t)`. The weak head is not in the observation
+   equation.
+3. **The transient avoids the discontinuity that breaks the fixed point.**
+   `y*(c_feed)` jumps across a survivor swap (§13.4: V4's max is 3.8e-1 on
+   near-tie cells against a 5.6e-7 median), and R* gaps are 0.02-0.15% on those
+   cells — worse, not better, at physiological rates. A likelihood built on the
+   equilibrium would be non-smooth exactly where real coexistence data would sit.
+   `traj_sens` already measured the trajectory to be smooth and monotone in `z`
+   on 20/20 cells, with gradients reaching ~300 through 40 Euler steps.
+
+#### What is identifiable
+
+| quantity | from relative abundance alone |
+| --- | --- |
+| global rate scale `lambda` | **yes** — displacement rate against the known `D` |
+| per-organism relative rate | **yes** — that is what pairwise displacement measures |
+| per-(organism, metabolite) `Vmax` | only for pairs that actually limit somewhere on the path; `k = 1` makes coverage sparse, so **vary `c_feed` and `D` across tubes to sweep the limiter** |
+| total biomass | one unobserved scalar per tube, or measure OD |
+| `Km` | weak, confounded with `Vmax` except where the path crosses half-saturation |
+
+**Metabolomics is the stronger data, for one specific reason.** At a
+one-resource chemostat steady state the limiting substrate's `c*` **is** the
+survivor's R* — independent of feed — so each tube gives a direct read on a
+combination of that organism's `Vmax`, `Km` and yield, with the yield half
+supplied by the GEM. For *internal* reaction parameters it is much weaker:
+`dz/dc` is 96-99% a proportional rescale by `mu` (§13.0/§8.6), so exchange-flux
+data mostly re-identifies `mu`, and the QP's `eps` and elastic-net weights are
+modelling choices rather than physical constants.
+
+#### Blockers, in order
+
+1. **No gradients through the trajectory.** `Surrogate.mu_and_z` interleaves
+   numpy with JAX (`np.maximum`, the active-set NNLS in `_element_balance`),
+   which is already why `jacfwd` was abandoned for the steady-state Jacobian. An
+   adjoint needs that projection rewritten in JAX; `surrogate/traj.py` is a
+   partial precedent.
+2. **Cost without gradients.** ~1.7 s per rhs at n=21 after the caching and
+   batching pass; a trajectory is minutes and MCMC wants 1e4-1e6 of them.
+   Gradient-free is fine at n=2-5 and out at roster scale.
+3. **Non-smoothness of the head.** It ships at `gm_eval_temp = 1e-4`, effectively
+   a hard min, so the likelihood is piecewise. But `T` is a free evaluation knob
+   on a frozen head (`groupmax.with_temp`), with precedent for warming it in one
+   place only (`--jac-temp`). The smoothing that cost accuracy is what makes the
+   surface tractable for HMC.
+4. **Model error where the data lives.** A chemostat sits at scarcity by
+   construction. P20 applies in full; the certified half exists (§13.2c: `mu_hat`
+   is a valid upper bound at 109/109 off-design points, so `mu_hat - mu_LP` is a
+   tight error bar for one LP), the lower bound does not, and `--fallback-depth`
+   is the affordable correction.
+5. **Confounding with Head B.** With Head B misspecified, `Vmax` will absorb some
+   of its error. Fit relative abundance alone first and check whether adding
+   metabolomics moves the estimate — if it does, that is the confound showing.
+
+#### The smallest test, before anything above is built
+
+One 2-member chemostat, one scalar `lambda_i` per organism, synthetic data from
+`cfs simulate --stiff` at a known `lambda`, refit by Nelder-Mead on log-ratio
+residuals. ~50 trajectory evaluations, no new derivatives, no JAX rewrite. It
+answers the only question that gates the rest: **does the displacement rate move
+enough with `lambda` to be identifiable against the trajectory's own numerical
+noise?** If it does not, no amount of adjoint machinery helps.
+
+#### ...and it ran: the ratio is identified, the global scale is 1000x weaker — 2026-09-06
+
+`Surrogate.lam` is the per-organism rate scale (`20hm_bands/lambda_ident.py`).
+It is `lam_i * u_i` in the heads' own input and in §3.3's clamp, plus the same
+factor on `steady._head_mu_rows`' analytic growth rows — nine lines, no
+relabelling, no retraining, and every existing checkpoint reads `lam = 1`.
+
+Cell 1 (`CR626927.1`, `GCA_000151225.1`), `lam_true = (1.0, 0.4)`, chemostat at
+`D = 0.2 min(mu0)` for 5 vessel turnovers, 21 sampled points, BDF in `log X`.
+The observation is the log-ratio alone (total biomass unobserved), which runs
+0 -> 2.735 over the window. ~11 s per trajectory at n=2.
+
+| perturbation from the truth | sse | x the integrator's noise floor |
+| --- | --- | --- |
+| **integrator noise floor** (`rtol` 1e-6 vs 1e-9) | 7.6e-07 | 1 |
+| uniform x1.1 (global rate scale) | 2.4e-04 | 323 |
+| uniform x1.6 | 4.2e-03 | 5 537 |
+| **one organism x1.1** (the ratio) | **2.6e-01** | **308 674** |
+
+1. **The gate passes: both directions clear the numerical noise floor by 2-5
+   orders**, so the trajectory carries the signal and an adjoint is worth
+   building.
+2. **But the two directions differ by ~1000x in curvature.** A 10% error in the
+   *relative* rate costs three orders more than a 10% error in the *global* one.
+   §13.10's table said "yes" to both; the honest version is **yes to the ratio,
+   weakly yes to the scale** — `D` does pin it, as predicted, but the valley
+   along the uniform direction is shallow.
+3. **Nelder-Mead recovers the ratio and crawls on the scale.** 72 evaluations
+   from a start 60%/-40% off gives `lam_hat = (1.599, 0.647)` — **ratio 2.470
+   against a true 2.500 (-1.2%)** with the uniform scale still +60% out, and the
+   sse falling 1.7e-03 -> 1.5e-04 while the point slides *along* the valley.
+   That is the shape a gradient-free method has on a 1000:1 anisotropy, and it is
+   the direct argument for blocker 1 (the adjoint) rather than more evaluations.
+4. **Design consequence:** a fit reporting a per-organism `Vmax` from
+   relative-abundance data alone should quote the *ratios* as identified and the
+   overall scale with a wide interval, or add a second data type (OD for total
+   biomass, or the metabolomics route above) to pin it.
 
 ## Appendix — repository layout
 
