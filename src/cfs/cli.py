@@ -538,6 +538,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Growth floor, as a fraction of each member's mu on the rich medium.",
     )
     mm.add_argument(
+        "--lp-repair",
+        action="store_true",
+        help="After designing, solve the true LP and raise components back to the "
+        "rich level until every member meets its floor. Catches what "
+        "--keep-essential cannot: that audit is over *single* knockouts, so it is "
+        "blind to an alternative-route set — a design that zeroes both "
+        "EX_trp__L_e and EX_indole_e kills a member with neither essential alone.",
+    )
+    mm.add_argument(
         "--no-milp",
         action="store_true",
         help="Skip the per-organism exact MILP reference (cobra minimal_medium).",
@@ -1027,6 +1036,7 @@ def main(argv: list[str] | None = None) -> int:
             organisms=[g for g in args.organisms.split(",") if g],
             cases=args.cases,
             target_frac=args.target_frac,
+            lp_repair=args.lp_repair,
             seed=args.seed,
             scales=args.scales,
             milp=not args.no_milp,

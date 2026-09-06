@@ -185,6 +185,51 @@ def _restore(sur, c, c_lo, c_hi, members, target):
 # --------------------------------------------------------------------------- #
 
 
+def _lp_restore(sur, models, c, c_hi, floors, max_restore: int = 8):
+    """Raise components back to rich until the **true** LP meets every floor.
+
+    `--keep-essential` pins the metabolites the LP calls essential, but it audits
+    *single* knockouts, and that is blind by construction to an alternative-route
+    set. Measured on a 10-member community: the design zeroed **both**
+    `EX_trp__L_e` and `EX_indole_e` -- tryptophan and the precursor it is made
+    from -- so neither is essential alone and the pair is lethal. `mu_true` for
+    that member was 0 on all three draws.
+
+    The repair is the §13.4 economics again: a design is **one** state, so LP
+    solves are affordable where they never are along a trajectory. V6 already
+    spends them to *score* the answer; this spends a few more to *fix* it.
+
+    **Ordered by effect, not by how much each component was cut** -- that is the
+    whole difference. Restoring the largest cuts first needed 29 of 46 components;
+    restoring whichever single component buys the most growth found the
+    synthetic-lethal partner immediately and needed **2**, at 94 LP solves.
+    """
+    c = c.astype(np.float64).copy()
+    cand = list(np.flatnonzero(c < c_hi - 1e-12))
+    restored: list[str] = []
+    for _ in range(max_restore):
+        mu = [mu_true(m, sur.exchanges, c) for m in models]
+        short = [i for i, (v, f) in enumerate(zip(mu, floors, strict=True)) if v < f - 1e-9]
+        if not short:
+            break
+        # The member furthest below its floor, in relative terms, sets the target.
+        k = min(short, key=lambda i: mu[i] / max(floors[i], 1e-30))
+        best, best_v = None, mu[k]
+        for j in cand:
+            if c[j] >= c_hi[j]:
+                continue
+            t = c.copy()
+            t[j] = c_hi[j]
+            v = mu_true(models[k], sur.exchanges, t)
+            if v > best_v:
+                best, best_v = j, v
+        if best is None:
+            break  # nothing single helps; report the shortfall rather than loop
+        c[best] = c_hi[best]
+        restored.append(sur.exchanges[best])
+    return c, restored
+
+
 def milp_components(model, exchanges: list[str], c_hi: np.ndarray, min_growth: float) -> int | None:
     """``cobra.medium.minimal_medium``: the exact minimum-cardinality medium.
 
@@ -248,6 +293,7 @@ def run(
     organisms: list[str],
     cases: int = 5,
     target_frac: float = 0.5,
+    lp_repair: bool = False,
     seed: int = 0,
     scales: Path | None = None,
     milp: bool = True,
@@ -296,6 +342,13 @@ def run(
         # member? A dropped essential shows up here as mu_true = 0.
         t_hi = [mu_true(m, sur.exchanges, c_hi) for m in models]
         t_star = [mu_true(m, sur.exchanges, c_star) for m in models]
+        repaired: list[str] = []
+        if lp_repair:
+            c_star, repaired = _lp_restore(
+                sur, models, c_star, c_hi, [target_frac * h for h in t_hi]
+            )
+            present = c_star > _PRESENT * np.maximum(c_hi, 0.0)
+            t_star = [mu_true(m, sur.exchanges, c_star) for m in models]
         met = [t >= target_frac * h - 1e-9 for t, h in zip(t_star, t_hi, strict=True)]
         milp_n = (
             [
@@ -313,6 +366,7 @@ def run(
                 "n_free": int(free.sum()),
                 "n_free_dropped": int((free & ~present).sum()),
                 "n_essential_pinned": int(keep.sum()),
+                "lp_repaired": repaired,
                 "milp_components": milp_n,
                 "target_frac": target_frac,
                 "mu_true_rich": t_hi,

@@ -3685,6 +3685,63 @@ roster's persistent worst cells are the ions (`EX_mg2_e`, `EX_cl_e`, `EX_ca2_e`;
 §7). A minimal-medium answer that drops an ion is the failure mode to look for
 first, and the MILP comparison is what finds it.
 
+#### M11: the failure is a synthetic-lethal set, and the LP repairs it — 2026-09-06
+
+**First, a correction to the recorded status.** V6's failure was on file as
+`worst_true_frac` 0.491/0.436/0.512. Re-run on a 3-member community with the
+current head it *passes* at 0.798/1.000/0.816 -- but the control says that is the
+**community**, not the head: `value_r1` on the identical community gives
+**identical** numbers (0.798, 249 -> 228 components). Two variables had been
+changed at once and the improvement attributed to the wrong one. M11 is
+community-dependent, and it degrades with size:
+
+| cell | n | `worst_true_frac` | |
+| --- | --- | --- | --- |
+| 7 | 3 | 0.798 (`p4r2` and `r1` alike) | pass |
+| 6 | 3 | 0.500 | on the floor |
+| 8 | 5 | 0.567 | pass |
+| 9 | **10** | **−0.000** | a member is dead |
+
+**The mechanism, and it is not what `--keep-essential` was built for.** On cell 9
+the same member dies on all three independent draws -- `GCA_000007325.1`, whose
+rich `mu` is 0.827 against the others' 9-50, so it is the slow member again -- with
+`n_missed_essential = 0`. The pin was working. Restoring components one at a time
+shows why: **`EX_trp__L_e` and `EX_indole_e` each revive it alone.** Tryptophan and
+the precursor it is made from. Neither is essential *singly*, so a single-knockout
+audit correctly finds neither, and zeroing **both** is lethal. That is a synthetic
+lethal pair, and single-knockout essentiality is blind to it by construction.
+
+**`--lp-repair` (new, off by default).** After designing, solve the true LP and
+raise components back to rich until every member meets its floor. It is §13.4's
+economics once more -- a design is **one** state, so LP solves are affordable --
+and V6 already spends them to *score* the answer; this spends a few more to *fix*
+it.
+
+**Order by effect, not by size of cut.** Restoring the largest reductions first
+needed **29 of 46** components. Restoring whichever single component buys the
+starving member the most growth finds the synthetic-lethal partner immediately and
+needs **2**, at 94 LP solves.
+
+| cell | n | before | after | restored | components |
+| --- | --- | --- | --- | --- | --- |
+| 7 | 3 | pass 0.798 | pass 0.798 | **0** | 228 -> 228 |
+| 8 | 5 | pass 0.567 | pass 0.567 | **0** | 298 -> 298 |
+| 6 | 3 | **fail 0.500** | **pass 0.503** | 0-1 | 247 -> 247 |
+| 9 | 10 | **fail −0.000** | **pass 0.538** | 2-3 | 370 -> **372** |
+
+**V6 passes on all four, it fires only where it is needed** -- the two already-
+passing cells restore nothing and are unchanged to the component -- and the worst
+case costs **+2 components in 370**, 0.5%. The cardinality objective pays almost
+nothing for a medium the true LP will actually grow on.
+
+**What this does not settle.** The repair is a certificate, not a design
+principle: it fixes the answer after the fact rather than teaching the program
+about alternative-route sets. The principled version is to pin synthetic-lethal
+*pairs* the way `--keep-essential` pins singles -- `O(n^2)` LPs over the free set,
+~1000 solves here, affordable for a design and worth measuring against the repair.
+And `--lp-repair` needs models, so it is unavailable in the surrogate-only setting
+the rest of §13.3 is designed for.
+
 ### 13.4 Chemostat steady state, coexistence and stability — needs M6
 
 Newton-solve `dc/dt = 0, mu_i(c) = D` rather than integrating (§8.1 already says

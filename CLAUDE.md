@@ -2577,6 +2577,40 @@ say who wins — the surrogate cannot resolve it. In a tie the winner is set by
 initial abundances and the transient. For exactly the cells where `steady-state`
 is weakest, the time course is more informative.
 
+**M11's V6 failure is a synthetic-lethal set, and the LP repairs it —
+2026-09-06.** The recorded 0.436 was **the community, not the head**: `value_r1`
+on the same 3-member community gives numbers identical to `value_p4r2` (0.798,
+249->228). M11 is community-dependent and degrades with size — n=3 0.798, n=3
+0.500, n=5 0.567, **n=10 −0.000** (a member dead on all three draws).
+
+**The mechanism:** on n=10 the same member dies every draw — `GCA_000007325.1`,
+the slow one again — with `n_missed_essential = 0`, so the pin was working.
+Restoring singly shows why: **`EX_trp__L_e` and `EX_indole_e` each revive it
+alone**. Tryptophan and its precursor — neither essential *singly*, so a
+single-knockout audit finds neither, and zeroing **both** is lethal. A synthetic
+lethal pair, invisible to `--keep-essential` by construction.
+
+**`--lp-repair` (new, off by default)** solves the true LP after designing and
+raises components back until every member meets its floor — §13.4's economics
+again, a design is one state. **Order by effect, not by size of cut:** largest
+cuts first needed **29 of 46** components; most-growth-bought-first needs **2**,
+at 94 LP solves.
+
+| cell | n | before | after | restored | components |
+| --- | --- | --- | --- | --- | --- |
+| 7 | 3 | pass 0.798 | pass 0.798 | **0** | 228 -> 228 |
+| 8 | 5 | pass 0.567 | pass 0.567 | **0** | 298 -> 298 |
+| 6 | 3 | fail 0.500 | **pass 0.503** | 0-1 | 247 -> 247 |
+| 9 | 10 | **fail −0.000** | **pass 0.538** | 2-3 | 370 -> **372** |
+
+**V6 passes 4/4, it fires only where needed** (passing cells restore nothing and
+are unchanged), and the worst case costs **+2 components in 370**.
+
+**Not settled:** it is a certificate, not a design principle — the principled
+version pins synthetic-lethal *pairs* as `--keep-essential` pins singles
+(`O(n^2)` LPs, ~1000 here, affordable for a design). And it needs the models, so
+it is unavailable in the surrogate-only setting §13.3 targets.
+
 **Next:** (1) `filter_jit` on the heads, a further 30% and bit-identical;
 (2) `mu_LP(c*)` on the remaining cells — the honest §13.4 accuracy number;
 (3) run the tied cells (1, 2, 7, 10) as transients from several initial
