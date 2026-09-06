@@ -5088,6 +5088,50 @@ The observation is the log-ratio alone (total biomass unobserved), which runs
    overall scale with a wide interval, or add a second data type (OD for total
    biomass, or the metabolomics route above) to pin it.
 
+#### ...and OD closes the fit, though it barely moves the anisotropy — 2026-09-06
+
+`lambda_ident.py --od` adds `log(sum_i X_i)` to the observation. Same cell, same
+`D`, same 5-turnover window, same start `(1.6, 0.24)` = +60% / -40% off:
+
+| perturbation | log-ratio channel | log-total (OD) channel |
+| --- | --- | --- |
+| noise floor (`rtol` 1e-9) | 7.59e-07 | 1.29e-06 |
+| one organism +10% (**the ratio**) | 2.63e-01 (**346571x**) | 1.73e-06 (**1x**) |
+| both +10% (**the scale**) | 2.45e-04 (323x) | 6.67e-04 (**515x**) |
+| both +60% (the scale) | 4.20e-03 (5537x) | 1.14e-02 (8806x) |
+
+| fit | evals | `lam_hat` | ratio error | scale error |
+| --- | --- | --- | --- | --- |
+| log-ratio alone | 72 | (1.599, 0.647) | -1.2% | **+60%** |
+| **+ OD** | 80 | **(0.9986, 0.3994)** | **-0.01%** | **-0.14%** |
+
+1. **The two channels are exactly orthogonal, as predicted.** OD sits *at* its own
+   noise floor for the ratio direction (1.0x) and is the better of the two channels
+   for the scale (515x against 323x). Nothing about the ratio is lost by adding it.
+2. **It does not fix the anisotropy — and it fixes the fit anyway.** Combined, the
+   scale direction is 838x against the ratio's 346571x, i.e. the ratio 1073:1 ->
+   **414:1**, a 2.6x improvement. Yet the same gradient-free simplex, from the same
+   start, in the same budget, goes from leaving the scale +60% out to recovering
+   **both parameters to 0.15%**. **A curvature ratio predicts how hard a direction
+   is to see, not whether the fit closes**: what stalled Nelder-Mead was sliding
+   *along* a valley, and a second, differently-oriented residual gives the simplex a
+   direction to contract in even when it is only 2.6x steeper. Do not read a
+   sensitivity table as a fit outcome — run the fit.
+3. **The recovered `sse` (1.72e-07) is below the truth's own floor (2.05e-06)**, so
+   the fit is at the integrator's noise and the remaining 0.15% is that floor, not
+   an identifiability limit.
+4. **So the design consequence in the previous section is superseded**: report the
+   scale with a wide interval only for a *relative-abundance-only* series. With a
+   parallel OD measurement -- which a chemostat already produces -- both are
+   identified at n=2. The adjoint (blocker 1) is still what is needed for roster
+   scale and for anything wanting a posterior; it is no longer needed to make the
+   scale visible at all.
+
+**Not run:** the window-length arm. An older 20-turnover fit on disk
+(`lambda_ident.json`, 123 evals) recovers both to 3e-5 from log-ratio alone, which
+suggests the horizon is a second, independent lever on the same anisotropy;
+`--turnovers N` exposes it. Untested against the corrected noise floor.
+
 ## Appendix — repository layout
 
 ```

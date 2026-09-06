@@ -2907,6 +2907,28 @@ log-ratio only. ~11 s per trajectory at n=2.
    `lambda` on the same solver path scores sse **exactly 0** — a circular floor.
    Re-integrating the truth at a tighter `rtol` is the honest one.
 
+**And OD closes the fit, though it barely moves the anisotropy — 2026-09-06.**
+`lambda_ident.py --od` adds `log(sum X_i)` to the observation. The two channels
+are exactly orthogonal: OD sits *at* its own noise floor for the ratio direction
+(1.0x) and is the better channel for the scale (515x against the log-ratio's
+323x). Combined, the anisotropy goes 1073:1 -> **414:1**, only 2.6x — and yet the
+same Nelder-Mead, from the same start `(1.6, 0.24)` = +60%/-40%, in the same
+budget, goes from leaving the scale **+60% out** (`lam_hat` 1.599, 0.647) to
+recovering **both to 0.15%** (0.9986, 0.3994), at an `sse` *below* the truth's own
+noise floor.
+
+**A curvature ratio predicts how hard a direction is to see, not whether the fit
+closes.** What stalled the simplex was sliding *along* a valley; a second,
+differently-oriented residual gives it a direction to contract in even when that
+direction is only 2.6x steeper. Do not read a sensitivity table as a fit outcome —
+run the fit. So §13.10's "quote the scale with a wide interval" applies to
+relative-abundance-**only** series; with the OD a chemostat already produces, both
+are identified at n=2, and the adjoint (blocker 1) is needed for roster scale and
+for a posterior rather than to see the scale at all. **Not run:** the
+window-length arm (`--turnovers N`, new) — a stale 20-turnover fit on disk
+recovers both from log-ratio alone, so the horizon looks like a second,
+independent lever on the same anisotropy.
+
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
 After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3
