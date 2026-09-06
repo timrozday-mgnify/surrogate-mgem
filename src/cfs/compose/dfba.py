@@ -514,6 +514,101 @@ def integrate(rhs, c0: np.ndarray, x0: np.ndarray, dt: float, steps: int) -> Tra
     return Trajectory(np.array(ts), np.array(cs), np.array(xs), np.array(mus), np.array(dcs))
 
 
+def integrate_stiff(
+    rhs,
+    c0: np.ndarray,
+    x0: np.ndarray,
+    t_end: float,
+    *,
+    dilution: float = 0.0,
+    feed: np.ndarray | None = None,
+    n_out: int = 201,
+    dmu_dc=None,
+    rhs_batch=None,
+    rtol: float = 1e-6,
+    atol: float = 1e-9,
+) -> Trajectory:
+    """BDF in ``log X``. The chemostat transient is stiff and Euler cannot do it.
+
+    A continuous culture has two clocks: the pool equilibrates fast while biomass
+    grows slowly -- the medium saturates ``mu`` at ~0.2% of the feed, so the
+    right-hand side is nearly discontinuous at the kink. :func:`integrate`'s
+    explicit Euler cannot straddle that. Measured (§13.4 trap 3): at a large step
+    it ratchets ``X`` to ~1e8, and at a small one it washes out to the *spurious
+    extinction* fixed point, which is a genuine root and the wrong one. Which of
+    the two you get depends only on the step, so a batch-culture step size does
+    not transfer.
+
+    Two things make it tractable. **``log X``**, so abundances stay positive
+    without a clip and five decades of biomass are an O(1) range -- washout then
+    appears as ``w`` drifting down rather than as a root at ``X = 0``. And an
+    implicit method, which is what "stiff" means: `BDF` takes the fast pool
+    direction implicitly and steps on the growth clock.
+
+    ``dmu_dc`` supplies the growth rows of the Jacobian analytically -- Head A is
+    differentiable, and those rows agree with the LP's own chain-ruled dual to 7
+    significant figures, so they never need probing. ``rhs_batch`` evaluates the
+    remaining finite-difference columns in one call. Both are optional; without
+    them SciPy finite-differences the whole thing.
+    """
+    from scipy.integrate import solve_ivp
+
+    M, G = len(c0), len(x0)
+    feed = np.zeros(M) if feed is None else np.asarray(feed, dtype=np.float64)
+    _W_FLOOR, _W_CEIL = -60.0, 30.0
+
+    def unpack(y):
+        return np.maximum(y[:M], 0.0), np.exp(np.clip(y[M:], _W_FLOOR, _W_CEIL))
+
+    def f(_t, y):
+        c, X = unpack(y)
+        dc, mu = rhs(c, X)
+        return np.concatenate([dc + dilution * (feed - c), mu - dilution])
+
+    def jac(_t, y):
+        c, X = unpack(y)
+        J = np.zeros((M + G, M + G))
+        # d(dc/dt)/d(log X_i) = X_i z_i, exact: `dc` is linear in X, so one
+        # unit-biomass call per member gives the column outright. And
+        # d(mu - D)/d(log X) = 0, so that block stays zero.
+        base = rhs(c, np.zeros(G))[0]
+        for i in range(G):
+            e = np.zeros(G)
+            e[i] = 1.0
+            J[:M, M + i] = X[i] * (rhs(c, e)[0] - base)
+        r0 = f(0.0, y)
+        h = 1e-3 * np.maximum(c, 1e-9)
+        if rhs_batch is not None:
+            CP = np.repeat(c[None], M + 1, axis=0)
+            CP[1 + np.arange(M), np.arange(M)] += h
+            dcb, mub = rhs_batch(CP, X)
+            R = np.concatenate(
+                [dcb + dilution * (feed[None] - CP), (mub.T - dilution)], axis=1
+            )
+            J[:, :M] = ((R[1:] - R[0][None]) / h[:, None]).T
+        else:
+            for j in range(M):
+                yp = y.copy()
+                yp[j] += h[j]
+                J[:, j] = (f(0.0, yp) - r0) / h[j]
+        if dmu_dc is not None:
+            g = dmu_dc(c)
+            ok = np.isfinite(g).all(1)
+            J[M:][ok, :M] = g[ok]
+        return J
+
+    y0 = np.concatenate([c0.astype(np.float64), np.log(np.maximum(x0, np.exp(_W_FLOOR)))])
+    ts = np.linspace(0.0, float(t_end), n_out)
+    sol = solve_ivp(
+        f, (0.0, float(t_end)), y0, method="BDF", jac=jac, t_eval=ts, rtol=rtol, atol=atol
+    )
+    cs = np.maximum(sol.y[:M].T, 0.0)
+    xs = np.exp(np.clip(sol.y[M:].T, _W_FLOOR, _W_CEIL))
+    mus = np.array([rhs(cs[k], xs[k])[1] for k in range(len(sol.t))])
+    dcs = np.array([rhs(cs[k], xs[k])[0] for k in range(len(sol.t))])
+    return Trajectory(sol.t, cs, xs, mus, dcs)
+
+
 # --------------------------------------------------------------------------- #
 # The medium
 # --------------------------------------------------------------------------- #
@@ -934,6 +1029,7 @@ def simulate(
     doublings: float = 4.0,
     dilution: float = 0.0,
     feed: Path | None = None,
+    stiff: bool = False,
     seed: int = 0,
     scales: Path | None = None,
 ) -> dict:
@@ -971,7 +1067,25 @@ def simulate(
         biomass = float((c0[drain] / -dc1[drain]).min()) / hours if drain.any() else 1e-3
     x0 = biomass * share
 
-    traj = integrate(rhs, c0, x0, hours / steps, steps)
+    if stiff:
+        # The chemostat transient is stiff; see `integrate_stiff`. `rhs` here is
+        # already the chemostat-wrapped map, so the washout term must not be
+        # applied twice -- the base right-hand side goes in with `dilution`.
+        from cfs.science.steady import _head_mu_rows
+
+        traj = integrate_stiff(
+            lambda c, X: rhs_surrogate(sur, c, X),
+            c0,
+            x0,
+            hours,
+            dilution=dilution,
+            feed=c_feed,
+            n_out=steps + 1,
+            dmu_dc=lambda c: _head_mu_rows(sur, c),
+            rhs_batch=lambda C, X: rhs_surrogate_batch(sur, C, X),
+        )
+    else:
+        traj = integrate(rhs, c0, x0, hours / steps, steps)
     reach = sur.reach(c0)
     Path(out).mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -987,6 +1101,7 @@ def simulate(
     report = {
         "genome_ids": organisms,
         "mode": "chemostat" if dilution > 0 else "batch",
+        "integrator": "BDF" if stiff else "euler",
         "dilution": dilution,
         "t_end": hours,
         "steps": steps,

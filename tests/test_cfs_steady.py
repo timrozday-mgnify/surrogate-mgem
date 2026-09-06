@@ -149,3 +149,30 @@ def test_the_selection_key_is_the_signed_margin_not_the_flag():
 
     mu_star = MUMAX * sol["c"][0] / (K + sol["c"][0])
     assert (mu_star[~sol["alive"]] - D).max() < 0.0  # strictly valid, by sign
+
+
+def test_the_chemostat_transient_lands_on_the_closed_form_steady_state():
+    """§13.1 stiff path: integrating forward must reach what Newton solves for.
+
+    The two share no numerics -- BDF in `log X` against an active-set Newton -- so
+    agreement is evidence for both. Explicit Euler is the control and fails here
+    the way it fails on the real communities: it does not wash the loser out and
+    it lands on the wrong biomass.
+    """
+    from cfs.compose.dfba import integrate, integrate_stiff, with_chemostat
+
+    feed = np.array([FEED, 3.0])
+    c_star = K * D / (MUMAX[0] - D)
+    x_star = YIELD * (FEED - c_star)
+
+    traj = integrate_stiff(
+        _rhs, feed.copy(), np.array([1e-4, 1e-4]), 400.0, dilution=D, feed=feed, n_out=3
+    )
+    assert np.isclose(traj.c[-1][0], c_star, rtol=1e-4)
+    assert np.isclose(traj.x[-1][0], x_star, rtol=1e-4)
+    assert traj.x[-1][1] < 1e-12 * x_star  # the slow member is washed out
+
+    # The control: the same horizon under explicit Euler at a comparable step.
+    eul = integrate(with_chemostat(_rhs, D, feed), feed.copy(), np.array([1e-4, 1e-4]),
+                    400.0 / 400, 400)
+    assert not np.isclose(eul.x[-1][0], x_star, rtol=1e-4)

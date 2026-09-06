@@ -2522,10 +2522,40 @@ converge because **four members are tied in R* to within 0.015%**
 because no strictly valid state exists to find. **Every unconverged cell in the
 M12 gate now has one explanation: a sub-resolution R\* tie.**
 
+**The chemostat transient works — `cfs simulate --stiff`, 2026-09-06.**
+`--dilution` was always there but on explicit Euler, and the transient is
+**stiff** (the pool equilibrates fast, biomass grows slowly, `mu` saturates at
+~0.2% of the feed). `--stiff` uses **BDF in `log X`**: abundances stay positive
+without a clip, five decades of biomass are O(1), washout is `w` drifting down
+rather than a root at `X = 0`. Two Jacobian blocks are exact
+(`d(dc/dt)/d(log X_i) = X_i z_i`; `d(mu−D)/d(log X) = 0`), the growth rows are
+Head A's analytic ones, and only `d(dc/dt)/dc` is finite-differenced — batched.
+
+Cell 4, its own feed, `D = 2.4477`, 40 h:
+
+| | Euler | **BDF** | `steady-state` |
+| --- | --- | --- | --- |
+| `X` survivor | 2.356e-02 (**480x**) | **4.891e-05** | 4.891e-05 |
+| pool `‖dc‖/‖c*‖` | 4.2e-01 | **1.3e-10** | — |
+| loser `mu` | −2.4473 | **0.2870** | margin −0.883 ✓ |
+
+The transient and the Newton solve **share no numerics**, so this validates both.
+
+**Euler's failure is the dangerous kind — it looks converged**: it ends at
+`mu = D` to four decimals (so `dX/dt = 0` and the run reads as settled) with
+biomass 480x wrong and the pool 42% off. **Never read `mu = D` as convergence.**
+
+**And it is the right instrument for the tied cells.** Where R* gaps are
+0.02–0.15% (cells 1/2/7) or four-way at 0.015% (cell 10), the equilibrium cannot
+say who wins — the surrogate cannot resolve it. In a tie the winner is set by
+initial abundances and the transient. For exactly the cells where `steady-state`
+is weakest, the time course is more informative.
+
 **Next:** (1) `filter_jit` on the heads, a further 30% and bit-identical;
 (2) `mu_LP(c*)` on the remaining cells — the honest §13.4 accuracy number;
-(3) re-run the flag grid on one code version, since the existing one straddles
-several.
+(3) run the tied cells (1, 2, 7, 10) as transients from several initial
+abundance splits, which is the question the equilibrium cannot answer;
+(4) re-run the flag grid on one code version.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

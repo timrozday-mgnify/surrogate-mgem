@@ -585,6 +585,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--dilution", type=float, default=0.0, help="Chemostat D (1/h). 0 = batch culture."
     )
     sim.add_argument("--feed", type=Path, default=None, help="Feed JSON (default: the medium).")
+    sim.add_argument(
+        "--stiff",
+        action="store_true",
+        help="Integrate with BDF in log X instead of explicit Euler. A chemostat "
+        "transient is stiff — the pool equilibrates fast while biomass grows "
+        "slowly — and Euler either ratchets X up or washes out to the spurious "
+        "extinction state depending only on the step.",
+    )
     sim.add_argument("--seed", type=int, default=0)
 
     ss = sub.add_parser(
@@ -950,6 +958,7 @@ def main(argv: list[str] | None = None) -> int:
             doublings=args.doublings,
             dilution=args.dilution,
             feed=args.feed,
+            stiff=args.stiff,
             seed=args.seed,
             scales=args.scales,
         )

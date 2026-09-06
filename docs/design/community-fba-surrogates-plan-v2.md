@@ -3514,6 +3514,52 @@ the right-hand side on every measure (§8.1, the MM-clamp result). Report rates 
 structure; treat a batch endpoint as an estimate with a wide error bar, and prefer
 a chemostat steady state (§13.4) when a number has to be quoted.
 
+#### The chemostat *transient* — `cfs simulate --stiff`, 2026-09-06
+
+`--dilution` made `simulate` a continuous culture from the start, but on explicit
+Euler, and the chemostat transient is **stiff**: the pool equilibrates fast while
+biomass grows slowly, because the medium saturates `mu` at ~0.2% of the feed. §13.4
+trap 3 records what that does to a warm start; it does the same to a simulation.
+
+`--stiff` integrates with **BDF in `log X`** instead. `log X` keeps abundances
+positive without a clip, makes five decades of biomass an O(1) range, and turns
+washout into `w` drifting down rather than a root at `X = 0`. Two of the four
+Jacobian blocks are exact -- `d(dc/dt)/d(log X_i) = X_i z_i` because `dc` is linear
+in `X`, and `d(mu - D)/d(log X) = 0` -- the growth rows come from Head A
+analytically, and only `d(dc/dt)/dc` is finite-differenced, through the batched
+evaluator.
+
+**Validated against the fixed point, which is the strong form of the test.** Cell
+4, its own feed and `D = 2.4477`, 40 h:
+
+| | explicit Euler | **BDF (`--stiff`)** | `cfs steady-state` |
+| --- | --- | --- | --- |
+| `X`, survivor | 2.356e-02 (**480x**) | **4.891e-05** | 4.891e-05 |
+| pool, `norm(dc)/norm(c*)` | 4.2e-01 | **1.3e-10** | — |
+| loser's `mu` | −2.4473 | **0.2870** | invasion margin −0.883 |
+| wall clock | 7 s | 22 s | — |
+
+The transient and the Newton solve **share no numerics**, so agreeing on the pool
+to ten decimal places and on biomass to four significant figures is evidence for
+both -- and the extinct member's `mu` reproduces the steady state's invasion
+margin exactly.
+
+**Euler's failure is the dangerous kind: it looks converged.** It ends with
+`mu = D` to four decimals, so growth balances dilution and the run reads as
+settled, while the biomass is 480x wrong and the pool 42% off. It has found a
+state where `dX/dt = 0` without the pool being at steady state at all. Never read
+`mu = D` as convergence.
+
+**Why this earns its place beyond convenience.** For the cells whose R* values are
+tied -- 0.02-0.15% on cells 1, 2 and 7, four-way at 0.015% on cell 10 -- the
+equilibrium cannot say who wins, because the surrogate cannot resolve the gap. In
+a tie the winner is set by initial abundances and by the transient, which is a
+question only a time course can answer. **For exactly the cells where
+`steady-state` is weakest, the transient is the more informative instrument.**
+
+Regression test: `tests/test_cfs_steady.py`, the Monod chemostat's closed form,
+with Euler as the failing control.
+
 ### 13.2 Maximise a member's growth rate over the medium — convex — **built 2026-08-30**
 
 `cfs maximise-growth` (`src/cfs/science/growth.py`). Projected gradient ascent in
