@@ -3514,6 +3514,41 @@ the right-hand side on every measure (§8.1, the MM-clamp result). Report rates 
 structure; treat a batch endpoint as an estimate with a wide error bar, and prefer
 a chemostat steady state (§13.4) when a number has to be quoted.
 
+#### Per-organism `Vmax` is a required future input — noted 2026-09-06
+
+**The GEM gives the yield, never the rate.** FBA returns `mu = uptake x yield`; the
+stoichiometry is genuinely in the model, the uptake bound is imposed. Every
+exchange of every roster GEM carries `|lower_bound| = 1000 mmol/gDW/h` -- a
+numerical infinity, ~100x physiological -- so `mu_max` comes out at **0.77 to 57.6
+/h**, doubling times down to **6 minutes**, and `--dilution-frac 0.2` then sets
+`D` anywhere from 3.7 to **276 turnovers/day**. Every absolute timescale in a
+dynamic result is inflated by that factor. It does not touch M5, which normalises
+by doublings, and it does not touch R* orderings or `k`; it does mean "what happens
+in 72 h" is currently not answerable.
+
+The absolute scale is cheap to fix and needs **no retraining**: the LP sees the
+bound only as `Vmax * u`, so a uniform rescale of `Vmax` is exactly a rescale of
+`u`, the head's own input. Measured on cell 2, `mu` responds smoothly and
+essentially linearly in the scarce regime -- a 10x medium change gives 9.9x `mu` --
+and reaches 2.5 /h at 1e-4 of the feed and 0.26 /h at 1e-5.
+
+**But a uniform scale is not the interesting knob, and this is the finding.**
+Rescaling toward physiological rates moves the community *into* the supply-limited
+regime, where members become **more** alike, not less: cell 2's two organisms are
+3.6% apart in `mu_max` at full scale and **0.04% apart at 1e-4**. With identical
+`Vmax` on every exchange of every genome, competition is decided only by internal
+network yield, and in the scarce regime that difference nearly vanishes -- which is
+where this session's 0.02-0.15% R* ties come from. Realistic growth rates make the
+ties *worse*.
+
+So **per-organism `Vmax` (ideally per organism x metabolite) is a required input
+that the models cannot supply**, and it is the one that changes who wins rather
+than merely how fast the clock runs. Transporter capacity is a primary axis of
+real competition and is currently constant across the roster. Until it is
+supplied, read every chemostat result as: orderings, `k`, R* structure and
+steady-state accuracy are meaningful; absolute times, `D` in turnovers/day, and
+the closeness of competitors are not.
+
 #### The chemostat *transient* — `cfs simulate --stiff`, 2026-09-06
 
 `--dilution` made `simulate` a continuous culture from the start, but on explicit

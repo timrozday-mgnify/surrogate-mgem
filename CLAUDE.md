@@ -2522,6 +2522,32 @@ converge because **four members are tied in R* to within 0.015%**
 because no strictly valid state exists to find. **Every unconverged cell in the
 M12 gate now has one explanation: a sub-resolution R\* tie.**
 
+**Per-organism `Vmax` is a required future input — 2026-09-06.** The GEM gives
+the **yield**, never the **rate**: `mu = uptake x yield`, and the uptake bound is
+imposed, not predicted. Every exchange of every roster GEM has
+`|lower_bound| = 1000 mmol/gDW/h` (~100x physiological), so `mu_max` is **0.77 to
+57.6 /h** — doubling times down to **6 minutes** — and `--dilution-frac 0.2` puts
+`D` at **3.7 to 276 turnovers/day**. Absolute timescales are inflated ~30x. M5 is
+unaffected (it normalises by doublings), as are R* orderings and `k`.
+
+The absolute scale needs **no retraining** to fix: the LP sees the bound only as
+`Vmax * u`, so a uniform `Vmax` rescale is exactly a rescale of `u`, the head's
+input. Measured: 10x medium -> 9.9x `mu` in the scarce regime, reaching 2.5 /h at
+1e-4 of the feed.
+
+**But the uniform scale is the wrong knob.** Rescaling toward physiological rates
+moves the community into the supply-limited regime where members become **more**
+alike: cell 2's pair is 3.6% apart in `mu_max` at full scale and **0.04% apart at
+1e-4**. With identical `Vmax` everywhere, competition is decided only by internal
+yield, which nearly vanishes when scarce — that is where the 0.02–0.15% R* ties
+come from. **Realistic growth rates make the ties worse.**
+
+So **per-organism `Vmax` (ideally per organism x metabolite) must be supplied**;
+it is what changes *who wins* rather than how fast the clock runs, and the models
+cannot provide it. Until then: orderings, `k`, R* structure and steady-state
+accuracy are meaningful; absolute times, `D` in turnovers/day, and how close
+competitors are are **not**.
+
 **The chemostat transient works — `cfs simulate --stiff`, 2026-09-06.**
 `--dilution` was always there but on explicit Euler, and the transient is
 **stiff** (the pool equilibrates fast, biomass grows slowly, `mu` saturates at
