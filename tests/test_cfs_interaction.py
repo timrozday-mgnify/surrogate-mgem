@@ -93,3 +93,51 @@ def test_buffered_species_are_pinned_at_saturation():
     assert np.allclose(c[1:], [2e3, 4e3])  # 1e3 * Km
     u = c[1:] / (sur.km[1:] + c[1:])
     assert np.all(u > 0.999)
+
+
+def test_candidate_links_are_a_secretion_meeting_an_uptake(tmp_path):
+    """The enumeration §13.5 seeds from: donor secretes, recipient takes up.
+
+    Built from the labels alone -- no LP -- so the check is that the direction,
+    the dust threshold and the recorded secretion medium are right. `B` secretes
+    metabolite 1 and `A` takes it up, so 1 is a candidate; metabolite 0 is
+    secreted by nobody and metabolite 2 only ever moves at dust level. `B`'s
+    second row is where it secretes hardest, so that row's medium is the one the
+    start has to reproduce.
+    """
+    import json
+
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from cfs.science.interaction import candidate_links
+
+    ex = ["EX_a_e", "EX_b_e", "EX_c_e"]
+    z = {"A": [[-4.0, -2.0, 1e-9], [-4.0, -2.0, 1e-9]],
+         "B": [[-1.0, 3.0, -1e-9], [-1.0, 8.0, -1e-9]]}
+    med = {"A": [[1.0, 1.0, 1.0]] * 2, "B": [[9.0, 9.0, 9.0], [7.0, 5.0, 3.0]]}
+    for g in z:
+        (tmp_path / f"{g}.exchanges.json").write_text(json.dumps({"exchanges": ex}))
+        d = tmp_path / g / "eps_0.001"
+        d.mkdir(parents=True)
+        pq.write_table(
+            pa.table({
+                "z": pa.array(z[g], type=pa.list_(pa.float64())),
+                "medium": pa.array(med[g], type=pa.list_(pa.float64())),
+            }),
+            d / "part.parquet",
+        )
+
+    links, donor_media, donor_box = candidate_links(tmp_path, ["A", "B"], ex)
+    assert set(links) == {"EX_b_e"}
+    assert links["EX_b_e"]["donors"] == ["B"]
+    assert links["EX_b_e"]["recipients"] == ["A"]
+    assert links["EX_b_e"]["best_donor"] == "B"
+    # The medium of B's *hardest* secretion row, not its first.
+    assert np.allclose(donor_media["EX_b_e"], [7.0, 5.0, 3.0])
+    # ...and the box spans *both* rows where B secreted it, which is the region
+    # the starts are drawn from rather than the single best point.
+    lo, hi = donor_box["EX_b_e"]
+    assert np.allclose(lo, [7.0, 5.0, 3.0])
+    assert np.allclose(hi, [9.0, 9.0, 9.0])

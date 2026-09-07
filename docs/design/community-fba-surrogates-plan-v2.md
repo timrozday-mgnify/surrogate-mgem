@@ -4929,6 +4929,88 @@ zinc +5.8 decades, copper, manganese and cobalt -1.8 to -5.7 — i.e. the design
 work by micronutrient limitation, forcing a member to leak what it cannot use.
 That is a hypothesis the report generates, not a result it establishes.
 
+#### Candidate seeding: enumerate the handovers instead of sampling for them — 2026-09-07
+
+A random §4.3 draw contains an interaction by luck, and the luck is bad: measured
+on the labels, most candidate metabolites are secreted in **under 1% of the
+design's media** (AAXE02: acetaldehyde 74.7%, arabinose 0.1%, H2S 0.03%), and a
+handover needs the donor's half and the recipient's half at the *same* medium.
+`--seed-mode candidate` (now the default) enumerates instead. **No LP anywhere in
+the enumeration** — it is a query over the label shards.
+
+**The candidates are few, and they are set by metabolites rather than links.**
+`z > 0` for one member and `z < 0` for another over the roster: 2-16 directed
+links per ordered pair (median 8), and **11-13 distinct candidate metabolites for
+a 2-member community**, 32 at n=5, 62 for all 21 — against 444 exchanges. Every
+donor/recipient pair sharing a metabolite shares one start, because the design
+variable is the medium.
+
+**Both halves have to be arranged, and the secretion half is the one that was
+missed.** Opening only the recipient's §3.3 uptake bound (candidate metabolite
+saturating) realised **16 of 52** reachable handovers over five 2-member cells and
+improved 0/5 — `E` is then pinned by a secretion the design never asked for.
+Adding the donor's own limitation, read off the labels, took it to **24/52** and
+one cell's best start from 1.0 to 814.0.
+
+**Sample the secretion-competent region, do not pin a point (`--box`, default 3).**
+The media where a donor secretes `m` have a bounding box over that donor's
+*active* dims that is 0.08-0.30 of the full design range per dimension — a **1e-5
+to 1e-19 volume fraction**, which is why a draw never lands there — and the box is
+predictive, not merely tight: inside it the secretion rate is **1.1 to 1704x** the
+base rate, with the largest lift on exactly the rare metabolites sampling misses
+(CR626927.1 `EX_gua_e`: 0.04% -> 68.8%). Drawing log-uniformly inside it, floored
+at `_SCARCE * Km` so the range is not spent below detectability:
+
+| best true `E` at a start | draw x64 | uptake | +secretion (pinned) | +exclusive | **box x3** |
+| --- | --- | --- | --- | --- | --- |
+| CR626927.1 + GCA_000151225.1 | 160.2 | 47.0 | 46.8 | 22.0 | **483.5** |
+| CP001726.1 + CP001820.1 | 425.9 | 119.0 | 384.1 | 37.1 | **628.8** |
+| AAXE02 + ABCC02 | 151.5 | 0.0 | **814.0** | 614.8 | 744.9 |
+| CR626927.1 + GCA_000007325.1 | **27.3** | 4.7 | 4.7 | 4.7 | 22.8 |
+| CP040530.1 + CP070062.1 | **292.1** | 123.7 | 169.9 | 125.5 | 123.4 |
+
+**Append, never substitute.** Candidate media realise 24 of 52 handovers and the
+draws 22, with only **20 in common** — 2 links are draws-only and 4
+candidate-only, so neither set contains the other. A candidate start fixes the
+donor's limitation to a medium that made it secrete *in isolation*; a draw can
+land on a joint condition neither member reaches from its own recipe. Appended,
+coverage is **31/52** and the best start comes from `box` on 2 cells, a plain
+`draw` on 2 and the pin on 1.
+
+**And it is what produces multi-link media.** Most handovers realised at one
+medium: box 5/5/4/2/5 against the draws' 4/3/2/1/5. Merging single-link recipes
+into multi-link ones was tried first and is **refuted** — with *last wins* the
+chain collapses (533 at combo3 -> 1.0 at combo4 -> **0.0** by combo7, the later
+candidate overwriting the earlier one's donor settings), with *skip on clash*
+nothing merges at all (candidates routinely share a donor), and with *first wins*
+it is a null against the best single start. Simultaneity comes from sampling the
+region, not from combining points. `combine()` was removed.
+
+**`--verify-steps` is now 8 by default, and it is what makes the design report
+survive.** Ranking the multistarts' *designs* by `E_hat` is the same anti-pattern
+as seeding by it, one level up: unverified, the appended arm improves the true
+rate on **2/5** cells at a median **-6.3%**; at `--verify-steps 8` it is **5/5 at
++27.0%**, V5 passes, and the designed medium's `E_hat/E_true` falls **2.40 ->
+1.67** — the acceptance test also keeps the search out of the region where Head B
+over-predicts, which is P22's whole concern.
+
+| cell | best start | designed | start came from |
+| --- | --- | --- | --- |
+| CR626927.1 + GCA_000151225.1 | 483.5 | 483.5 | box |
+| CP001726.1 + CP001820.1 | 628.8 | **896.0** | box |
+| AAXE02 + ABCC02 | 814.0 | 816.1 | uptake+secretion |
+| CR626927.1 + GCA_000007325.1 | 27.3 | **439.1** | draw |
+| CP040530.1 + CP070062.1 | 292.1 | **371.1** | draw |
+
+**Two traps, both of which read as a result.** `draws` is the per-community
+parameter and the appended count was assigned back to it, so it leaked into the
+*next* community's draw loop — cell 2 drew 130 media where cell 1 drew 64, which
+reads as the seeding improving with position; cell 0 matching the control exactly
+is what caught it. And per-variant coverage first scored a medium by whether its
+*last targeted* metabolite was realised, which is the wrong question for a start
+whose point is simultaneity, and reported the combination arm as a flat zero.
+`by_variant` now reports each variant's best rate and its most links at one medium.
+
 ### 13.6 Where HMC is the right tool — and where it is not
 
 Three of the four use cases above are optimisation, and a sampler is the wrong

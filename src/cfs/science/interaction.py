@@ -43,6 +43,7 @@ Two halves, and the first needs no optimiser:
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 from pathlib import Path
@@ -370,6 +371,200 @@ def survey(sur, C: np.ndarray, X: np.ndarray, alpha: float = 1.0, chunk: int = 6
     return np.concatenate(E), np.concatenate(EX)
 
 
+
+# --------------------------------------------------------------------------- #
+# Candidate seeding: enumerate the handovers, then seed one start per one
+# --------------------------------------------------------------------------- #
+
+# "Scarce" for a metabolite we are deliberately taking off the table: `u =
+# c/(Km+c) ~ 1e-3`, so §3.3's uptake bound is ~0 without the medium reaching
+# zero. Not zero on purpose -- a dead member has `z = 0`, so `E_true = 0`, which
+# is the all-zero-start failure `--screen` exists to avoid, and it also disarms
+# the acceptance test (any positive step "improves" zero).
+_SCARCE = 1e-3
+
+
+def candidate_links(
+    labels_dir, gids: list[str], exchanges: list[str], eps: str = "0.001", rows: int = 3000
+) -> dict[str, dict]:
+    """Which handovers this community could reach at all, from the labels. **No LP.**
+
+    A metabolite is a candidate when some member is *observed* to secrete it
+    (``z > 0`` at any labelled medium) and another is observed to take it up.
+    That is a lower bound on capability -- the capability version is one
+    exchange-FVA per organism -- but it costs zero solves and it is the regime
+    the heads were trained in.
+
+    Measured on the 21-genome roster: 2 to 16 directed links per ordered pair
+    (median 8), and **11-13 distinct candidate metabolites for a 2-member
+    community**, 62 for the whole roster out of 444 exchanges. So the start count
+    is set by the *metabolites*, not by the links -- every donor/recipient pair
+    sharing a metabolite shares one start, because the design variable is the
+    medium.
+
+    Returns ``(links, donor_media, donor_box)``. ``donor_media[m]`` is the labelled
+    medium at which the best donor secreted ``m`` hardest and ``donor_box[m]`` is
+    the ``(lo, hi)`` envelope of **every** medium where it secreted ``m`` at all,
+    both mapped to the global index -- **the secretion half of the handover, read
+    off the labels for free.**
+
+    The box is what makes the region samplable rather than a single point. Most
+    candidates are secreted in **under 1% of the design's media** (AAXE02:
+    acetaldehyde 74.7%, arabinose 0.1%, H2S 0.03%), and a draw has to arrange the
+    donor's half and the recipient's at once -- which is why random draws realise
+    about half the reachable links. Per dimension the box is 0.08-0.30 of the full
+    design range, i.e. a 1e-5 to 1e-19 volume fraction, and it is *predictive*:
+    inside it the secretion rate rises 1.1-1704x over the base rate, with the
+    largest lift exactly on the rare metabolites sampling misses. Opening
+    the recipient's uptake bound is not enough on its own: ``E = min(secretion,
+    uptake)``, so a start that only lifts the uptake side is pinned by a secretion
+    the design never asked for. Measured that way first: 2-5 of 10-11 candidates
+    realised, and 0 of 5 cells improved.
+    """
+    import pyarrow.parquet as pq
+
+    col = {e: i for i, e in enumerate(exchanges)}
+    S, U, best = {}, {}, {}
+    for g in gids:
+        loc = json.loads((Path(labels_dir) / f"{g}.exchanges.json").read_text())
+        loc = loc["exchanges"] if isinstance(loc, dict) else loc
+        idx = np.array([col[e] for e in loc if e in col])
+        s = np.zeros(len(exchanges), bool)
+        u = np.zeros(len(exchanges), bool)
+        # Per metabolite: the largest secretion seen, the medium it happened at,
+        # and the envelope of every medium where it was secreted at all.
+        top = np.zeros(len(exchanges))
+        med = np.zeros((len(exchanges), len(exchanges)))
+        lo = np.full((len(exchanges), len(exchanges)), np.inf)
+        hi = np.full((len(exchanges), len(exchanges)), -np.inf)
+        for f in sorted((Path(labels_dir) / g / f"eps_{eps}").glob("part*.parquet")):
+            tab = pq.read_table(f, columns=["z", "medium"]).slice(0, rows)
+            Z = np.stack(tab.column("z").to_numpy(zero_copy_only=False))
+            M = np.stack(tab.column("medium").to_numpy(zero_copy_only=False))
+            # Same threshold discipline as `data._DUAL_TOL`: half the "non-zero"
+            # entries in these shards are solver dust.
+            t = _LINK_TOL * float(np.abs(Z).max())
+            s[idx] |= (Z > t).any(0)
+            u[idx] |= (Z < -t).any(0)
+            r = Z.argmax(0)
+            v = Z[r, np.arange(Z.shape[1])]
+            better = v > top[idx]
+            top[idx[better]] = v[better]
+            med[np.ix_(idx[better], idx)] = M[r[better]]
+            for a, j in enumerate(idx):
+                sel = Z[:, a] > t
+                if sel.any():
+                    lo[np.ix_([j], idx)] = np.minimum(lo[j, idx], M[sel].min(0))
+                    hi[np.ix_([j], idx)] = np.maximum(hi[j, idx], M[sel].max(0))
+        S[g], U[g], best[g] = s, u, (top, med, lo, hi)
+
+    links: dict[str, dict] = {}
+    donor_media: dict[str, np.ndarray] = {}
+    donor_box: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for a, b in itertools.permutations(gids, 2):
+        for m in np.flatnonzero(S[a] & U[b]):
+            ex = exchanges[m]
+            d = links.setdefault(ex, {"donors": [], "recipients": [], "best_donor": None,
+                                      "best_secretion": 0.0})
+            if a not in d["donors"]:
+                d["donors"].append(a)
+            if b not in d["recipients"]:
+                d["recipients"].append(b)
+            if best[a][0][m] > d["best_secretion"]:
+                d["best_donor"], d["best_secretion"] = a, float(best[a][0][m])
+                donor_media[ex] = best[a][1][m]
+                donor_box[ex] = (best[a][2][m], best[a][3][m])
+    return links, donor_media, donor_box
+
+
+def candidate_media(
+    sur, labels_dir, gids: list[str], links: dict, donor_media: dict, donor_box: dict,
+    keep: np.ndarray, seed: int, box: int = 3, scales=None,
+):
+    """Starts per candidate metabolite: ``(C, targets)``.
+
+    ``E = min(total secretion, total uptake)``, so a start has to arrange **both
+    halves** of the handover. Every variant sets the candidate metabolite
+    saturating -- the *uptake* half, since §3.3's bound is ``-Vmax * u`` and a
+    scarce metabolite caps the recipient however much the donor leaks. They differ
+    in how they arrange the *secretion* half, over the best donor's own active
+    subspace, which is what fixes its limitation and therefore what it overflows:
+
+    * ``uptake`` -- not at all. Measured first and not enough: 2-5 of 10-11
+      candidates realised under the true LP, and 0 of 5 cells improved.
+    * ``uptake+secretion`` -- pinned to the labelled medium where that donor
+      secreted the metabolite hardest. One point, so no diversity.
+    * ``uptake+secretion+exclusive`` -- the same, plus every *other* candidate made
+      scarce, so the targeted one is the only handover on offer. Restricted to
+      metabolites in no member's active subspace, which by construction cannot
+      change any member's growth rate, so it cannot starve the recipient into the
+      dead state that would make the LP screen meaningless.
+    * ``box`` (``box`` of them) -- drawn log-uniformly inside the envelope of
+      *every* medium where the donor secreted it. The point of the box over the
+      pin: the region is 1e-5 to 1e-19 of the design volume, so a §4.3 draw never
+      finds it, but inside it the secretion rate is 1.1-1704x the base rate -- so
+      this samples the interaction-competent region instead of one corner of it.
+
+    The lower end of each box dimension is floored at ``_SCARCE * Km``: a labelled
+    medium can have a metabolite at 0, and a log-uniform draw from there spends
+    most of its range on concentrations no experiment distinguishes from absent.
+    """
+    from cfs.compose.dfba import community_medium
+    from cfs.sampling.active_subspace import load_subspaces
+
+    col = {e: i for i, e in enumerate(sur.exchanges)}
+    cand = sorted(m for m in links if m in col and keep[col[m]])
+    subs = {}
+    for g in gids:
+        subs |= load_subspaces(Path(labels_dir) / f"{g}.subspace.json")
+    active = {e for g in gids for e in subs[g].active}
+    variants = ["uptake", "uptake+secretion", "uptake+secretion+exclusive"] + ["box"] * box
+
+    C, targets = [], []
+    for k, m in enumerate(cand):
+        donor = links[m].get("best_donor")
+        for d, var in enumerate(variants):
+            rng = np.random.default_rng(seed + 1000 * k + d)
+            spec: dict[int, float] = {}
+            c = buffer_medium(
+                sur,
+                community_medium(labels_dir, gids, sur.exchanges, seed + 1000 * k + d, scales),
+                keep,
+            )
+            dims = (
+                [col[e] for e in subs[donor].active if e in col and keep[col[e]]]
+                if donor is not None else []
+            )
+            if var.startswith("uptake+secretion") and m in donor_media:
+                dm = donor_media[m]
+                spec |= {j: dm[j] for j in dims}
+            elif var == "box" and m in donor_box:
+                blo, bhi = donor_box[m]
+                for j in dims:
+                    lo = max(float(blo[j]), _SCARCE * float(sur.km[j]))
+                    hi = max(float(bhi[j]), lo)
+                    spec[j] = float(10.0 ** rng.uniform(np.log10(lo), np.log10(hi)))
+            spec[col[m]] = _BUFFER_SAT * sur.km[col[m]]
+            if var.endswith("exclusive"):
+                spec |= {
+                    col[o]: _SCARCE * sur.km[col[o]]
+                    for o in cand if o != m and o not in active
+                }
+            for j, v in spec.items():
+                c[j] = v
+            C.append(c)
+            targets.append(
+                {
+                    "metabolite": m,
+                    "variant": var,
+                    "donors": links[m]["donors"],
+                    "recipients": links[m]["recipients"],
+                    "best_donor": donor,
+                }
+            )
+    return np.array(C), targets
+
+
 def distinguishing(c: np.ndarray, c_ref: np.ndarray, exchanges: list[str], top: int = 10):
     """What a designed medium changed, largest log-fold first — the readable half.
 
@@ -502,9 +697,11 @@ def run(
     seed: int = 0,
     scales: Path | None = None,
     verify: bool = True,
-    verify_steps: int = 0,
+    verify_steps: int = 8,
     buffered: tuple[str, ...] = _BUFFERED,
     screen: bool = True,
+    seed_mode: str = "candidate",
+    box: int = 3,
 ) -> dict:
     """Survey the interactions a community can reach, then design media for them.
 
@@ -541,6 +738,14 @@ def run(
         X = np.ones(G)  # uniform reference abundance: E is then per unit biomass
         al = alpha
         keep = keep_mask(sur.exchanges, buffered)
+        # `draws`: random §4.3 media, and whether one contains a handover is luck.
+        # `candidate`: one start per metabolite the labels say *could* be handed
+        # over, with that metabolite's uptake bound opened -- so the multistart
+        # covers every reachable link by construction instead of by sampling.
+        # Enumerated in both modes: it costs no LP, and it is what makes the two
+        # comparable -- "which reachable handovers did this seeding actually
+        # realise" is the question, and a random draw has to be scored on it too.
+        links, donor_media, donor_box = candidate_links(labels_dir, gids, sur.exchanges)
         C = np.array(
             [buffer_medium(
                 sur,
@@ -549,6 +754,27 @@ def run(
              )
              for d in range(draws)]
         )
+        targets = None
+        if seed_mode == "candidate":
+            # **Appended, not substituted.** Measured over five 2-member cells:
+            # the candidate media realise 24 of 52 reachable handovers and the
+            # draws 22, with only 20 in common -- 2 links are draws-only and 4
+            # candidate-only, so neither set contains the other. A candidate start
+            # fixes the *donor's* limitation to the medium that made it secrete in
+            # isolation; a draw can land on a joint condition neither member
+            # reaches from its own recipe. The draws also still win the raw rate
+            # on 4 of 5 cells.
+            Cc, targets = candidate_media(
+                sur, labels_dir, gids, links, donor_media, donor_box, keep,
+                seed + n * 1000, box=box, scales=scales
+            )
+            targets = [{"metabolite": None, "variant": "draw"}] * len(C) + targets
+            C = np.concatenate([C, Cc])
+        # NOT `draws`: that is the per-community parameter, and reassigning it
+        # leaked the appended count into the *next* community's draw loop -- cell
+        # 2 drew 130 media where cell 1 drew 64, which reads as the seeding
+        # getting better with position.
+        n_media = len(C)
         E, EX = survey(sur, C, X, al, keep=keep)
 
         # Which interactions are reachable *at all*, and how often. This is the
@@ -582,17 +808,57 @@ def run(
         # One LP per member per draw is the highest-value LP in the whole run.
         rank_rho = float("nan")
         if verify and screen:
-            E_true_draws = np.array(
-                [float(exchange(true_z(models, sur.exchanges, c), X, keep).sum()) for c in C]
-            )
+            # Keep the per-metabolite vector, not just its sum: the sum ranks
+            # the starts, the vector says which handovers were realised at all.
+            EX_true = np.array([exchange(true_z(models, sur.exchanges, c), X, keep) for c in C])
+            E_true_draws = EX_true.sum(1)
             best = np.argsort(-E_true_draws)[:starts]
             if len(E_true_draws) > 2 and E_true_draws.std() > 0 and E.std() > 0:
                 from scipy.stats import spearmanr
 
                 rank_rho = float(spearmanr(E, E_true_draws).statistic)
         else:
-            E_true_draws = None
+            EX_true = E_true_draws = None
             best = np.argsort(-E)[:starts]
+
+        # Coverage: of the metabolites the labels say could be handed over, how
+        # many have a start the *LP* calls interactive. The point of candidate
+        # seeding, and it needs the screen to be measurable.
+        cand_cov = None
+        if EX_true is not None:
+            col = {e: i for i, e in enumerate(sur.exchanges)}
+            cand = sorted(m for m in links if m in col and keep[col[m]])
+            hit = [m for m in cand if EX_true[:, col[m]].max() > 1e-6]
+            cand_cov = {
+                "n_candidates": len(cand),
+                "n_true_interactive": len(hit),
+                "interactive": hit,
+                "missed": [m for m in cand if m not in hit],
+                # Did the "make every other candidate scarce" variant earn its place?
+                # Which variant the LP's own best start came from -- the only
+                # way to tell whether the secretion half earned its screens.
+                "best_variant": (
+                    None if targets is None
+                    else targets[int(np.argmax(E_true_draws))]["variant"]
+                ),
+                # Per variant: the best rate and the most handovers *at one
+                # medium*. A combination start is not scored by whether its last
+                # merged metabolite worked -- the point of it is simultaneity.
+                "by_variant": (
+                    None if targets is None
+                    else {
+                        v: {
+                            "n_media": int(sel.sum()),
+                            "E_true_max": float(E_true_draws[sel].max()),
+                            "max_links_at_one_medium": int(
+                                (EX_true[sel] > 1e-6).sum(1).max()
+                            ),
+                        }
+                        for v in dict.fromkeys(t["variant"] for t in targets)
+                        for sel in [np.array([t["variant"] == v for t in targets])]
+                    }
+                ),
+            }
         designs = []
         for s in best:
             c0 = C[s]
@@ -614,6 +880,7 @@ def run(
             designs.append(
                 {
                     "start_draw": int(s),
+                    "target": None if targets is None else targets[int(s)],
                     "E_start": float(E[s]),
                     "E_hat": E_star,
                     "changed": distinguishing(c_star, c0, sur.exchanges),
@@ -632,7 +899,17 @@ def run(
 
         cell = {
             "community": gids,
-            "n_draws": draws,
+            "seed_mode": seed_mode,
+            "n_candidate_metabolites": len(links),
+            "candidates": (
+                None if targets is None
+                else sorted({t["metabolite"] for t in targets if t["metabolite"]})
+            ),
+            # Per candidate metabolite: did any of its starts have a true
+            # interaction? This is the number the seeding is for -- coverage of
+            # the reachable links, which a random draw gets by luck.
+            "candidates_true_interactive": cand_cov,
+            "n_draws": n_media,
             "E_draws_median": float(np.median(E)),
             "E_draws_max": float(E.max()),
             # Whether the head can rank media for this objective at all. If this

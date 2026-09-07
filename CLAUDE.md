@@ -3201,6 +3201,49 @@ designs work by moving **trace metals** (Zn +5.8 decades, Cu/Mn/Co -1.8 to -5.7)
 far more than carbon — micronutrient limitation forcing a member to leak what it
 cannot use. A hypothesis the tool generates, not one it establishes.
 
+**Candidate seeding is the default (2026-09-07), and it needs no LP to build.**
+A random §4.3 draw contains a handover by luck: most candidate metabolites are
+secreted in **under 1% of the design's media**, and `E` needs the donor's half and
+the recipient's half at the *same* medium. `--seed-mode candidate` enumerates them
+from the label shards instead — `z > 0` for one member, `z < 0` for another —
+which is **11-13 metabolites for a pair**, 62 for the whole roster, against 444
+exchanges. Starts are per *metabolite*, not per link, because the design variable
+is the medium.
+
+1. **Both halves, and the secretion half is the one that gets missed.** Opening
+   only the recipient's §3.3 uptake bound realised **16 of 52** handovers over
+   five 2-member cells and improved 0/5. Adding the donor's own limitation — the
+   labelled medium where it secreted that metabolite hardest — took it to 24/52.
+2. **Sample the region, do not pin the point (`--box`, default 3).** The box of
+   media where a donor secretes `m`, over that donor's active dims, is 0.08-0.30
+   of the design range per dimension (**1e-5 to 1e-19** of the volume, so a draw
+   never lands there) and inside it the secretion rate is **1.1-1704x** the base
+   rate, largest on exactly the rare metabolites sampling misses. Best true start
+   rate: box **483.5 / 628.8** against 64 draws' 160.2 / 425.9 on two cells, and
+   it gives the most simultaneous links on 4 of 5.
+3. **Append, never substitute.** Candidate media realise 24/52 links and the draws
+   22, with **20 in common** — neither set contains the other, and appended it is
+   31/52. A candidate start fixes the donor's limitation to a medium that made it
+   secrete *in isolation*; a draw can find a joint condition neither member
+   reaches alone.
+4. **Combining single-link recipes is refuted, three ways.** *Last wins*: the
+   chain collapses (533 -> 1.0 -> **0.0** by combo7, the later candidate
+   overwriting the earlier one's donor settings). *Skip on clash*: nothing merges,
+   since candidates routinely share a donor. *First wins*: a null. Simultaneity
+   comes from the box, not from merging. `combine()` removed.
+5. **`--verify-steps` is now 8**, because ranking the *designs* by `E_hat` is the
+   seeding anti-pattern one level up: unverified the appended arm improves the
+   true rate on 2/5 cells at a median **-6.3%**, at 8 steps it is **5/5 at
+   +27.0%** with V5 passing and `E_hat/E_true` **2.40 -> 1.67**.
+
+**Two traps that both read as results.** `draws` is the per-community parameter
+and the appended count was written back to it, leaking into the *next* community's
+draw loop — cell 2 drew 130 media where cell 1 drew 64, which reads as the seeding
+improving with position, and cell 0 matching the control exactly is what caught
+it. And per-variant coverage first asked whether a medium's *last targeted*
+metabolite was realised, which is the wrong question for a start whose point is
+simultaneity; it reported the combination arm as a flat zero.
+
 **Two engineering notes.** A rejected ascent step costs a *value*, not a gradient
 — 0.022 s against 1.7 s for the batched FD Jacobian, and backtracking rejects ~19
 in 20, so taking the gradient only after acceptance turned 36 s into 4.5 s for an

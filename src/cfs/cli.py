@@ -550,12 +550,14 @@ def build_parser() -> argparse.ArgumentParser:
     ix.add_argument("--iters", type=int, default=120)
     ix.add_argument("--alpha", type=float, default=1.0, help="Growth fraction for Head B.")
     ix.add_argument(
-        "--verify-steps", type=int, default=0,
-        help="Trust-region iterations with the true LP as the acceptance test. "
-        "Without it the ascent optimises a magnitude the head over-predicts by "
-        "1.6x to infinity and the true rate does not follow; with it the designed "
-        "medium cannot be worse than its start under the LP. Costs one FBA per "
-        "member per iteration.",
+        "--verify-steps", type=int, default=8,
+        help="Trust-region iterations with the true LP as the acceptance test; 0 "
+        "disables. Without it the ascent optimises a magnitude the head "
+        "over-predicts by 1.6x to infinity and the true rate does not follow; with "
+        "it the designed medium cannot be worse than its start under the LP. "
+        "Measured over five 2-member cells: 5/5 cells improve their true rate at a "
+        "median +27%%, against 2/5 and -6%% unverified, and the designed medium's "
+        "E_hat/E_true falls 2.40 -> 1.67. Costs one FBA per member per iteration.",
     )
     ix.add_argument(
         "--no-verify", action="store_true",
@@ -580,6 +582,24 @@ def build_parser() -> argparse.ArgumentParser:
         "Measured Spearman(E_hat, E_true) over 64 draws on one community: -0.053, "
         "with every E_hat-seeded start at a true rate of zero — so this seeds "
         "where the head is most optimistic, which is what the search exploits.",
+    )
+    ix.add_argument(
+        "--seed-mode", choices=("draws", "candidate"), default="candidate",
+        help="'draws': random §4.3 media, and whether one contains a handover is "
+        "luck. 'candidate': enumerate the metabolites the labels say some member "
+        "secretes and another takes up (no LP), then seed one start per one with "
+        "that metabolite's uptake bound opened — so the multistart covers every "
+        "reachable link by construction. Measured on the roster: 11-13 candidate "
+        "metabolites for a pair, 62 for all 21, against 444 exchanges.",
+    )
+    ix.add_argument(
+        "--box", type=int, default=3,
+        help="With --seed-mode candidate: extra starts per candidate drawn inside "
+        "the envelope of every labelled medium where the donor secreted that "
+        "metabolite. That region is 1e-5 to 1e-19 of the design volume, so a §4.3 "
+        "draw never lands in it, and inside it the secretion rate is 1.1-1704x the "
+        "base rate -- largest exactly on the rare metabolites sampling misses. "
+        "0 disables.",
     )
     ix.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the draws.")
     ix.add_argument("--seed", type=int, default=0)
@@ -1073,6 +1093,7 @@ def main(argv: list[str] | None = None) -> int:
             invade_rel=args.invade_rel,
             warm_start=args.warm_start,
             seed_mode=args.seed_mode,
+            box=args.box,
             seed_probes=args.seed_probes,
             seed=args.seed,
             scales=args.scales,
@@ -1126,6 +1147,7 @@ def main(argv: list[str] | None = None) -> int:
             verify_steps=args.verify_steps,
             buffered=tuple(m for m in args.buffered.split(",") if m),
             screen=not args.no_screen,
+            seed_mode=args.seed_mode,
         )
         print(json.dumps({k: v for k, v in report.items() if k != "cells"}, indent=2))
         return 0 if report.get("passed", True) else 1
