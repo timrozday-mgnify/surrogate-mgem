@@ -4929,7 +4929,7 @@ must budget a matched control.
 | M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 does NOT pass in general — those 5.6e-7 to 3.1e-6 figures are *medians* at 5 components, and at 20 the max is 6.2e-05 on the one cell with a decisive invasion margin but 4.5e-02 to 3.8e-01 on the near-tie cells, where a feed perturbation crosses the survivor swap and the difference quotient spans two branches; the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the default warm start returns a *strictly invadable* state on 2 of the 4 converging cells — seeding from each member's monoculture instead finds the valid one, and takes the two hardest cells from residual 10 to 1e-5** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
-| M15 | §13.10 kinetic-parameter inference from a chemostat time series | **gate met on synthetic data 2026-09-06, and it does not survive model error.** `Surrogate.lam` is the per-organism rate scale (nine lines, no relabelling, no retraining). Against surrogate-generated data both directions clear the integrator's noise floor by 2-5 orders and an 80-evaluation simplex recovers `lambda` to 0.15% once OD is added (a longer window does the same, with 15x *worse* conditioning -- the outcome tracks the weak direction's signal-to-noise, not the curvature ratio). Against **LP-generated** data (`--lp`, blockers 4+5) the model discrepancy is 5484x the integrator floor, and the two directions split: the ratio still carries 79x the floor and comes out +2.5%, while the scale direction moves the residual **less than the surrogate's own bias does** (0.65-1.5x) and comes out **-28%**, with `sse_hat` at 0.06 of the residual at `lam_true` -- i.e. `lambda` absorbing head error rather than being identified. **Report ratios, not the global scale.** Gate: recover a known per-organism `lambda` from synthetic `cfs simulate --stiff` data on a 2-member chemostat, before any adjoint work. Blocked downstream on the same error model as M14 |
+| M15 | §13.10 kinetic-parameter inference from a chemostat time series | **gate met on synthetic data 2026-09-06, and it does not survive model error.** `Surrogate.lam` is the per-organism rate scale (nine lines, no relabelling, no retraining). Against surrogate-generated data both directions clear the integrator's noise floor by 2-5 orders and an 80-evaluation simplex recovers `lambda` to 0.15% once OD is added (a longer window does the same, with 15x *worse* conditioning -- the outcome tracks the weak direction's signal-to-noise, not the curvature ratio). Against **LP-generated** data (`--lp`, blockers 4+5) the model discrepancy is 5484x the integrator floor, and the two directions split: the ratio still carries 79x the floor and comes out +2.5%, while the scale direction moves the residual **less than the surrogate's own bias does** (0.65-1.5x) and comes out **-28%**, with `sse_hat` at 0.06 of the residual at `lam_true` -- i.e. `lambda` absorbing head error rather than being identified. **Report ratios, not the global scale.** Attributed 2026-09-07: the discrepancy is entirely Head B's `mu_floor`, which a chemostat sits under by construction (`D < 0.05 x mean training mu`; 21/21 states, floor 18-54x the actual `mu`) -- and **removing it is refuted**, 88x better pointwise `dc_rel` for an 8-15x worse trajectory and a +137% scale error, because the vessel's feedback on `c` closes at the right medium only when consumption is large. Seventh instance of P26/[[rhs-accuracy-does-not-buy-the-endpoint]]. Gate: recover a known per-organism `lambda` from synthetic `cfs simulate --stiff` data on a 2-member chemostat, before any adjoint work. Blocked downstream on the same error model as M14 |
 
 M9–M11 need nothing that does not already exist. M12 is M6. M13, M14 and M15 are the
 research half, and M14 is blocked on a piece of work — the error model — that is
@@ -5237,6 +5237,87 @@ cannot see this at all: it reports the scale at 323-1998x its floor and the fit
 recovering it to 0.15%. The floor it measured was the wrong one. **Any inverse
 problem posed on a surrogate has to quote its residual at the true parameter
 before it quotes its estimate.**
+
+#### The discrepancy is Head B's `mu_floor`, and a chemostat sits under it by construction — 2026-09-07
+
+`lambda_attrib.py` attributes the discrepancy above, and it costs **no solves**:
+the cached LP truth already stores `mu(t)` and `dc(t)`, so the surrogate is
+scored against it *pointwise* at the LP path's own 21 states. §8.6b's identity
+is why pointwise suffices — `d(log X)/dt = mu`, so the trajectory error is the
+relative `mu` error integrated along the path.
+
+| at the LP path's own states, `lam = lam_true` | |
+| --- | --- |
+| Head A signed `mu_rel`, median | **+0.024 / +0.048** (\|max\| 0.054 / 0.106) |
+| Head A signed `mu_rel` at the fitted `lam_hat` | **-0.250 / -0.245** |
+| Head B `dc_rel` median / max | **18.48 / 62.87** |
+| Head B `dc_cos` median / min | 0.825 / 0.658 |
+| Head B `dc_rel` with `mu_floor` zeroed | **0.209 / 0.497** (**88x better**) |
+
+1. **`lambda` was not compensating Head A — a prediction made in advance, and
+   refuted.** Head A is within 2.4-4.8% along the whole path, so a fit correcting
+   it would have landed near -3%; instead `lam_hat` **overshoots to -25%** on both
+   members. The -28% is paying for something else.
+2. **It pays for Head B, and one clamp is the whole of it.** All **21 of 21**
+   states are below `mu_floor` on **both** members — median `mu_hat` 0.060 / 0.025
+   against floors of 1.10 / 1.32, so the floor is **18x and 54x** the actual growth
+   rate. Inference multiplies specific flux back by `max(mu, mu_floor)`, so the
+   floor, not the growth rate, sets every predicted flux. That is §8.6e's 3318x
+   mechanism evaluated at its operating point.
+3. **The regime is structural.** A chemostat holds `mu = D` for its whole run, and
+   `mu_floor` is 5% of the organism's *mean training* `mu`, a distribution
+   dominated by plateau media — here the floor exceeds `mu` even at the feed.
+   **The floor bites whenever `D < 0.05 x mean training mu`**, which is the normal
+   chemostat operating point, and it is checkable at runtime with no solves.
+4. **It also reprices §8.6g(4) for this use case.** `--fallback-depth 0.9` fires
+   on *every* step of a chemostat — depth is `D/mu(0)` = 0.083 at the start and
+   0.036 at the end, against the 24.6% fire rate measured along a batch. Along a
+   trajectory that is a full LP and not a 4x saving; at a single equilibrium
+   (§13.4) it is one state and still cheap. The claim in the previous section that
+   the LP correction is "affordable" holds for the fixed point, **not** for the
+   transient a fit needs.
+
+
+**...and removing the floor is refuted: 88x better rhs, 8-15x worse trajectory
+— 2026-09-07.** §8.6e kept the `mu_floor` because dropping it made *batch*
+endpoints 30x worse by changing which metabolite empties first. A chemostat is
+continuously fed and has no such endpoint, so that objection was argued not to
+transfer. **It transfers.** `lambda_ident.py --no-mu-floor` (scoped to this use
+case, off by default), same cached LP truth, same 80-evaluation simplex:
+
+| | **floor on (shipped)** | floor off |
+| --- | --- | --- |
+| pointwise `dc_rel` median at the LP states | 18.48 | **0.209** (88x better) |
+| discrepancy floor, ratio / OD channel | **4.2e-03 / 1.2e-02** | 3.4e-02 / 1.9e-01 (**8.3x / 15.1x worse**) |
+| ratio direction, +10% on one | **79x** floor | **5x** floor |
+| `lam_hat` (truth 1.0, 0.4) | (0.7265, 0.2835) | (2.345, 0.960) |
+| ratio error | **+2.5%** | -2.3% |
+| **scale error** | **-28%** | **+137%** |
+| `sse_hat` / `sse` at `lam_true` | 0.06 | 0.91 |
+
+1. **The mechanism is the chemostat's own feedback, and it is why an absurd
+   pointwise error is the better one.** The vessel is a negative feedback loop on
+   `c`: whatever `z` is, the medium moves until `mu(c) = D`, which Head A sets
+   correctly. With the floor **on**, `z` is 20-50x too large, so the pool draws
+   down, the loop closes at roughly the right `c(t)`, and only the biomass *level*
+   is biased (`X z` must balance the dilution supply, so `X` comes out small). With
+   the floor **off**, `z ~ mu` is ~20x too *small*, the community barely consumes,
+   the pool never draws down, `mu` never falls to `D` — the trajectory is
+   qualitatively wrong, not quantitatively.
+2. **So this is the seventh instance of
+   [[rhs-accuracy-does-not-buy-the-endpoint]], and the first where the batch
+   mechanism was argued in advance not to apply.** The argument was specific and
+   plausible and still wrong: "no metabolite empties" is not the same as "the
+   pool's path does not matter".
+3. **The ratio survives both arms** (+2.5% / -2.3%) while the scale swings -28% to
+   +137%. That is a third, independent confirmation of the M15 reading: **report
+   per-organism rate ratios, refuse the global scale.**
+4. **`sse_hat` is 0.91 of the residual at `lam_true`** — the fit barely moves it.
+   Where the floor-on arm had `lambda` *absorbing* model error, here the
+   discrepancy simply dominates and the parameter can do nothing about it. Both
+   are failures; only the reference at `lam_true` distinguishes them.
+
+**Keep the floor.** The fix for §13.10's scale direction is not this knob.
 
 ## Appendix — repository layout
 

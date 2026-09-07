@@ -2994,6 +2994,88 @@ and is cached to an npz; the fit is unchanged.
    posed on a surrogate must quote its residual at the true parameter before it
    quotes its estimate.**
 
+
+**And the discrepancy is Head B's `mu_floor`, which the chemostat sits under by
+construction — 2026-09-07.** `lambda_attrib.py` scores the surrogate against the
+cached LP truth *pointwise*, at the LP path's own 21 states. **No solves**: the
+cache already stores `mu(t)` and `dc(t)`. §8.6b's identity is why pointwise is
+enough — `d(log X)/dt = mu`, so the trajectory error is the relative `mu` error
+integrated along the path.
+
+| at the LP path's own states, `lam = lam_true` | |
+| --- | --- |
+| Head A signed `mu_rel`, median | **+0.024 / +0.048** (\|max\| 0.054 / 0.106) |
+| Head A signed `mu_rel` at **`lam_hat`** | **-0.250 / -0.245** |
+| Head B `dc_rel` median / max | **18.48 / 62.87** |
+| Head B `dc_cos` median / min | 0.825 / 0.658 |
+
+1. **`lambda` was not compensating Head A, and the obvious reading is refuted.**
+   Head A is within 2.4-4.8% along the whole path, so a fit correcting *it* would
+   have landed near -3%. Instead `lam_hat` **overshoots to -25%** on both members.
+   The prediction was made before the measurement and it failed — the -28% is
+   paying for something else.
+2. **It is paying for Head B, and the cause is one clamp.** All **21 of 21**
+   states are below `mu_floor` on **both** members: median `mu_hat` 0.060 / 0.025
+   against floors of **1.10 / 1.32**, i.e. the floor is 18x and 54x the actual
+   growth rate. Inference multiplies specific flux back by `max(mu, mu_floor)`,
+   so the *floor* sets every predicted flux. This is §8.6e's 3318x mechanism at
+   its operating point. Zeroing the floor (keeping the reparametrisation) takes
+   `dc_rel` **18.48 -> 0.209** and `dc_cos` 0.825 -> 0.978, an **88x** pointwise
+   improvement, which identifies it as the whole of Head B's error here.
+3. **The regime is structural, not an unlucky draw.** A chemostat holds
+   `mu = D` for its whole run, and `mu_floor` is 5% of the organism's *mean
+   training* `mu` — a distribution dominated by plateau media. Here the floor
+   exceeds `mu` even at the feed (`mu0` 0.769 / 0.308). **The floor bites whenever
+   `D < 0.05 x mean training mu`, which is the normal chemostat operating point**,
+   and it is checkable at runtime with no solves.
+4. **So §13.7's "the steady state is the most exposed use case" is now mechanised,
+   and the price is worse than §8.6g(4) implies.** `--fallback-depth 0.9` fires on
+   *every* step of a chemostat (depth = `D/mu(0)` = 0.083 here, and ends at 0.036),
+   not the 24.6% measured along a batch. Along a trajectory that is a full LP; at
+   a single equilibrium it is still one state and still cheap.
+
+
+**...and removing the floor is refuted: 88x better rhs, 8-15x worse trajectory
+— 2026-09-07.** §8.6e kept the `mu_floor` because dropping it made *batch*
+endpoints 30x worse by changing which metabolite empties first. A chemostat is
+continuously fed and has no such endpoint, so that objection was argued not to
+transfer. **It transfers.** `lambda_ident.py --no-mu-floor` (scoped to this use
+case, off by default), same cached LP truth, same 80-evaluation simplex:
+
+| | **floor on (shipped)** | floor off |
+| --- | --- | --- |
+| pointwise `dc_rel` median at the LP states | 18.48 | **0.209** (88x better) |
+| discrepancy floor, ratio / OD channel | **4.2e-03 / 1.2e-02** | 3.4e-02 / 1.9e-01 (**8.3x / 15.1x worse**) |
+| ratio direction, +10% on one | **79x** floor | **5x** floor |
+| `lam_hat` (truth 1.0, 0.4) | (0.7265, 0.2835) | (2.345, 0.960) |
+| ratio error | **+2.5%** | -2.3% |
+| **scale error** | **-28%** | **+137%** |
+| `sse_hat` / `sse` at `lam_true` | 0.06 | 0.91 |
+
+1. **The mechanism is the chemostat's own feedback, and it is why an absurd
+   pointwise error is the better one.** The vessel is a negative feedback loop on
+   `c`: whatever `z` is, the medium moves until `mu(c) = D`, which Head A sets
+   correctly. With the floor **on**, `z` is 20-50x too large, so the pool draws
+   down, the loop closes at roughly the right `c(t)`, and only the biomass *level*
+   is biased (`X z` must balance the dilution supply, so `X` comes out small). With
+   the floor **off**, `z ~ mu` is ~20x too *small*, the community barely consumes,
+   the pool never draws down, `mu` never falls to `D` — the trajectory is
+   qualitatively wrong, not quantitatively.
+2. **So this is the seventh instance of
+   [[rhs-accuracy-does-not-buy-the-endpoint]], and the first where the batch
+   mechanism was argued in advance not to apply.** The argument was specific and
+   plausible and still wrong: "no metabolite empties" is not the same as "the
+   pool's path does not matter".
+3. **The ratio survives both arms** (+2.5% / -2.3%) while the scale swings -28% to
+   +137%. That is a third, independent confirmation of the M15 reading: **report
+   per-organism rate ratios, refuse the global scale.**
+4. **`sse_hat` is 0.91 of the residual at `lam_true`** — the fit barely moves it.
+   Where the floor-on arm had `lambda` *absorbing* model error, here the
+   discrepancy simply dominates and the parameter can do nothing about it. Both
+   are failures; only the reference at `lam_true` distinguishes them.
+
+**Keep the floor.** The fix for §13.10's scale direction is not this knob.
+
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
 After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3
