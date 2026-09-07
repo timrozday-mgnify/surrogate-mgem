@@ -5040,7 +5040,7 @@ must budget a matched control.
 | M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 does NOT pass in general — those 5.6e-7 to 3.1e-6 figures are *medians* at 5 components, and at 20 the max is 6.2e-05 on the one cell with a decisive invasion margin but 4.5e-02 to 3.8e-01 on the near-tie cells, where a feed perturbation crosses the survivor swap and the difference quotient spans two branches; the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the default warm start returns a *strictly invadable* state on 2 of the 4 converging cells — seeding from each member's monoculture instead finds the valid one, and takes the two hardest cells from residual 10 to 1e-5** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | **built 2026-09-07, `cfs interactions`; V5 passes 5/5 and it stays labelled exploratory.** Survey + LP-verified design of the media that facilitate cross-feeding. `E` is identically zero at the §13.4 steady state (one survivor ⇒ `min(secretion, uptake) = 0`), so it is posed at a fixed reference abundance and is a property of the medium. Three things were load-bearing and each was measured: **buffered species** (a pH-controlled aqueous vessel holds H+/H2O, so they are pinned and are not handovers — without that, `EX_h_e` alone is 97.6% of one community's true rate); **the LP as the acceptance test** (surrogate ascent alone improves the true rate on 2/5 with `E_hat/E_true` up to *infinite*); and **LP-screened seeds** (Spearman(`E_hat`,`E_true`) over 64 draws is **-0.053** on one community, so seeding by `E_hat` anti-selects — it took that cell from a true 4e-06 to 761.2). Final: 5/5 improved, median true gain +43.6%, precision@n_true 0.75, recall 1.00, `E_hat/E_true` median 1.64 and **not one-sided** (0.45-1.88) |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
-| M16 | §13.11 product inhibition at the exchange boundary, **thermodynamic form only** | **not started; design study written 2026-09-07, and scheduled last on purpose** — it is the one item that invalidates existing results, since a relabel moves `x_scale` and §13.4's `k = 1` and competitive-exclusion conclusions would need re-deriving. Do M12 and M14's error model first. Gate (Stage 0, no solves): show `Q/Keq` actually approaches 1 at states §8.1 and §13.5 already visit, before any relabel. Then Stage 1's gate: the tangent test still reads 0% violation in the extended coordinate. Key structural result: **monotonicity is lost but concavity survives, and only for the affine (thermodynamic) term** — the competitive `Ki` form keeps Head A concave in its own input but costs §13.2 and §13.3 their convexity in `c`, which is why it is rejected rather than deferred |
+| M16 | §13.11 product inhibition at the exchange boundary, **thermodynamic form only** | **Stage 0 has run (2026-09-07) and it fails: the mechanism is inert in this design.** Product accumulation is a median **4.7e-07 mM** over a chemostat and **0.0046 mM** (a 5.5% rise on the 0.1 mM background) over an 8-doubling batch, against an intracellular threshold of 0.1-10 mM; nothing starts near zero, so no product accumulates from nothing. The cause is the design's concentration scale -- glucose 0.1 mM against M9's 22 mM, biomass 0.0093 gDW/L against 0.1-10 -- which is §13.10's `Vmax` defect on the concentration axis. **The two use cases want opposite media**: §4.3 is dilute because that is where `mu` carries gradient, and at M9 concentrations `u > 0.999` on everything. So M16 needs a *second* label root (concentrated, run to exhaustion), not a relabel -- which would also serve §8.6f's deep-regime coverage gap. Cost that design before committing. Key structural result stands: **monotonicity is lost but concavity survives, and only for the affine (thermodynamic) term** |
 | M15 | §13.10 kinetic-parameter inference from a chemostat time series | **gate met on synthetic data 2026-09-06, and it does not survive model error.** `Surrogate.lam` is the per-organism rate scale (nine lines, no relabelling, no retraining). Against surrogate-generated data both directions clear the integrator's noise floor by 2-5 orders and an 80-evaluation simplex recovers `lambda` to 0.15% once OD is added (a longer window does the same, with 15x *worse* conditioning -- the outcome tracks the weak direction's signal-to-noise, not the curvature ratio). Against **LP-generated** data (`--lp`, blockers 4+5) the model discrepancy is 5484x the integrator floor, and the two directions split: the ratio still carries 79x the floor and comes out +2.5%, while the scale direction moves the residual **less than the surrogate's own bias does** (0.65-1.5x) and comes out **-28%**, with `sse_hat` at 0.06 of the residual at `lam_true` -- i.e. `lambda` absorbing head error rather than being identified. **Report ratios, not the global scale.** Attributed 2026-09-07: the discrepancy is entirely Head B's `mu_floor`, which a chemostat sits under by construction (`D < 0.05 x mean training mu`; 21/21 states, floor 18-54x the actual `mu`) -- and **removing it is refuted**, 88x better pointwise `dc_rel` for an 8-15x worse trajectory and a +137% scale error, because the vessel's feedback on `c` closes at the right medium only when consumption is large. Seventh instance of P26/[[rhs-accuracy-does-not-buy-the-endpoint]]. Gate: recover a known per-organism `lambda` from synthetic `cfs simulate --stiff` data on a 2-member chemostat, before any adjoint work. Blocked downstream on the same error model as M14 |
 
 M9–M11 need nothing that does not already exist. M12 is M6. M13, M14 and M15 are the
@@ -5756,7 +5756,78 @@ dilution accumulates product, and that is where a thermodynamic bound binds. Onl
 if that also fails is the kinetic form worth reopening, and then as Stage 3's
 sensitivity layer on top of the thermodynamic base, never as the base itself.
 
+#### Stage 0 has run, and the answer is no — 2026-09-07
+
+`20hm_bands/stage0_inhibition.py`, no solves: the *true-LP* medium paths
+`c_true` that `cfs community` already saves, so the question is asked at exactly
+the states §8.1 visits. Accumulation is the **rise**, not the final concentration
+— a first pass read a median final of 0.10 mM in every run and looked
+encouraging, but that is the §4.3 background level every metabolite starts at.
+
+| run | median rise | p90 | max | median fold `c_f/c_0` |
+| --- | --- | --- | --- | --- |
+| chemostat, 5 turnovers | **4.7e-07 mM** | — | 2.1e-05 mM | — |
+| batch, 4 doublings | 0.0012 mM | 0.027 | 0.246 | 1.015 |
+| batch, 8 doublings, n=15 | 0.0015 mM | 0.031 | 0.228 | 1.022 |
+| batch, 8 doublings | **0.0046 mM** | 0.112 | **1.10** | **1.055** |
+
+**`Q/Keq` does not approach 1 anywhere.** The threshold is the intracellular
+concentration, 0.1-10 mM for most metabolites (Bennett et al., *Nat Chem Biol*
+2009). The chemostat sits **5-6 orders** below it — washout removes product by
+construction. The deepest batch has a median rise of 4.6 uM on a 0.1 mM
+background, a **5.5%** change; only the overflow gases and acids (`EX_co2_e`,
+`EX_for_e`, `EX_co_e`, `EX_isobuta_e`) reach ~1 mM, and only in the 8-doubling
+runs. **And nothing starts near zero** — 0 of 294 / 975 / 284 pairs have
+`c_0 < 1 nM` — so no product accumulates *from nothing* in this design at all.
+
+**The cause is the design's concentration scale, and it is stoichiometric rather
+than kinetic.** In a batch run to exhaustion the product formed is bounded by the
+substrate consumed, so ~0.1 mM of substrate can make at most ~0.1 mM of product
+whatever the biomass. Against a real defined medium:
+
+| | this design | M9 + 0.4% glucose | ratio |
+| --- | --- | --- | --- |
+| glucose | 0.1 mM | 22 mM | **220x** |
+| ammonium | 0.01 mM | 19 mM | **1900x** |
+| phosphate | 0.01 mM | 64 mM | **6400x** |
+| final biomass, batch | 0.0093 gDW/L | 0.1-10 gDW/L | **11-1000x** |
+| final biomass, chemostat | 7.2e-07 gDW/L | — | ~1e6x |
+
+It is a *broad* medium rather than a concentrated one — 229 metabolites present,
+almost all at exactly 0.1 mM, 20.3 mM total — which is the opposite of a defined
+medium with one abundant carbon source.
+
+**This is the same defect as §13.10's, one axis over.** M15 found `Vmax = 1000`
+makes rates ~100x too fast; Stage 0 finds concentrations 100-1000x too dilute.
+The vessel is unphysiological in scale in both, and both trace to the GEM
+supplying yields rather than rates.
+
+**So the pre-registered response applies: change the reactor, not the model** —
+and it costs more than it looks, because **the two use cases want opposite
+media.** §4.3 is dilute *on purpose*: a metabolite only informs `mu` near its own
+limiting regime, which is what the bands are placed at, and at M9 concentrations
+`u = c/(Km+c) > 0.999` on everything so `mu` is flat and the labels carry no
+gradient. Product inhibition needs concentrated media, which is precisely where
+the value head learns nothing. **One label root cannot serve both**; M16 needs a
+*second* root with a different design purpose, not a relabel of this one.
+
+The consolation is that the concentrated regime is somewhere else the project
+already needs to go. A realistic medium is informative about `mu` only in its
+**depletion phase**, which is §8.6f's deep regime — where Head B is worst
+(3300x over-predicted flux below depth 0.1), where `reach` is 4-8 against a
+held-out 0.10, and where the 8-doubling gate fails. A concentrated-medium,
+run-to-exhaustion label root would serve product inhibition and Head B's known
+coverage gap at the same time. That is the design to cost before committing to
+M16.
+
+**Verdict: M16 stays scheduled last, and its Stage 1 is now blocked on a design
+decision rather than on implementation.** Do not build `mm_upper_bound` against
+the current label root; it would be exactly inert.
+
 #### Staged plan, cheapest decisive test first
+
+**Stage 0 — RUN 2026-09-07, and the answer is no; see the section above.** The
+original text follows.
 
 **Stage 0 — is it inert here? No solves, no relabel.** P25 exactly: do not spend a
 21-organism relabel on a mechanism that has not first been shown to bind on runs
@@ -5767,6 +5838,12 @@ concentrations. If the displacement is far from 1 everywhere, the bound never
 binds and the whole programme is inert **in this design** — which is itself the
 finding, and it would say the design must be changed (longer batches, higher
 inoculum, no dilution) before inhibition can matter. Half a day.
+
+**Stage 1 — blocked on a design decision, not on implementation.** Stage 0 says
+`mm_upper_bound` against the current label root would be exactly inert, so a
+concentrated, run-to-exhaustion label root has to be costed first — and it is a
+*second* root, not a relabel, because §4.3 is dilute on purpose. Original text
+follows.
 
 **Stage 1 — one organism, thermodynamic bound only.** `mm_upper_bound`,
 eQuilibrator via MetaNetX, relabel one genome. Measure: how much the `mu_max`
