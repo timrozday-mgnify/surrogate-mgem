@@ -3117,6 +3117,78 @@ it costs **no simplex dimension**.
    or accepting the LP cost per trajectory. **The ratio is unaffected by all
    four** (+2.5 / -2.3 / +2.2%), which is the result to carry.
 
+
+### M13/§13.5: interactions, and two ways the search trusts the head where it is being exploited — 2026-09-07
+
+`cfs interactions` (`src/cfs/science/interaction.py`, `tests/test_cfs_interaction.py`).
+Survey the metabolic handovers a community can reach, then design the media that
+facilitate them. `E(c, X) = sum_m min(total secretion, total uptake)`.
+
+**It cannot be posed at the §13.4 steady state, and that is arithmetic.** With
+one survivor every metabolite has either `z >= 0` or `z <= 0`, so one sum is zero
+and the min with it: `E = 0` exactly for a monoculture. §13.4 measured `k = 1`
+and one survivor on every roster cell bar one coexistence. So `E` is evaluated at
+a **fixed reference abundance**, making it a property of the *medium* — the
+exchange a medium can support per unit biomass, a capacity rather than a
+prediction of what an assembled community settles at.
+
+**Buffered species, and they are not a cleanup.** A chemostat is pH-controlled
+and aqueous, so H+ and H2O are held by the buffer and the solvent: they are
+**pinned** at saturation (`1e3*Km`), because an experimenter cannot dial pH as a
+design variable, and they are **not interactions**, because a proton one member
+secretes goes into the buffer rather than into another member. Without the
+second, `E` *is* proton exchange — `EX_h_e` alone was **871.8 of one community's
+true rate of 893.4 (97.6%)**. CO2/O2/NH4/Pi are deliberately not buffered:
+nothing buffers those and they are real cross-feeding currencies.
+
+| 5 communities x 64 draws x 3 starts | improved (true) | median true gain | `E_hat/E_true` |
+| --- | --- | --- | --- |
+| surrogate ascent alone | **2/5** | **0.00** | 1.6x to **infinite** |
+| + LP acceptance test | 5/5 | — | 1.71 |
+| + buffering + **LP-screened seeds** | **5/5** | **+43.6%** | 1.64 |
+
+1. **The model must not be the acceptance test.** §13.2's bundle TRF needs
+   concavity and a supporting hyperplane; `E` has neither. What transfers is
+   *propose with the model, accept with the truth*. Without it the ascent raises
+   `E_hat` 2-4x every time while the true rate is flat or worse on 3 of 5, and one
+   cell designed `E_hat = 2124` where the LP has **no interaction at all**. Head A
+   is a certified upper bound off-distribution so an optimistic `mu` is bounded;
+   `E` inherits Head B's magnitude, which has no such guarantee.
+2. **The model must not choose the starts either, and this is the sharper one.**
+   Seeding by `E_hat` seeds where the head is most optimistic. On AAXE02+ABCC02,
+   **Spearman(`E_hat`, `E_true`) over 64 draws is -0.053** and all three
+   `E_hat`-seeded starts have a true rate of **0**, while the best true draw
+   scores **529.9** at an `E_hat` ranked well down. With every start at zero the
+   acceptance test has nothing to discriminate against either — any positive step
+   "improves" it — so the region expanded around a worthless point and reported
+   `E_hat` 1426 at a true 4e-06. LP-screening the draws takes that cell to
+   **761.2**. Cheapest, highest-value LP in the run; now the default (`--no-screen`
+   to disable).
+3. **Report the draw rank correlation first.** It says whether the head can order
+   media for this objective at all, and it swings by community: **-0.053 / +0.316
+   / +0.541 / +0.807 / +0.856**. Near zero, only the survey's *structure* is usable.
+4. **Structure yes, magnitude no — P22 quantified.** Median precision@n_true
+   **0.75**, recall **1.00**, rate Spearman 0.59; `E_hat/E_true` 0.45-1.88, so it
+   is **not one-sided**. Read a proposed link as a candidate and its rate as an
+   order of magnitude.
+
+**What it finds** (designed media, true rates, uniform abundance): nitrite
+GCA_000151225.1 -> CR626927.1 at 463.5; nitrite 454.6 **and acetaldehyde 306.6**
+AAXE02 -> ABCC02; a **reciprocal** glycerol/glyceraldehyde cycle between
+CP048433.1 and CP070062.1 at 142.1 each way; glycerol 179.6 + uracil 26.2 +
+glutamate 21.3 in one 3-member cell; and in the 5-member cell glycerol 968.0 from
+three donors into CP027002.1, glucose 785.7, O2 725.7, glycerol-3-P 206.6. The
+designs work by moving **trace metals** (Zn +5.8 decades, Cu/Mn/Co -1.8 to -5.7)
+far more than carbon — micronutrient limitation forcing a member to leak what it
+cannot use. A hypothesis the tool generates, not one it establishes.
+
+**Two engineering notes.** A rejected ascent step costs a *value*, not a gradient
+— 0.022 s against 1.7 s for the batched FD Jacobian, and backtracking rejects ~19
+in 20, so taking the gradient only after acceptance turned 36 s into 4.5 s for an
+identical path. And do not cache cobra models across communities: holding every
+genome the run has touched OOM-killed a 5-community run with no traceback, and
+re-reading the SBML is seconds.
+
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
 After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3

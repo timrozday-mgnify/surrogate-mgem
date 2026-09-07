@@ -4821,6 +4821,95 @@ of 0.995 — the direction is far better than the size), and on cross-feeding
 structure, which the per-organism labels never contain directly. That structure is
 recovered at 1.00 recall (§8.1), which is the reason to attempt it at all.
 
+#### ...and it is built: `cfs interactions` — 2026-09-07
+
+`src/cfs/science/interaction.py`. Two halves, and the first needs no optimiser:
+**survey** scores many media with one batched head call each and aggregates the
+handovers that appear — which metabolite, which donors, which recipients, how
+often, and which medium was best for it; **design** then maximises `E` over `c`
+inside §13.2's multiplicative trust region. Every reported medium is re-solved
+with the true LP, and predicted and true rate sit in the *same* row rather than
+in two lists to join by hand.
+
+**`E` cannot be posed at the §13.4 steady state, and that is arithmetic rather
+than a measurement.** For a single surviving organism every metabolite has
+either `z >= 0` or `z <= 0`, so one of the two sums is zero and the min with it:
+`E = 0` exactly for a monoculture. §13.4 measured `k = 1` and competitive
+exclusion then leaves **one survivor on every roster cell at every size** bar one
+coexistence — so maximising `E` at the equilibrium is maximising zero. It is
+evaluated at a **fixed reference abundance** instead, which makes `E` a property
+of the *medium* — the exchange rate a medium can support per unit biomass. That
+is a capacity, not a prediction of what an assembled community settles at.
+
+**Buffered species (`--buffered`, default `EX_h_e,EX_h2o_e`).** A chemostat is
+pH-controlled and aqueous, so protons and water are supplied and absorbed by the
+buffer and the solvent rather than by the members. Two consequences, one fact:
+their concentration is **pinned** at saturation (`1e3*Km`, `u > 0.999`) because
+an experimenter cannot dial pH as a design variable; and they are **not
+interactions**, because a proton one member secretes goes into the buffer, not
+into another member. Without the second, `E` is literally proton exchange —
+`EX_h_e` alone was **871.8 of one community's true rate of 893.4 (97.6%)**, with
+`EX_h2o_e` leading two more cells, burying the acetaldehyde, glycerol and
+amino-acid handovers that are the actual biology. CO2, O2, ammonium and
+phosphate are deliberately **not** buffered: nothing in a chemostat buffers
+those and they are real cross-feeding currencies.
+
+**Two search defects, both measured, both about trusting the head where it is
+being exploited.** 5 communities x 64 draws x 3 starts:
+
+| arm | n improved (true) | median true gain | `E_hat/E_true` |
+| --- | --- | --- | --- |
+| surrogate ascent alone | **2/5** | **0.00** | 1.6x to **infinite** |
+| + LP acceptance test (`--verify-steps`) | 5/5 | — | 1.71 |
+| + buffering + **LP-screened seeds** | **5/5** | **+43.6%** | 1.64 |
+
+1. **The model must not be the acceptance test.** §13.2's bundle TRF corrects the
+   model to the LP with a tangent; neither leg transfers here, since `E` is a min
+   of two non-concave functions and the elastic-net QP offers no supporting
+   hyperplane for it. What does transfer is *propose with the model, accept with
+   the truth*. Without it the ascent raises `E_hat` 2-4x every time while the true
+   rate is flat or worse on 3 of 5, and one cell designed `E_hat = 2124` at a
+   medium where the LP has **no interaction at all**. Head A is a certified upper
+   bound off-distribution (§13.2c) so an optimistic `mu` is at least bounded; `E`
+   inherits Head B's magnitude, which has no such guarantee — P22, exactly.
+   Accepting only LP-verified steps makes V5 pass by construction and also lands
+   the search where the head is accurate.
+2. **The model must not choose the starts either, and this is the sharper one.**
+   Seeding the multistart by `E_hat` seeds precisely where the head is most
+   optimistic. On AAXE02+ABCC02, **Spearman(`E_hat`, `E_true`) over 64 draws is
+   -0.053** — no rank information at all — and all three `E_hat`-seeded starts
+   have a true rate of **0** while the best true draw scores **529.9** at an
+   `E_hat` ranked well down. With every start at zero the acceptance test has
+   nothing to discriminate against either: any positive step "improves" it, so the
+   trust region expanded around a worthless point and reported `E_hat` 1426 at a
+   true 4e-06. Screening the draws with the LP (one solve per member per draw)
+   takes that cell to **761.2**. It is the highest-value LP in the run.
+
+**The rank correlation is the number to report first**, because it says whether
+the surrogate can order media for this objective at all, and it varies enormously
+by community: **-0.053 / +0.316 / +0.541 / +0.807 / +0.856**. Where it is near
+zero the survey's *ordering* is unusable and only its structure is.
+
+**Structure is trustworthy, magnitude is not — P22 quantified.** Median
+precision@n_true **0.75**, median recall **1.00**, median rate Spearman 0.59;
+`E_hat/E_true` 0.45-1.88 (median 1.64), so it is **not one-sided** either. Read a
+proposed interaction as a candidate to test and its rate as an order of magnitude.
+
+**What it finds.** Designed media, true rates, at a uniform reference abundance:
+
+| community | interaction (true rate) |
+| --- | --- |
+| CR626927.1 + GCA_000151225.1 | nitrite **463.5**, GCA_000151225.1 -> CR626927.1 |
+| AAXE02 + ABCC02 | nitrite **454.6** and **acetaldehyde 306.6**, both AAXE02 -> ABCC02 |
+| CP048433.1 + CP070062.1 (+CR626927.1) | a **reciprocal** glycerol/glyceraldehyde cycle, 142.1 each way, plus uracil 7.3 |
+| CP001726.1 + DACTBY01 + GCA_000007325.1 | glycerol 179.6, uracil 26.2, glutamate 21.3 |
+| 5-member | glycerol 968.0 (three donors -> CP027002.1), glucose 785.7, O2 725.7, acetaldehyde 262.8, glycerol-3-P 206.6 |
+
+The media that facilitate them move **trace metals** far more than carbon —
+zinc +5.8 decades, copper, manganese and cobalt -1.8 to -5.7 — i.e. the designs
+work by micronutrient limitation, forcing a member to leak what it cannot use.
+That is a hypothesis the report generates, not a result it establishes.
+
 ### 13.6 Where HMC is the right tool — and where it is not
 
 Three of the four use cases above are optimisation, and a sampler is the wrong
@@ -4884,7 +4973,7 @@ below is a Head B statement, and two things changed the verdicts:
 | §13.1 structure, ordering, cross-feeding | yes | **safe at a 4-doubling horizon** — recall 1.00, median flux cosine 0.995. **Not** safe per link in a starved culture: p05 cosine reaches **−0.44** below depth 0.1 |
 | §13.1 quantitative yield / batch endpoint | yes | **not safe at a long horizon** — 4.1% overall at 8 doublings, worst cell 0.70 — and §8.6f's round 4 shows **more Head B accuracy does not fix it** |
 | **§13.4 steady state / SteadyCom / §8.4** | yes | **the most exposed use case, and the next milestone.** A steady state *is* a drawn-down medium — the regime where Head B is worst — evaluated inside every Newton iteration. M5's shallow numbers must not be assumed to transfer; measure at the equilibrium |
-| §13.5 interaction magnitude | yes | exploratory, unchanged |
+| §13.5 interaction magnitude | yes | **exploratory, and now quantified (2026-09-07).** Structure is usable — precision@n_true 0.75, recall 1.00 — magnitude is not (`E_hat/E_true` 0.45-1.88, not one-sided), and the head's ability to *rank* media for this objective varies from useless to good across communities (Spearman -0.053 to +0.856). Usable **with the LP in the loop** for seeding and acceptance; without it the designed optimum can be entirely fictitious |
 | §13.6 posterior | yes | still blocked, but the error model now has a candidate: the reach proxy as a distance-aware nonconformity score, calibrated on community-regime states (never on held-out design media) |
 
 **Amended 2026-09-04, after §8.6g.** Two rows move, and both move because the LP
@@ -4912,6 +5001,7 @@ must budget a matched control.
 | P20 | Deterministic surrogate inside a likelihood | Posterior far too narrow; SBC ranks pile up at the edges | Per-organism residual model from the held-out set, widened by the M5 replicate spread. No chain before it exists |
 | P21 | The designer walks out of the design | Spectacular objective, LP disagrees; medium far from any training medium | Trust region on the §6.3 nearest-training-medium distance — the same metric that diagnosed P18 — plus V5 at every reported optimum |
 | P22 | An objective on flux *magnitude* | Inherits Head B's weakest axis while the diagnostics (cosine, sign agreement) look fine | Prefer direction- and structure-valued objectives; label magnitude-valued results exploratory |
+| P29 | Letting the surrogate choose a search's *starting points* | The multistart seeds are exactly the media the head is most optimistic about; every start has a true objective of zero, and an LP acceptance test then has nothing to discriminate against, so any positive step is accepted | Screen candidate starts with the true model (one solve per member per draw — cheap, and the highest-value LP in the run). Report Spearman(surrogate, true) over the candidates: at -0.053 the ranking carries no information at all (§13.5) |
 | P23 | Optimising a batch-culture endpoint | The answer flips under changes that improve the right-hand side on every measure — the endpoint turns on which metabolite empties first | Optimise rates, or a chemostat steady state. Never a batch endpoint |
 | P24 | A relabel that improves every held-out metric and breaks composition | Worst grad cosine, value R², per-metabolite coverage and M11 all improve; §8.1 regresses 17x at n=21 | Held-out media come from the *same design that changed*, so they cannot see it. Score every design change on a **community-regime held-out set** (§8.5). The stratum-budget reading of P24 was measured and is wrong — see §4.3 |
 | P26 | Reading a fine-tune or a label round against its starting checkpoint | Every metric improves and the change looks earned; the same numbers appear with the new term at weight zero or the new rows absent | Two ablations, both measured to matter here: run the new loss term at **weight 0** (the trajectory term's entire gain was the label term's), and score a label round against a **matched retrain** (a fresh fit alone moves the 8-doubling mean 68% and the max 3.3x) |
@@ -4927,7 +5017,7 @@ must budget a matched control.
 | M10 | §13.2 growth maximisation, convex solver | **Met 2026-09-06 with `--trf` (§13.2b).** Bundle-corrected trust-region model management beats the single ascent on 18/20 cases paired, median true gain +2.35% against +2.34%, max 23.15x against 22.79x, and **max optimism 0.0730 -> 0.00686** at a median of 3 LP solves per case. Every reported optimum is now LP-verified at *every* step rather than once at the end, P21 becomes the mechanism (a step that zeroes an essential has `mu_true = 0`, so `rho < 0`, so it is rejected), and **the unmet M3 gate no longer constrains this use case**. Residual: two cases lose to the plain ascent because the *inner* subproblem solver stalls on its own model's kinks (P28), not because the model is wrong — §13.2c measured the head to be a valid upper bound at all 40 optima. Original entry: Optimum survives V5 round-trip on 20 cases — **built 2026-08-30; 19/20 at the default trust region, 20/20 at 0.25 and at 1.0 decades.** Median true gain +2.2%, median optimism 0.3%. The one failure is a `mu = 2.0` start medium, the head's known weak band; it is not monotone in the trust radius. **Under an additive trust region 3/20 collapse to `mu_true = 0`, and under none at all 2 of the first 4** — P21, and the mechanism is zeroing an essential trace metabolite |
 | M11 | §13.3 static minimal medium | **V6 passes 4/4 with `--lp-repair`; `--cuts` (§13.3b) added 2026-09-06 as a second, independent route** — cell 6 passes V6 on cuts alone with no repair at 247 components against the repair's 250/252, cells 7/8 are the correct null, and cell 10 costs components, so cuts are off by default. New pitfall P27: a cut at a dead member is the unsatisfiable constraint `0 >= target`. Original entry: **built 2026-08-30; the essentiality blocker is closed 2026-08-31, V6 still short.** `cfs minimal-medium`: convex penalty solve + a greedy cardinality prune, one case per medium draw. **Head A cannot represent essentiality** — knocking a trace metal (`EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e`) out of a rich medium takes the true LP to `mu = 0` and moves the head by <1%, 6 of 37 free metabolites on a 3-member community. Unrestricted, the program exploits exactly that: 273 -> **41** components with every surrogate floor satisfied and `mu_true` 55/70/38 -> **0/0/0**. With the lethal singles pinned from the models (`--keep-essential`, default; one FBA per free metabolite, a static property of the GEM), 273 -> 251 and 2 of 3 members clear a 0.5 floor under the LP, the misses being 0.489/0.485 — i.e. ~2% short — and one real failure at 0.334 on the community's slow member (`mu_true` 3.5 against 55 and 70), Head A's known weak low-`mu` band. **The cause is `SamplingConfig.log10_lo = -4`**: the trace metals' limiting regime is at `c/Km ~ 1e-9..1e-6`, outside the probe's bracket, so the probe omits them, `band_scales` defaults them to 1.0, the design never makes them scarce, `_kink_scale` defaults `x_scale` to 1.0 and the head has no resolution left in that coordinate. The four missed essentials are exactly the four `"source": "default"` bands in the sidecar. **Fixed by `probe_lo = -12` (§4.7) and a relabel: `n_missed_essential` 6 -> 0**, and unrestricted the design no longer collapses the LP (2/3, 0/3, 3/3 members clearing the floor, worst true fraction 0.436 against 0.000). V6 still does not pass at a 0.5 floor — 0.491 / 0.436 / 0.512 — so what remains is a few-percent accuracy question, not a structural one |
 | M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 does NOT pass in general — those 5.6e-7 to 3.1e-6 figures are *medians* at 5 components, and at 20 the max is 6.2e-05 on the one cell with a decisive invasion margin but 4.5e-02 to 3.8e-01 on the near-tie cells, where a feed perturbation crosses the survivor swap and the difference quotient spans two branches; the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the default warm start returns a *strictly invadable* state on 2 of the 4 converging cells — seeding from each member's monoculture instead finds the valid one, and takes the two hardest cells from residual 10 to 1e-5** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
-| M13 | §13.5 interaction maximisation | Reported with the V5 round-trip and labelled exploratory |
+| M13 | §13.5 interaction maximisation | **built 2026-09-07, `cfs interactions`; V5 passes 5/5 and it stays labelled exploratory.** Survey + LP-verified design of the media that facilitate cross-feeding. `E` is identically zero at the §13.4 steady state (one survivor ⇒ `min(secretion, uptake) = 0`), so it is posed at a fixed reference abundance and is a property of the medium. Three things were load-bearing and each was measured: **buffered species** (a pH-controlled aqueous vessel holds H+/H2O, so they are pinned and are not handovers — without that, `EX_h_e` alone is 97.6% of one community's true rate); **the LP as the acceptance test** (surrogate ascent alone improves the true rate on 2/5 with `E_hat/E_true` up to *infinite*); and **LP-screened seeds** (Spearman(`E_hat`,`E_true`) over 64 draws is **-0.053** on one community, so seeding by `E_hat` anti-selects — it took that cell from a true 4e-06 to 761.2). Final: 5/5 improved, median true gain +43.6%, precision@n_true 0.75, recall 1.00, `E_hat/E_true` median 1.64 and **not one-sided** (0.45-1.88) |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
 | M15 | §13.10 kinetic-parameter inference from a chemostat time series | **gate met on synthetic data 2026-09-06, and it does not survive model error.** `Surrogate.lam` is the per-organism rate scale (nine lines, no relabelling, no retraining). Against surrogate-generated data both directions clear the integrator's noise floor by 2-5 orders and an 80-evaluation simplex recovers `lambda` to 0.15% once OD is added (a longer window does the same, with 15x *worse* conditioning -- the outcome tracks the weak direction's signal-to-noise, not the curvature ratio). Against **LP-generated** data (`--lp`, blockers 4+5) the model discrepancy is 5484x the integrator floor, and the two directions split: the ratio still carries 79x the floor and comes out +2.5%, while the scale direction moves the residual **less than the surrogate's own bias does** (0.65-1.5x) and comes out **-28%**, with `sse_hat` at 0.06 of the residual at `lam_true` -- i.e. `lambda` absorbing head error rather than being identified. **Report ratios, not the global scale.** Attributed 2026-09-07: the discrepancy is entirely Head B's `mu_floor`, which a chemostat sits under by construction (`D < 0.05 x mean training mu`; 21/21 states, floor 18-54x the actual `mu`) -- and **removing it is refuted**, 88x better pointwise `dc_rel` for an 8-15x worse trajectory and a +137% scale error, because the vessel's feedback on `c` closes at the right medium only when consumption is large. Seventh instance of P26/[[rhs-accuracy-does-not-buy-the-endpoint]]. Gate: recover a known per-organism `lambda` from synthetic `cfs simulate --stiff` data on a 2-member chemostat, before any adjoint work. Blocked downstream on the same error model as M14 |
 

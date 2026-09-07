@@ -519,6 +519,71 @@ def build_parser() -> argparse.ArgumentParser:
     gx.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the draw.")
     gx.add_argument("--seed", type=int, default=0)
 
+    ix = sub.add_parser(
+        "interactions",
+        help="§13.5/M13: explore the metabolic interactions a community can reach "
+        "and design the media that facilitate them (exploratory — P22).",
+    )
+    ix.add_argument("--roster", type=Path, required=True, help="Roster YAML (for the V5 LP).")
+    ix.add_argument("--labels", type=Path, required=True, help="Label root: media draws (§4.3).")
+    ix.add_argument("--value", type=Path, required=True, help="Head A checkpoint dir.")
+    ix.add_argument("--behaviour", type=Path, required=True, help="Head B checkpoint dir.")
+    ix.add_argument("--out", type=Path, required=True, help="Report dir.")
+    ix.add_argument(
+        "--communities", required=True, help="Semicolon-separated member lists, 'A,B;C,D,E'."
+    )
+    ix.add_argument("--draws", type=int, default=64, help="Media surveyed per community.")
+    ix.add_argument(
+        "--starts", type=int, default=4,
+        help="Multistart count. E is non-concave, so the spread across starts is part "
+        "of the answer, not overhead.",
+    )
+    ix.add_argument(
+        "--trust-decades", type=float, default=0.5,
+        help="P21 trust region in the head's own input coordinate, intersected over "
+        "members. Unconstrained, the designer leaves the design.",
+    )
+    ix.add_argument(
+        "--budget-mult", type=float, default=1.0,
+        help="Budget as a multiple of the start medium's own cost (default: reallocate it).",
+    )
+    ix.add_argument("--iters", type=int, default=120)
+    ix.add_argument("--alpha", type=float, default=1.0, help="Growth fraction for Head B.")
+    ix.add_argument(
+        "--verify-steps", type=int, default=0,
+        help="Trust-region iterations with the true LP as the acceptance test. "
+        "Without it the ascent optimises a magnitude the head over-predicts by "
+        "1.6x to infinity and the true rate does not follow; with it the designed "
+        "medium cannot be worse than its start under the LP. Costs one FBA per "
+        "member per iteration.",
+    )
+    ix.add_argument(
+        "--no-verify", action="store_true",
+        help="Skip the true-LP round-trip. Only for a structure-only survey — the "
+        "objective is on flux magnitude, which is Head B's weakest axis (P22).",
+    )
+    ix.add_argument(
+        "--buffered", default="EX_h_e,EX_h2o_e",
+        help="Species the vessel holds, not the community: pinned at a saturating "
+        "concentration and not counted as interactions. A chemostat is "
+        "pH-controlled and aqueous, so protons and water are supplied by the "
+        "buffer and the solvent — an experimenter cannot dial them, and a proton "
+        "one member secretes goes into the buffer rather than into another "
+        "member. Not cosmetic: with them counted, E is proton exchange — EX_h_e "
+        "alone was 97.6%% of one community's true rate. CO2/O2/NH4/Pi are "
+        "deliberately absent: nothing buffers those and they are real "
+        "cross-feeding currencies. '' buffers nothing.",
+    )
+    ix.add_argument(
+        "--no-screen", action="store_true",
+        help="Seed the multistart by the head's own E instead of by the LP's. "
+        "Measured Spearman(E_hat, E_true) over 64 draws on one community: -0.053, "
+        "with every E_hat-seeded start at a true rate of zero — so this seeds "
+        "where the head is most optimistic, which is what the search exploits.",
+    )
+    ix.add_argument("--scales", type=Path, default=None, help="Band scales JSON for the draws.")
+    ix.add_argument("--seed", type=int, default=0)
+
     mm = sub.add_parser(
         "minimal-medium",
         help="§13.3/M11: the smallest medium every member grows on, then V6 it.",
@@ -1034,6 +1099,36 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps({k: v for k, v in report.items() if k != "cases"}, indent=2))
         return 0 if report["passed"] else 1
+
+    if args.command == "interactions":
+        from cfs.science.interaction import run as run_interactions
+
+        report = run_interactions(
+            args.roster,
+            args.labels,
+            args.value,
+            args.behaviour,
+            args.out,
+            communities=[
+                [g for g in part.split(",") if g]
+                for part in args.communities.split(";")
+                if part.strip()
+            ],
+            draws=args.draws,
+            starts=args.starts,
+            trust_decades=args.trust_decades,
+            budget_mult=args.budget_mult,
+            iters=args.iters,
+            alpha=args.alpha,
+            seed=args.seed,
+            scales=args.scales,
+            verify=not args.no_verify,
+            verify_steps=args.verify_steps,
+            buffered=tuple(m for m in args.buffered.split(",") if m),
+            screen=not args.no_screen,
+        )
+        print(json.dumps({k: v for k, v in report.items() if k != "cells"}, indent=2))
+        return 0 if report.get("passed", True) else 1
 
     if args.command == "minimal-medium":
         from cfs.science.minimal import run as run_minimal
