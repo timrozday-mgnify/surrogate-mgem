@@ -3076,6 +3076,47 @@ case, off by default), same cached LP truth, same 80-evaluation simplex:
 
 **Keep the floor.** The fix for §13.10's scale direction is not this knob.
 
+
+**Profiling the OD offset is free, right, and not enough — 2026-09-07.** The
+attribution says Head B's error here is a *level* bias: the vessel's feedback
+fixes `c(t)` through Head A, and `X z` balancing the dilution supply puts the
+whole `z` error into the biomass level. Measured on the residual, **88.4% of the
+OD channel's discrepancy is a constant offset in log** (the log-ratio channel:
+41.4%). A real OD instrument has an unknown biomass conversion anyway, so that
+constant is a nuisance parameter whether or not we want it. `--od-profile` fits
+`log(sum X) + b` with `b` at its least-squares optimum — the mean residual — so
+it costs **no simplex dimension**.
+
+| LP truth, floor on, 80 evals | OD offset fixed | **OD offset profiled** |
+| --- | --- | --- |
+| discrepancy, OD channel | 1.23e-02 | **1.42e-03** (8.6x lower) |
+| scale direction, +60% | 3.8x floor | **4.6x** floor |
+| `lam_hat` (truth 1.0, 0.4) | (0.7265, 0.2835) | (0.7811, 0.3058) |
+| ratio error | +2.49% | **+2.17%** |
+| **scale error** | -28.2% | **-22.7%** |
+| `sse_hat` / `sse` at `lam_true` | 0.06 | 0.14 |
+
+1. **Strictly better on every axis and it does not fix the scale.** Profiling
+   removes 8.6x of the floor and **8.0x of the signal with it** — a uniform
+   `lambda` shifts the OD level in nearly the same direction Head B's bias does,
+   so the two are close to collinear in the one channel that sees the scale at
+   all. That is the mechanism behind the -28%, stated as a geometry rather than a
+   magnitude. Keep the flag on for a chemostat: it is free, it is the honest
+   observation model, and it lowers the residual at `lam_true` 4x.
+2. **The sensitivity table predicted this fit, and that is not a contradiction of
+   [[sensitivity-is-not-a-fit-outcome]] — it is its boundary.** Signal-to-floor
+   went 3.81 -> 4.6 (1.21x) and the scale error fell 28.2% -> 22.7% (1.24x
+   lower), agreeing to 3%. A table predicts when the question is **collinearity**
+   — can these two directions be separated at all — and fails when the question
+   is whether an optimiser can navigate a valley it *can* see. The earlier OD and
+   window arms were the second kind; this one is the first.
+3. **So four cheap levers are now measured out for §13.10's scale direction** — a
+   second data channel (OD), a longer window, removing Head B's `mu_floor`, and
+   profiling the OD offset. What is left is reducing Head B's error at
+   chemostat-regime states, which is the same open item as §8.6g's stock-take,
+   or accepting the LP cost per trajectory. **The ratio is unaffected by all
+   four** (+2.5 / -2.3 / +2.2%), which is the result to carry.
+
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
 After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3
