@@ -5040,7 +5040,7 @@ must budget a matched control.
 | M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 does NOT pass in general — those 5.6e-7 to 3.1e-6 figures are *medians* at 5 components, and at 20 the max is 6.2e-05 on the one cell with a decisive invasion margin but 4.5e-02 to 3.8e-01 on the near-tie cells, where a feed perturbation crosses the survivor swap and the difference quotient spans two branches; the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the default warm start returns a *strictly invadable* state on 2 of the 4 converging cells — seeding from each member's monoculture instead finds the valid one, and takes the two hardest cells from residual 10 to 1e-5** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | **built 2026-09-07, `cfs interactions`; V5 passes 5/5 and it stays labelled exploratory.** Survey + LP-verified design of the media that facilitate cross-feeding. `E` is identically zero at the §13.4 steady state (one survivor ⇒ `min(secretion, uptake) = 0`), so it is posed at a fixed reference abundance and is a property of the medium. Three things were load-bearing and each was measured: **buffered species** (a pH-controlled aqueous vessel holds H+/H2O, so they are pinned and are not handovers — without that, `EX_h_e` alone is 97.6% of one community's true rate); **the LP as the acceptance test** (surrogate ascent alone improves the true rate on 2/5 with `E_hat/E_true` up to *infinite*); and **LP-screened seeds** (Spearman(`E_hat`,`E_true`) over 64 draws is **-0.053** on one community, so seeding by `E_hat` anti-selects — it took that cell from a true 4e-06 to 761.2). Final: 5/5 improved, median true gain +43.6%, precision@n_true 0.75, recall 1.00, `E_hat/E_true` median 1.64 and **not one-sided** (0.45-1.88) |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
-| M16 | §13.11 product inhibition at the exchange boundary | **not started; design study written 2026-09-07.** Gate (Stage 0, no solves): show that the thermodynamic displacement `Q/Keq` actually approaches 1 at states §8.1 and §13.5 already visit, before any relabel. Then Stage 1's gate: the tangent test still reads 0% violation in the extended coordinate. Key structural result: **monotonicity is lost but concavity survives, and only for an affine (thermodynamic) inhibition term** — a hyperbolic `Ki` form keeps Head A concave in its own input but breaks §13.2/§13.3's convexity in `c` |
+| M16 | §13.11 product inhibition at the exchange boundary, **thermodynamic form only** | **not started; design study written 2026-09-07, and scheduled last on purpose** — it is the one item that invalidates existing results, since a relabel moves `x_scale` and §13.4's `k = 1` and competitive-exclusion conclusions would need re-deriving. Do M12 and M14's error model first. Gate (Stage 0, no solves): show `Q/Keq` actually approaches 1 at states §8.1 and §13.5 already visit, before any relabel. Then Stage 1's gate: the tangent test still reads 0% violation in the extended coordinate. Key structural result: **monotonicity is lost but concavity survives, and only for the affine (thermodynamic) term** — the competitive `Ki` form keeps Head A concave in its own input but costs §13.2 and §13.3 their convexity in `c`, which is why it is rejected rather than deferred |
 | M15 | §13.10 kinetic-parameter inference from a chemostat time series | **gate met on synthetic data 2026-09-06, and it does not survive model error.** `Surrogate.lam` is the per-organism rate scale (nine lines, no relabelling, no retraining). Against surrogate-generated data both directions clear the integrator's noise floor by 2-5 orders and an 80-evaluation simplex recovers `lambda` to 0.15% once OD is added (a longer window does the same, with 15x *worse* conditioning -- the outcome tracks the weak direction's signal-to-noise, not the curvature ratio). Against **LP-generated** data (`--lp`, blockers 4+5) the model discrepancy is 5484x the integrator floor, and the two directions split: the ratio still carries 79x the floor and comes out +2.5%, while the scale direction moves the residual **less than the surrogate's own bias does** (0.65-1.5x) and comes out **-28%**, with `sse_hat` at 0.06 of the residual at `lam_true` -- i.e. `lambda` absorbing head error rather than being identified. **Report ratios, not the global scale.** Attributed 2026-09-07: the discrepancy is entirely Head B's `mu_floor`, which a chemostat sits under by construction (`D < 0.05 x mean training mu`; 21/21 states, floor 18-54x the actual `mu`) -- and **removing it is refuted**, 88x better pointwise `dc_rel` for an 8-15x worse trajectory and a +137% scale error, because the vessel's feedback on `c` closes at the right medium only when consumption is large. Seventh instance of P26/[[rhs-accuracy-does-not-buy-the-endpoint]]. Gate: recover a known per-organism `lambda` from synthetic `cfs simulate --stiff` data on a 2-member chemostat, before any adjoint work. Blocked downstream on the same error model as M14 |
 
 M9–M11 need nothing that does not already exist. M12 is M6. M13, M14 and M15 are the
@@ -5472,12 +5472,26 @@ it costs **no simplex dimension**.
    or accepting the LP cost per trajectory. **The ratio is unaffected by all
    four** (+2.5 / -2.3 / +2.2%), which is the result to carry.
 
-### 13.11 Product inhibition — research note and staged plan, 2026-09-07
+### 13.11 Product inhibition — thermodynamic form, scheduled last, 2026-09-07
 
-Not built. This section is the design study: what would have to change, what the
-parameters are and where they come from, and what partial coverage would cost.
+Not built, and **deliberately not next**. This section is the design study and the
+implementation plan for the form that will be built.
 
-#### The structural fact that decides everything
+**Decided: the thermodynamic form only.** Inhibition enters as a secretion
+capacity that falls as the external concentration rises, from `ΔG'°`. The
+competitive/kinetic (`Ki`) form is **considered and rejected** — the reasoning is
+in "The competitive form, and why it is not being built" below, and it is recorded
+because the argument is structural rather than a matter of effort.
+
+**Where it sits in the sequence.** After M12 (§13.4's Newton failure rate is 60%
+against a 1% gate) and after M14's error model, which is small, blocked and gates
+both §13.6 and M15's posterior. This is last for a reason that is not priority: it
+is the only item that **invalidates existing results** — a relabel moves
+`x_scale`, so nothing in this document would be comparable across it, and §13.4's
+`k = 1` and competitive-exclusion conclusions would have to be re-derived. Land
+the things that read the current labels before changing what the labels mean.
+
+#### The structural fact that decides everything, and the form choice
 
 Today **concentration can only ever relax a bound**. §3.3 sets
 `lb_m = -Vmax_m * u_m` with `u = c/(Km+c)`, every exchange upper bound is `+1000`
@@ -5514,11 +5528,16 @@ jointly. What does **not** survive the hyperbolic form is the *downstream* conve
 program: §13.2's `maximise mu(c)` and §13.3's `mu(c) >= floor` are convex in `c`
 only while `mu` is concave in `c`.
 
-**That is an argument for the thermodynamic form independent of parameter
-availability, and it is the main finding of this note.** At the exchange boundary
-the displacement really is affine: for a single-species exchange
-`Q = c_p`, so `1 - Q/Keq` is linear in `c_p`. Internal reactions are multilinear
-in their products and lose it.
+**That is the argument for the thermodynamic form, and it is independent of
+parameter availability — which is why it decides the question rather than merely
+informing it.** At the exchange boundary the displacement really is affine: for a
+single-species exchange `Q = c_p`, so `1 - Q/Keq` is linear in `c_p`. Internal
+reactions are multilinear in their products and lose it.
+
+Concretely, the hyperbolic form would cost §13.2 (M10, **met**) and §13.3 (M11,
+**V6 passes 4/4**) their convexity — the two use cases that currently clear their
+gates, need no Head B, and are the project's strongest delivered results. Nothing
+the kinetic layer adds is worth trading those for; see below.
 
 #### Where to put it: the exchange boundary, not the internal network
 
@@ -5659,6 +5678,84 @@ nothing would be comparable across the change.
    about the *reactor*, not a modelling convenience, and the unbuffered case
    becomes scientifically interesting rather than a nuisance.
 
+#### The competitive form, and why it is not being built
+
+Competitive (and uncompetitive/non-competitive) product inhibition is the enzyme
+binding its own product, `v <= Vmax/(1 + p/Ki)` or an apparent-`Km` shift. It is
+the mechanism most people mean by "product inhibition", it is real, and it is
+**not** being implemented. Recording the case for it, and against, so the decision
+does not get re-litigated from scratch.
+
+**What implementing it would take.**
+
+1. **A `Ki` per (enzyme, reaction, product), per organism.** `Ki` is a property of
+   the protein, so the table does not factor out across the roster — it multiplies
+   by 21. From CatPred over the GPRs' own sequences, taking the **max** over
+   isozymes (414 of 1665 reactions in one genome have an `or`, and the cell uses
+   whichever protein is least inhibited).
+2. **Internal metabolite concentrations, or an arbitrary restriction.** Competitive
+   inhibition is overwhelmingly an *internal* phenomenon; restricting it to
+   exchange transporters covers a small and not especially principled subset. Doing
+   it properly needs an internal concentration vector — ~1055 metabolites per
+   organism against the 444 shared exchanges the surrogate currently carries — which
+   is a different state space, not a bigger one.
+3. **Per-organism input channels, which breaks the shared index.** Because `Ki`
+   differs between organisms, the inhibition factor `theta` is organism-specific
+   even for a shared metabolite. The 365 shared exchanges that make §8.4's Newton
+   Jacobian 365x365 stop being shared in the inhibition coordinate.
+4. **A replacement for both convex programs.** §13.2 and §13.3 would become
+   non-convex, so each would need §13.5's "propose with the model, accept with the
+   truth" treatment — at much higher LP cost, since both run many iterations where
+   §13.5 runs eight.
+5. **Sensitivity machinery as a hard requirement, not an option.** A point-estimate
+   `Ki` is not defensible under P30/P31, so every result would have to be reported
+   as a spread over sampled parameters.
+
+**What it would genuinely add — this is the real cost of the decision.**
+
+1. **Inhibition that bites far from equilibrium.** The thermodynamic term is nearly
+   inert until `Q/Keq` approaches 1; competitive inhibition reduces rate at any
+   product concentration comparable to `Ki`. A chemostat is dilute by construction,
+   so this is the regime where the kinetic form matters and the thermodynamic one
+   may not. **Stage 0 is exactly the measurement of whether that gap is real here.**
+2. **Organism-level specificity, which is a niche axis.** Two members sharing a
+   reaction can differ by orders of magnitude in susceptibility. That produces
+   coexistence the thermodynamic form cannot: `ΔG` is the same for both, so it
+   shifts both members' bounds together and adds a *shared* constraint rather than
+   a *differentiating* one. Given §13.4's `k = 1` and one survivor everywhere, a
+   differentiating constraint is precisely what would change the ecology.
+3. **Allosteric and end-product feedback** — branch-point regulation — is neither
+   strictly thermodynamic nor competitive but is modelled with the same functional
+   form, so it comes along for free.
+
+**Why not, in order.**
+
+1. **It trades the two use cases that work for one that would not be trustworthy.**
+   §13.2 and §13.3 pass their gates, use Head A alone, and are convex. The kinetic
+   form makes them non-convex and gains a mechanism whose parameters are imputed.
+2. **The layer would be mostly imputation, and P30 says that is the bad kind of
+   incomplete.** EC coverage is 47% of reactions and BRENDA `Ki` is far sparser than
+   that, so most values would come from a predictor. An optimiser routes flux
+   through whatever it is not constrained by, so a mostly-imputed inhibition layer
+   biases towards whichever reactions the predictor happened to score as tolerant.
+3. **What it adds sits exactly where the model is weakest.** Its advantage is the
+   dilute, drawn-down regime — which is §8.6e's 3300x Head B failure and where
+   `reach` is 4-8 against a held-out 0.10. The added mechanism would be least
+   validated precisely where it does the most work.
+4. **`ΔG` is the layer that can be complete**, and completeness is what an
+   optimisation model needs (P30). Thermodynamics is enzyme-independent, covers
+   ~75% of reactions through MetaNetX with a principled uncertainty, and needs no
+   per-organism table.
+
+**The scenario where this decision bites, and what to do then.** If Stage 0 finds
+`Q/Keq << 1` at every state §8.1 and §13.5 visit, then thermodynamic backpressure
+is inert *in this design* and the honest conclusion is that product inhibition is
+not representable at the exchange boundary without the kinetic form. **The response
+is to change the reactor, not the model** — a batch culture at high inoculum with no
+dilution accumulates product, and that is where a thermodynamic bound binds. Only
+if that also fails is the kinetic form worth reopening, and then as Stage 3's
+sensitivity layer on top of the thermodynamic base, never as the base itself.
+
 #### Staged plan, cheapest decisive test first
 
 **Stage 0 — is it inert here? No solves, no relabel.** P25 exactly: do not spend a
@@ -5683,9 +5780,11 @@ heads. Re-run M5, V5, V6 and the §13.4 fixed points. Budget a matched retrain
 control — a fresh fit at the same seed moved the 8-doubling mean 0.085 → 0.143
 with no new rows.
 
-**Stage 3 — `Ki` as a sensitivity layer only.** CatPred over the GPR sequences,
-per organism, max over isozymes; sample its uncertainty; report the spread. Never
-a point estimate in the base model.
+**Stage 3 — out of scope, recorded for completeness.** `Ki` as a *sensitivity
+layer* over the thermodynamic base: CatPred across the GPR sequences, per organism,
+max over isozymes, sampled rather than point-estimated. Not planned; the trigger
+that would reopen it is the Stage 0 / reactor outcome described above, not a
+schedule slot.
 
 **New gate.** *V9: on a pair with a documented product-inhibited handover (an
 acetate or lactate producer plus a consumer), the model reproduces the inhibition
