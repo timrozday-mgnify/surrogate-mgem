@@ -4885,6 +4885,25 @@ being exploited.** 5 communities x 64 draws x 3 starts:
    true 4e-06. Screening the draws with the LP (one solve per member per draw)
    takes that cell to **761.2**. It is the highest-value LP in the run.
 
+**The seeding ablation, paired and at its honest size.** `--no-screen` on the
+identical code, objective, buffering and draws — 4 of 5 communities completed
+before the run was killed, and its first cell reproduces the earlier
+`E_hat`-seeded run's 163.6 exactly, so the two are the same configuration:
+
+| community | seeded by `E_hat` | **LP-screened seeds** |
+| --- | --- | --- |
+| CR626927.1 + GCA_000151225.1 | 163.6 | **463.6** |
+| AAXE02 + ABCC02 | **4.0e-06** | **761.2** |
+| CP048433.1 + CP070062.1 + CR626927.1 | **378.9** | 294.1 |
+| CP001726.1 + DACTBY01 + GCA_000007325.1 | 168.3 | **227.1** |
+
+**3 of 4 better, one worse.** The mechanism is not carried by this table — it is
+carried by the rank correlation of -0.053, by 27 of 64 draws having a genuinely
+nonzero true rate while all three `E_hat` seeds sat at zero, and by the 8-order
+move on AAXE02+ABCC02. The one regression is a community where the head ranks
+media *well* (draw Spearman +0.807), which is the case screening was never
+needed for.
+
 **The rank correlation is the number to report first**, because it says whether
 the surrogate can order media for this objective at all, and it varies enormously
 by community: **-0.053 / +0.316 / +0.541 / +0.807 / +0.856**. Where it is near
