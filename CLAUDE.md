@@ -3251,6 +3251,109 @@ identical path. And do not cache cobra models across communities: holding every
 genome the run has touched OOM-killed a 5-community run with no traceback, and
 re-reading the SBML is seconds.
 
+### M16/§13.11: product inhibition, in the true LP only — 2026-09-07/08
+
+Built and measured. **Rescheduled next**, through §13.5 and **without a relabel**:
+Stage 0 refuted inhibition in the §4.3 *draws*, and Stage 1 was written as a
+relabel, so the two got tied together. They separate — §13.5 is the one use case
+whose ground truth is an LP solve at a medium the *search designs*, and it already
+proposes with the surrogate and accepts with the true LP, so the bound goes into
+the truth alone. Heads unchanged, `x_scale` unmoved, nothing on file invalidated,
+and the FBA arm is bit-identical to before.
+
+`solve.mm_upper_bound(vmax, c, ceq) = |vmax| * max(0, 1 - c/ceq)`;
+`apply_mm_bounds(..., ceq=None)` and `solve(..., ceq=None)`;
+`cfs interactions --inhibition <json>`. The JSON takes a **`"default"`** applied to
+every other *unbuffered* exchange, because P30 says an unparameterised exchange is
+modelled as infinitely tolerant of its own product and the LP routes flux through
+exactly those — a complete-but-approximate layer is the one an optimisation model
+can carry, and a 75%-coverage eQuilibrator table is the shape P30 warns about. That
+is also why the eQuilibrator/MetaNetX route is **deferred**: the decisive question
+is a threshold, and sweeping one `c^eq` over decades answers it with no ~1 GB
+compound cache.
+
+**The buffered species must be excluded from the default, and it is load-bearing.**
+§13.5 pins `EX_h_e`/`EX_h2o_e` at `1e3 * Km`, so any finite `c^eq` puts their
+secretion bound at exactly zero — a community that cannot excrete a proton. Not
+inhibition, an infeasible model, and it would have read as "inhibition kills every
+community". Naming one explicitly still works.
+
+**Stage 3', first half — the bound binds, and it cost no solves.**
+`20hm_bands/stage3_binding.py` reads the designed media already on disk: with
+`ub = 1000(1 - c/c^eq)`, a true secretion `z` is cut exactly when
+`c^eq < c/(1 - z/1000)`. Over 123 true-secreting (donor, metabolite) pairs the
+median threshold is **0.113 mM** — the bottom of Bennett et al.'s measured
+intracellular range — with **66/123** binding at 0.1 mM. **Stage 0's "inert"
+verdict does not carry over, and the reason is the question, not the media**:
+Stage 0 measured dynamic *accumulation* (median rise 4.6 uM), while §13.5 has no
+trajectory — `E` is a capacity at a fixed medium, so the bound sees the
+**standing** 0.1 mM concentration and nothing has to accumulate.
+
+**Stage 3', second half — 30 runs, 6 h 29 m, five 2-member cells x {FBA, `c^eq` in
+0.01/0.1/1/10/100 mM}, everything else identical. V5 passes 5/5 in every arm.**
+
+| `E_true` at each arm's own design | FBA | 0.01 | 0.1 | 1.0 | 10.0 | 100.0 |
+| --- | --- | --- | --- | --- | --- | --- |
+| cell 0 | 483.5 | 202.2 | 163.6 | 332.7 | 284.4 | 464.2 |
+| cell 1 | 896.0 | 692.7 | 876.5 | 792.4 | 708.5 | **896.0** |
+| cell 2 | 816.1 | 415.9 | 395.6 | **1326** | 811.6 | 804.9 |
+| cell 3 | 439.1 | 13.2 | 86.0 | **524.8** | 119.7 | 405.7 |
+| cell 4 | 371.1 | 268.3 | **702.6** | **551.8** | 377.3 | 371.7 |
+
+**That table cannot be read as "what inhibition does"** — each arm designed its own
+medium, so the acceptance test moved the optimum and the two causes are summed.
+`inhibition_crosseval.py` scores every design under *both* models (same medium,
+same abundances, only the bound differing) in **40 s of LP**, and it changes the
+reading:
+
+1. **The `c^eq` = 100 mM arm is the null control and passes on all five cells**
+   (0.92-1.00 at the FBA medium; cell 1 reproduces FBA exactly). Inert where
+   `stage3_binding.py` says nothing binds.
+2. **At a fixed medium inhibition usually destroys the interaction** — ratio to FBA
+   0.000 on three cells at 0.01 mM, 2.9e-06 on cell 3 at 0.1 mM.
+3. **But not always: cell 4 goes *up*, 371.1 -> 605 at 0.1 mM.** `E` is not the
+   LP's objective — closing an overflow route reroutes growth-optimal flux into a
+   metabolite a partner consumes. **Never predict the sign of a constraint's effect
+   on a non-objective quantity from the direction of the feasible-set change.**
+4. **The headline: the two models disagree about which medium to run.** Five
+   inhibited designs score `E_true` = **0.000 under plain FBA** and 86 to **1326**
+   under inhibition. The designer is not recovering lost handovers, it is finding
+   media where the handover exists *only because* secretion is inhibited — and the
+   converse holds, the inhibited designs being poor FBA media. An experiment
+   designed under FBA is the wrong experiment if inhibition is real at that `c^eq`.
+
+**Concavity in `c` is retracted even for the thermodynamic form** — the `max(0, .)`
+clip is a convex kink at `c = c^eq`, and `f'(c^eq-) < 0` exactly when the bound
+binds, so it fails precisely where the mechanism is active. Not removable (`ub < 0`
+forces uptake, an infeasible LP, `mu = 0` — worse than a kink). The form choice
+still stands, the hyperbolic bound being convex *everywhere* rather than at one
+known point per metabolite. The head is unaffected (its channel is `theta`, and
+`mu` is concave and non-decreasing in `(u, theta)` jointly); §13.2/§13.3 get the
+`(u, theta)` **relaxation**, whose optimum is an upper bound because `mu` is
+non-decreasing in both — which composes with the certified-upper-bound plus
+LP-round-trip discipline they already run under.
+
+**Neither head needs a new architecture.** Head A gains one per-metabolite input
+channel (444 -> 888) with monotonicity **uniform, not signed** — the change table's
+"signed per channel" is only true in `c` — and `init_from_tangents` transfers free,
+since the secretion duals come from the same LP. What is genuinely new is a
+`_kink_scale` analogue for `theta`. Head B gains a second inference clamp
+`z <= Vmax * theta`, aimed at the **48-69% of its error that sits on secretion**
+and is currently unconstrained; measure the violation rate first and make it a
+min-norm projection, not a shrink. The seven-instance "a better rhs is not a better
+trajectory" caution does **not** transfer — `E` is a static rate, so an rhs
+improvement is the deliverable rather than a proxy.
+
+**Not delivered: an observable for interference.** `E = min(secretion, uptake) >= 0`
+by construction, so suppression shows only as a smaller `E`, never as a negative
+link. §13.11's promise that §13.5 "can finally express negative interaction" is
+**not discharged**; the obvious candidate is each member's `mu` with and without
+its partners at the same medium (`G + 1` solves, no new machinery). Not built.
+
+Scripts (`20hm_bands/`): `stage3_binding.py` (no solves), `inhibition_sweep.sh`
+(resume-safe, one invocation per cell), `inhibition_report.py`,
+`inhibition_crosseval.py`, `ceq_*.json`.
+
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
 After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3

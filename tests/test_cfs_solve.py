@@ -89,3 +89,29 @@ def test_shadow_price_matches_finite_difference():
         mu2 = m.optimize().objective_value
     fd = (mu2 - s.mu_max) / (-h)  # dmu_max/d(lower bound)
     assert shadow == pytest.approx(fd, abs=1e-2)
+
+
+def test_mm_upper_bound():
+    from cfs.groundtruth.solve import mm_upper_bound
+
+    assert mm_upper_bound(10.0, 0.0, 2.0) == 10.0  # no product -> full secretion
+    assert mm_upper_bound(10.0, 1.0, 2.0) == 5.0  # affine in c, not hyperbolic
+    assert mm_upper_bound(10.0, 2.0, 2.0) == 0.0  # at equilibrium -> no net secretion
+    assert mm_upper_bound(10.0, 9.0, 2.0) == 0.0  # past it -> clipped, never negative
+
+
+def test_product_inhibition_throttles_growth_and_is_off_by_default():
+    """§13.11: ``ceq`` caps secretion; omitting it must reproduce plain FBA exactly."""
+    pytest.importorskip("highspy")
+    from cfs.groundtruth.solve import solve
+
+    m = _toy_model()
+    conc = {"EX_a_e": 1e6, "EX_bio_e": 9.95}
+    plain = solve(m, conc, alpha=1.0, eps=1e-3)
+    assert plain.mu_max == pytest.approx(10.0, rel=1e-4)  # unconstrained secretion
+
+    inhibited = solve(m, conc, alpha=1.0, eps=1e-3, ceq={"EX_bio_e": 10.0})
+    assert inhibited.mu_max == pytest.approx(5.0, rel=1e-3)  # 1000 * (1 - 9.95/10)
+
+    dead = solve(m, conc, alpha=1.0, eps=1e-3, ceq={"EX_bio_e": 9.0})
+    assert dead.mu_max == pytest.approx(0.0, abs=1e-6)  # product past equilibrium

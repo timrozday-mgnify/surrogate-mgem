@@ -593,6 +593,21 @@ def build_parser() -> argparse.ArgumentParser:
         "metabolites for a pair, 62 for all 21, against 444 exchanges.",
     )
     ix.add_argument(
+        "--inhibition", type=Path, default=None,
+        help="§13.11/M16: JSON mapping exchange id -> equilibrium concentration, "
+        "in the medium's own units, plus an optional \"default\" key applied to "
+        "every other (unbuffered) exchange — per P30 an unparameterised exchange "
+        "is modelled as infinitely tolerant of its own product and the LP routes "
+        "flux through exactly those, so the layer must be complete. Turns on thermodynamic product inhibition in "
+        "the **true LP only** — secretion capacity falls affinely to zero as the "
+        "external concentration reaches equilibrium, so a member's waste inhibits "
+        "itself and its neighbours, which is the negative interaction §13.5 "
+        "otherwise cannot express. The heads are unchanged and nothing is "
+        "relabelled, so omitting this is plain FBA bit for bit and the two arms "
+        "are directly comparable. Affine on purpose: the hyperbolic Ki form is "
+        "convex and would cost §13.2/§13.3 their convexity (P30/P31).",
+    )
+    ix.add_argument(
         "--box", type=int, default=3,
         help="With --seed-mode candidate: extra starts per candidate drawn inside "
         "the envelope of every labelled medium where the donor secreted that "
@@ -1148,6 +1163,8 @@ def main(argv: list[str] | None = None) -> int:
             buffered=tuple(m for m in args.buffered.split(",") if m),
             screen=not args.no_screen,
             seed_mode=args.seed_mode,
+            box=args.box,
+            inhibition=args.inhibition,
         )
         print(json.dumps({k: v for k, v in report.items() if k != "cells"}, indent=2))
         return 0 if report.get("passed", True) else 1

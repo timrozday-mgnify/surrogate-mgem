@@ -588,7 +588,41 @@ def distinguishing(c: np.ndarray, c_ref: np.ndarray, exchanges: list[str], top: 
 # --------------------------------------------------------------------------- #
 
 
-def true_z(models: list, exchanges: list[str], c: np.ndarray, eps: float = 1e-3) -> np.ndarray:
+def ceq_map(spec: dict, exchanges: list[str], keep: np.ndarray) -> dict[str, float]:
+    """Expand an ``--inhibition`` spec to one ``c^eq`` per exchange (§13.11 stage 2').
+
+    ``spec`` is exchange id -> equilibrium concentration, plus an optional
+    ``"default"`` applied to every other exchange. The default is not a
+    convenience: P30 says an *unparameterised* reaction is modelled as infinitely
+    tolerant of its own product, and a growth-maximising LP routes flux through
+    exactly those, so a partial layer biases towards whatever was not measured.
+    A complete-but-approximate layer is the one an optimisation model can carry;
+    a 75%-coverage table is the shape P30 warns about.
+
+    **Buffered species are excluded, and that is load-bearing.** §13.5 pins them
+    at ``1e3 * Km`` to represent a solvent and a pH controller, so any finite
+    ``c^eq`` puts their secretion bound at exactly zero -- the community could not
+    excrete a proton or a water molecule, which is not inhibition, it is an
+    infeasible model. Naming one explicitly still works; it is only the default
+    that skips them.
+    """
+    default = spec.get("default")
+    out = {}
+    for ex, wanted in zip(exchanges, keep, strict=True):
+        if ex in spec:
+            out[ex] = float(spec[ex])
+        elif default is not None and wanted:
+            out[ex] = float(default)
+    return out
+
+
+def true_z(
+    models: list,
+    exchanges: list[str],
+    c: np.ndarray,
+    eps: float = 1e-3,
+    ceq: dict[str, float] | None = None,
+) -> np.ndarray:
     """``z`` per member from the true FBA + elastic-net solve, aligned to ``exchanges``.
 
     :func:`cfs.compose.dfba.rhs_truth` accumulates the pool sum and drops the
@@ -602,7 +636,7 @@ def true_z(models: list, exchanges: list[str], c: np.ndarray, eps: float = 1e-3)
     col = {ex: j for j, ex in enumerate(exchanges)}
     z = np.zeros((len(models), len(exchanges)))
     for i, model in enumerate(models):
-        sol = solve(model, conc, 1.0, eps, km_cfg)
+        sol = solve(model, conc, 1.0, eps, km_cfg, ceq)
         if sol.status != "optimal":
             LOGGER.debug("member %d non-optimal (%s) — no growth, no fluxes (P2)", i, sol.status)
             continue
@@ -625,6 +659,7 @@ def verified_ascent(
     iters: int = 120,
     eps: float = 1e-3,
     keep: np.ndarray | None = None,
+    ceq: dict[str, float] | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Trust-region search on ``E`` with the **true LP as the acceptance test**.
 
@@ -650,14 +685,14 @@ def verified_ascent(
     Cost is one FBA per member per iteration.
     """
     c = np.asarray(c0, dtype=np.float64)
-    best_true = float(exchange(true_z(models, sur.exchanges, c, eps), X, keep).sum())
+    best_true = float(exchange(true_z(models, sur.exchanges, c, eps, ceq), X, keep).sum())
     start_true, r, n_lp, accepted = best_true, float(decades), 1, 0
     for _ in range(max_it):
         lo, hi = trust_box(sur, c, r, keep)
         cand, _ = maximise(
             sur, c, X, alpha, cost=cost, budget=budget, c_lo=lo, c_hi=hi, iters=iters, keep=keep
         )
-        e_true = float(exchange(true_z(models, sur.exchanges, cand, eps), X, keep).sum())
+        e_true = float(exchange(true_z(models, sur.exchanges, cand, eps, ceq), X, keep).sum())
         n_lp += 1
         if e_true > best_true:
             c, best_true, accepted = cand, e_true, accepted + 1
@@ -702,6 +737,7 @@ def run(
     screen: bool = True,
     seed_mode: str = "candidate",
     box: int = 3,
+    inhibition: Path | None = None,
 ) -> dict:
     """Survey the interactions a community can reach, then design media for them.
 
@@ -713,6 +749,13 @@ def run(
     surrogate's weakest axis is exactly the magnitude this objective is built on.
     """
     from cfs.compose.dfba import Surrogate, community_medium
+
+    # §13.11: exchange id -> equilibrium concentration, in the medium's own units.
+    # It reaches only the *true* LP -- the heads are unchanged and the labels are
+    # not relabelled, so "FBA" and "FBA + product inhibition" differ in exactly
+    # one place: what the acceptance test and the screen consider possible.
+    ceq_spec = json.loads(Path(inhibition).read_text()) if inhibition else None
+    ceq = None  # expanded per community, once `sur.exchanges` and `keep` exist
 
     Path(out).mkdir(parents=True, exist_ok=True)
     if verify:
@@ -729,15 +772,20 @@ def run(
         # is large in memory and holding every genome the run has ever touched is
         # what killed a 5-community run with no traceback. Re-reading the SBML is
         # seconds; the cache was not worth an OOM.
-        models = (
-            [cobra.io.read_sbml_model(str(roster[g].model_path)) for g in gids]
-            if verify
-            else []
-        )
+        # Freed *before* the next community's are read, not by the rebinding: a
+        # list comprehension builds its result before it is assigned, so the
+        # previous community's GEMs are still referenced while the new ones load
+        # and the peak is two communities' worth. That is what killed three
+        # 5-community runs here, each mid-SBML-load with no traceback -- the same
+        # signature as the models cache this comment used to be about.
+        models = []
+        if verify:
+            models = [cobra.io.read_sbml_model(str(roster[g].model_path)) for g in gids]
         G = len(gids)
         X = np.ones(G)  # uniform reference abundance: E is then per unit biomass
         al = alpha
         keep = keep_mask(sur.exchanges, buffered)
+        ceq = None if ceq_spec is None else ceq_map(ceq_spec, sur.exchanges, keep)
         # `draws`: random §4.3 media, and whether one contains a handover is luck.
         # `candidate`: one start per metabolite the labels say *could* be handed
         # over, with that metabolite's uptake bound opened -- so the multistart
@@ -810,7 +858,9 @@ def run(
         if verify and screen:
             # Keep the per-metabolite vector, not just its sum: the sum ranks
             # the starts, the vector says which handovers were realised at all.
-            EX_true = np.array([exchange(true_z(models, sur.exchanges, c), X, keep) for c in C])
+            EX_true = np.array(
+                [exchange(true_z(models, sur.exchanges, c, ceq=ceq), X, keep) for c in C]
+            )
             E_true_draws = EX_true.sum(1)
             best = np.argsort(-E_true_draws)[:starts]
             if len(E_true_draws) > 2 and E_true_draws.std() > 0 and E.std() > 0:
@@ -869,6 +919,7 @@ def run(
                 c_star, extra = verified_ascent(
                     sur, models, c0, X, al, cost=cost, budget=budget,
                     decades=trust_decades, max_it=verify_steps, iters=iters, keep=keep,
+                    ceq=ceq,
                 )
             else:
                 c_star, path = maximise(
@@ -932,8 +983,8 @@ def run(
         }
 
         if verify:
-            zt_draw = true_z(models, sur.exchanges, c_draw)
-            zt_best = true_z(models, sur.exchanges, c_best)
+            zt_draw = true_z(models, sur.exchanges, c_draw, ceq=ceq)
+            zt_best = true_z(models, sur.exchanges, c_best, ceq=ceq)
             e_draw, e_best = exchange(zt_draw, X, keep), exchange(zt_best, X, keep)
             hat_draw = exchange(member_z(sur, c_draw, al), X, keep)
             hat_best = exchange(member_z(sur, c_best, al), X, keep)
@@ -976,7 +1027,16 @@ def run(
             "" if not verify else f" (true {cell['E_true_designed']:.4g})",
         )
 
-    report = {"cells": cells, "n_communities": len(cells), "verified": verify, "exploratory": True}
+    report = {
+        "cells": cells,
+        "n_communities": len(cells),
+        "verified": verify,
+        "exploratory": True,
+        # Which model the truth was taken under, so an FBA-only run and an
+        # inhibited one are never confused in a directory of reports.
+        "inhibition": None if ceq_spec is None else str(inhibition),
+        "n_inhibited_exchanges": 0 if ceq is None else len(ceq),
+    }
     if verify:
         gain = np.array([c["true_gain"] for c in cells])
         # `n_created` is the outcome `true_gain_rel` cannot express: a medium that

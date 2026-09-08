@@ -63,6 +63,21 @@ def mm_lower_bound(vmax: float, c: float, km: float) -> float:
     return -abs(vmax) * c / (km + c)
 
 
+def mm_upper_bound(vmax: float, c: float, ceq: float) -> float:
+    """Secretion upper bound under thermodynamic product inhibition (§13.11).
+
+    ``ub = Vmax * max(0, 1 - c/ceq)``: the displacement from equilibrium, so
+    secretion stops once the external concentration reaches ``ceq``. **Affine**
+    in ``c`` on purpose -- ``mu_max`` is concave in the LP's bound vector, so it
+    stays concave in ``c`` only while the bound is affine in ``c``. The
+    hyperbolic/competitive form ``Vmax/(1 + c/Ki)`` is convex and would cost
+    §13.2 and §13.3 their convexity; see the plan's §13.11.
+    """
+    if ceq <= 0.0:
+        return 0.0
+    return abs(vmax) * max(0.0, 1.0 - c / ceq)
+
+
 def _base_id(exchange_id: str) -> str:
     """BiGG base metabolite token: EX_glc__D_e -> glc, EX_na1_e -> na1."""
     core = exchange_id
@@ -88,13 +103,21 @@ def km_for_exchange(exchange_id: str, km_cfg: dict) -> float:
     return float(km_cfg["default"])
 
 
-def apply_mm_bounds(model, concentrations: dict[str, float], km_cfg: dict) -> None:
+def apply_mm_bounds(
+    model, concentrations: dict[str, float], km_cfg: dict, ceq: dict[str, float] | None = None
+) -> None:
     """Set exchange uptake lower bounds from concentrations, in place (§3.3).
 
     ``concentrations`` maps exchange id -> concentration. Vmax is the exchange's
     existing default uptake magnitude (``abs(lower_bound)``). Exchanges absent from
     ``concentrations`` are left at their current bound (the caller sets background
     levels). Call inside a ``with model:`` block to keep the change scoped.
+
+    ``ceq`` turns on §13.11's thermodynamic product inhibition: for each exchange
+    it names, the *secretion* upper bound falls affinely to zero as ``c`` reaches
+    that metabolite's equilibrium concentration. ``None`` (the default) is plain
+    FBA, bit for bit -- every result on file was measured that way, so the two
+    modes have to stay comparable.
     """
     for ex_id, c in concentrations.items():
         if ex_id not in model.reactions:
@@ -102,6 +125,12 @@ def apply_mm_bounds(model, concentrations: dict[str, float], km_cfg: dict) -> No
         rxn = model.reactions.get_by_id(ex_id)
         vmax = abs(rxn.lower_bound) or 1000.0
         rxn.lower_bound = mm_lower_bound(vmax, c, km_for_exchange(ex_id, km_cfg))
+    for ex_id, eq in (ceq or {}).items():
+        if ex_id not in model.reactions:
+            continue
+        rxn = model.reactions.get_by_id(ex_id)
+        c = concentrations.get(ex_id, 0.0)
+        rxn.upper_bound = mm_upper_bound(rxn.upper_bound or 1000.0, c, eq)
 
 
 # --------------------------------------------------------------------------- #
@@ -216,7 +245,12 @@ def mu_optimize(model, what: str = "") -> float:
 
 
 def solve(
-    model, concentrations: dict[str, float], alpha: float, eps: float, km_cfg: dict | None = None
+    model,
+    concentrations: dict[str, float],
+    alpha: float,
+    eps: float,
+    km_cfg: dict | None = None,
+    ceq: dict[str, float] | None = None,
 ) -> Solution:
     """Ground-truth solve for one (medium, alpha, eps) (plan §3.2).
 
@@ -236,7 +270,7 @@ def solve(
     # int(): optlang's GLPK interface multiplies this into glpk's int tm_lim.
     model.solver.configuration.timeout = int(_QP_TIME_LIMIT)
     with model:
-        apply_mm_bounds(model, concentrations, km_cfg)
+        apply_mm_bounds(model, concentrations, km_cfg, ceq)
 
         try:
             fba = model.optimize()

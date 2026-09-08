@@ -327,6 +327,24 @@ Read that first; this table is the bibliography for it.
 
 ---
 
+## Part 4c — Product inhibition: thermodynamics, kinetics, and where the parameters are
+
+Added 2026-09-08, when M16 was rescheduled next and its stage 3' ran. The full
+design study, the form choice and the measurements are **plan §13.11**; this is the
+bibliography and the one-line reason each source is or is not the base layer.
+
+| Reference | Why it matters here |
+| --- | --- |
+| **eQuilibrator 3.0** / `equilibrator-api`; NIST **TECRDB** | The base layer if per-metabolite `c^eq` is ever wanted: `ΔG'°` and `Keq` by component contribution, **with uncertainty**, mapped through MetaNetX (our models carry `metanetx.reaction` on 1254/1665). Enzyme-*independent*, which is the whole reason it and not `Ki` is the layer to complete. Deferred behind the `c^eq` sweep (stage 3'b) — it is a ~1 GB compound cache for a question the sweep answered without it. |
+| Bennett et al., **Absolute metabolite concentrations and implied enzyme active site occupancy in *E. coli***, [Nat Chem Biol 2009](https://www.nature.com/articles/nchembio.186) | Where the 0.1-10 mM intracellular range comes from — the threshold Stage 0 was read against, and the range `stage3_binding.py`'s median binding `c^eq*` of 0.113 mM lands in. |
+| **pyTFA** / multiTFA | The reference implementation for internal `ΔG` constraints. Recorded as the thing **not** to start with: it adds indicator/log-concentration variables, which breaks the "LP value function concave in the RHS" argument the whole surrogate rests on. |
+| **BRENDA**; **SABIO-RK** | Measured `Ki`. Keyed by EC, and only 778/1665 of our reactions carry an `ec-code`, so coverage is the problem rather than accuracy — which is P30's shape exactly. |
+| Boorla & Maranas, **CatPred**, [Nat Commun 2025](https://www.nature.com/articles/s41467-025-57215-9) | The only route to a *per-organism, per-isozyme* `Ki`, from the GPRs' own sequences, with per-query uncertainty. Relevant only as stage 3's **sensitivity layer**; a point estimate in the base model is what P31 forbids (414 of 1665 reactions in one roster genome have isozymes, and the cell uses whichever is least inhibited). |
+| **GECKO 3 / ecModels**; **MetaNetX** | Machinery for turning kinetic constants into flux constraints, and the namespace glue that any of the above needs. |
+| Hsu, Hubbell & Waltman, 1977 (also Part 4) | Read *backwards* here: §13.4's `k = 1`, the R\* ordering and competitive exclusion are all conditional on there being **no interference**. Product inhibition adds a second niche axis, so those conclusions would have to be re-derived — which is why M16 is the one item that invalidates existing results. |
+
+---
+
 ## Part 5 — Open questions → what to read
 
 | Open question | Read | What it should tell you |

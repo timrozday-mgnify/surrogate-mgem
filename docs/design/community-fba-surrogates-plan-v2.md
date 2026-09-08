@@ -5074,7 +5074,7 @@ below is a Head B statement, and two things changed the verdicts:
 | §13.1 structure, ordering, cross-feeding | yes | **safe at a 4-doubling horizon** — recall 1.00, median flux cosine 0.995. **Not** safe per link in a starved culture: p05 cosine reaches **−0.44** below depth 0.1 |
 | §13.1 quantitative yield / batch endpoint | yes | **not safe at a long horizon** — 4.1% overall at 8 doublings, worst cell 0.70 — and §8.6f's round 4 shows **more Head B accuracy does not fix it** |
 | **§13.4 steady state / SteadyCom / §8.4** | yes | **the most exposed use case, and the next milestone.** A steady state *is* a drawn-down medium — the regime where Head B is worst — evaluated inside every Newton iteration. M5's shallow numbers must not be assumed to transfer; measure at the equilibrium |
-| §13.5 interaction magnitude | yes | **exploratory, and now quantified (2026-09-07).** Structure is usable — precision@n_true 0.75, recall 1.00 — magnitude is not (`E_hat/E_true` 0.45-1.88, not one-sided), and the head's ability to *rank* media for this objective varies from useless to good across communities (Spearman -0.053 to +0.856). Usable **with the LP in the loop** for seeding and acceptance; without it the designed optimum can be entirely fictitious |
+| §13.5 interaction magnitude | yes | **exploratory, and now quantified (2026-09-07).** Amended 2026-09-08 by §13.11 stage 3': under product inhibition the FBA and inhibited models disagree *qualitatively* about which medium is worth running — five inhibited designs have `E_true` = 0.000 under plain FBA — so the model choice, not just its accuracy, decides the experiment. Original: Structure is usable — precision@n_true 0.75, recall 1.00 — magnitude is not (`E_hat/E_true` 0.45-1.88, not one-sided), and the head's ability to *rank* media for this objective varies from useless to good across communities (Spearman -0.053 to +0.856). Usable **with the LP in the loop** for seeding and acceptance; without it the designed optimum can be entirely fictitious |
 | §13.6 posterior | yes | still blocked, but the error model now has a candidate: the reach proxy as a distance-aware nonconformity score, calibrated on community-regime states (never on held-out design media) |
 
 **Amended 2026-09-04, after §8.6g.** Two rows move, and both move because the LP
@@ -5122,7 +5122,7 @@ must budget a matched control.
 | M12 | §13.4 steady state + stability + invasion | V4 passes; Newton failure rate logged and < 1% — **built 2026-09-04**, `cfs steady-state`: coexistence from the active set, stability from the `(c, X)` Jacobian's eigenvalues, invasion from `mu_j(c*) - D`, and `dy*/dc_feed` from one extra solve. `--roster` adds an LP residual with a surrogate Jacobian, and `--mix-mu-rel` the hybrid that actually converges. **Measured over the roster 2026-09-05: V4 does NOT pass in general — those 5.6e-7 to 3.1e-6 figures are *medians* at 5 components, and at 20 the max is 6.2e-05 on the one cell with a decisive invasion margin but 4.5e-02 to 3.8e-01 on the near-tie cells, where a feed perturbation crosses the survivor swap and the difference quotient spans two branches; the Newton failure rate is 60% against the 1% gate, 4 of 10 cells returned a state an excluded member can invade, and the default warm start returns a *strictly invadable* state on 2 of the 4 converging cells — seeding from each member's monoculture instead finds the valid one, and takes the two hardest cells from residual 10 to 1e-5** -- so M12 does not pass. The failures are **not** the line search (a trust region is null) and not size (the 5-member cell converges where three 2-member ones fail). **The `reach` at `c*` is 1.0-5.7 and does not separate converged from failed**, so §13.7 is right that this is the most exposed use case — but an equilibrium is *one* state, so `--fallback-depth`'s LP is cheap here in a way it is not along a trajectory |
 | M13 | §13.5 interaction maximisation | **built 2026-09-07, `cfs interactions`; V5 passes 5/5 and it stays labelled exploratory.** Survey + LP-verified design of the media that facilitate cross-feeding. `E` is identically zero at the §13.4 steady state (one survivor ⇒ `min(secretion, uptake) = 0`), so it is posed at a fixed reference abundance and is a property of the medium. Three things were load-bearing and each was measured: **buffered species** (a pH-controlled aqueous vessel holds H+/H2O, so they are pinned and are not handovers — without that, `EX_h_e` alone is 97.6% of one community's true rate); **the LP as the acceptance test** (surrogate ascent alone improves the true rate on 2/5 with `E_hat/E_true` up to *infinite*); and **LP-screened seeds** (Spearman(`E_hat`,`E_true`) over 64 draws is **-0.053** on one community, so seeding by `E_hat` anti-selects — it took that cell from a true 4e-06 to 761.2). Final: 5/5 improved, median true gain +43.6%, precision@n_true 0.75, recall 1.00, `E_hat/E_true` median 1.64 and **not one-sided** (0.45-1.88) |
 | M14 | Error model + §13.6(a) posterior | V7 (SBC) passes |
-| M16 | §13.11 product inhibition at the exchange boundary, **thermodynamic form only** | **Stage 0 has run (2026-09-07) and it fails: the mechanism is inert in this design.** Product accumulation is a median **4.7e-07 mM** over a chemostat and **0.0046 mM** (a 5.5% rise on the 0.1 mM background) over an 8-doubling batch, against an intracellular threshold of 0.1-10 mM; nothing starts near zero, so no product accumulates from nothing. The cause is the design's concentration scale -- glucose 0.1 mM against M9's 22 mM, biomass 0.0093 gDW/L against 0.1-10 -- which is §13.10's `Vmax` defect on the concentration axis. **The two use cases want opposite media**: §4.3 is dilute because that is where `mu` carries gradient, and at M9 concentrations `u > 0.999` on everything. So M16 needs a *second* label root (concentrated, run to exhaustion), not a relabel -- which would also serve §8.6f's deep-regime coverage gap. Cost that design before committing. Key structural result stands: **monotonicity is lost but concavity survives, and only for the affine (thermodynamic) term** |
+| M16 | §13.11 product inhibition at the exchange boundary, **thermodynamic form only** | **Rescheduled next and RUN, 2026-09-07/08: stages 1', 2' and 3' are all done, through §13.5 and without a relabel.** The inhibited bound goes into the *true LP only* (`cfs interactions --inhibition <ceq.json>`), so the heads, the labels and `x_scale` do not move and nothing on file is invalidated; the FBA-only arm is the default and is bit-identical. **Concavity in `c` is retracted even for this form** — the `max(0, .)` clip is a convex kink at `c = c^eq`, and it bites exactly where the bound binds; the head is unaffected (its channel is `theta`, and `mu` is concave and non-decreasing in `(u, theta)`), the convex programs get a relaxation with an upper-bound guarantee. Neither head needs a new architecture — Head A gains a second per-metabolite input channel with monotonicity *uniform*, not signed, and label-tangent seeding transfers free; Head B gains a secretion clamp aimed at the 48-69% of its error that is currently unconstrained. **Stage 3' has run (2026-09-08): the bound binds, V5 passes 5/5 in every arm, the `c^eq` = 100 mM null control reproduces FBA, and the finding is that the two models **disagree qualitatively about which medium to run** — five inhibited designs have `E_true` = 0.000 under plain FBA and up to 1326 under inhibition. Inhibition is not a monotone suppressor of `E` (`E` is not the LP's objective, so closing an overflow route can create a handover). Interference still has no observable.** Stage 2' is done too: `c^eq` is complete by construction via a `"default"` key (P30 — a partial layer is the kind the LP exploits), so stage 3' is a **sweep in `c^eq`** rather than a point estimate, and eQuilibrator/MetaNetX is deferred behind it. Stage 0's inertness verdict is about the §4.3 *draws*, and §13.5 chooses its own media under an LP acceptance test, so it does not carry over untested. Stage 0 record: **it has run (2026-09-07) and it fails: the mechanism is inert in this design.** Product accumulation is a median **4.7e-07 mM** over a chemostat and **0.0046 mM** (a 5.5% rise on the 0.1 mM background) over an 8-doubling batch, against an intracellular threshold of 0.1-10 mM; nothing starts near zero, so no product accumulates from nothing. The cause is the design's concentration scale -- glucose 0.1 mM against M9's 22 mM, biomass 0.0093 gDW/L against 0.1-10 -- which is §13.10's `Vmax` defect on the concentration axis. **The two use cases want opposite media**: §4.3 is dilute because that is where `mu` carries gradient, and at M9 concentrations `u > 0.999` on everything. So M16 needs a *second* label root (concentrated, run to exhaustion), not a relabel -- which would also serve §8.6f's deep-regime coverage gap. Cost that design before committing. Its structural claim -- **monotonicity is lost but concavity survives for the affine (thermodynamic) term** -- is half retracted above: the clip costs concavity in `c` at one known point per metabolite, and only the head's own `(u, theta)` coordinate is untouched |
 | M15 | §13.10 kinetic-parameter inference from a chemostat time series | **gate met on synthetic data 2026-09-06, and it does not survive model error.** `Surrogate.lam` is the per-organism rate scale (nine lines, no relabelling, no retraining). Against surrogate-generated data both directions clear the integrator's noise floor by 2-5 orders and an 80-evaluation simplex recovers `lambda` to 0.15% once OD is added (a longer window does the same, with 15x *worse* conditioning -- the outcome tracks the weak direction's signal-to-noise, not the curvature ratio). Against **LP-generated** data (`--lp`, blockers 4+5) the model discrepancy is 5484x the integrator floor, and the two directions split: the ratio still carries 79x the floor and comes out +2.5%, while the scale direction moves the residual **less than the surrogate's own bias does** (0.65-1.5x) and comes out **-28%**, with `sse_hat` at 0.06 of the residual at `lam_true` -- i.e. `lambda` absorbing head error rather than being identified. **Report ratios, not the global scale.** Attributed 2026-09-07: the discrepancy is entirely Head B's `mu_floor`, which a chemostat sits under by construction (`D < 0.05 x mean training mu`; 21/21 states, floor 18-54x the actual `mu`) -- and **removing it is refuted**, 88x better pointwise `dc_rel` for an 8-15x worse trajectory and a +137% scale error, because the vessel's feedback on `c` closes at the right medium only when consumption is large. Seventh instance of P26/[[rhs-accuracy-does-not-buy-the-endpoint]]. Gate: recover a known per-organism `lambda` from synthetic `cfs simulate --stiff` data on a 2-member chemostat, before any adjoint work. Blocked downstream on the same error model as M14 |
 
 M9–M11 need nothing that does not already exist. M12 is M6. M13, M14 and M15 are the
@@ -5608,13 +5608,106 @@ input channel for a product as the inhibition factor `theta_p` itself, exactly a
 `u` is the input channel for a substrate, and the head is concave in `(u, theta)`
 jointly. What does **not** survive the hyperbolic form is the *downstream* convex
 program: §13.2's `maximise mu(c)` and §13.3's `mu(c) >= floor` are convex in `c`
-only while `mu` is concave in `c`.
+only while `mu` is concave in `c`. **Read the correction below before relying on
+that sentence** — the clip at `c = c^eq` costs the thermodynamic form its
+concavity in `c` too, just at one known point per metabolite rather than
+everywhere, and the two programs get a relaxation with an upper-bound guarantee
+instead of exact convexity.
 
 **That is the argument for the thermodynamic form, and it is independent of
 parameter availability — which is why it decides the question rather than merely
 informing it.** At the exchange boundary the displacement really is affine: for a
 single-species exchange `Q = c_p`, so `1 - Q/Keq` is linear in `c_p`. Internal
 reactions are multilinear in their products and lose it.
+
+**Corrected 2026-09-07: the *clip* breaks concavity in `c`, and the row above is
+too strong.** The bound is `ub = Vmax * max(0, 1 - c/c^eq)`, and `max(0, .)` is
+convex, so the composed map is affine only below equilibrium:
+
+```
+c <= c^eq :  theta affine        =>  mu concave in c
+c >= c^eq :  theta identically 0 =>  mu constant in c
+at c = c^eq:  f'(c^eq-) <= 0  ->  f'(c^eq+) = 0
+```
+
+The derivative **increases** across the kink, which is a convex kink, so `mu` is
+not concave in `c` on `[0, inf)` — and `f'(c^eq-) < 0` exactly when the secretion
+bound binds, i.e. **concavity fails precisely where the mechanism is active**. It
+is not removable by dropping the clip: `ub < 0` forces net uptake, which makes the
+LP infeasible and replaces a kink with `mu = 0`.
+
+So the form choice is still the right one — the hyperbolic bound is convex on
+*both* sides of the kink, i.e. everywhere, where this one is convex only at a
+single known point per metabolite — but "thermodynamic ⇒ §13.2 and §13.3 stay
+convex in `c`" is **retracted**. What survives, and it is enough:
+
+* **the head is unaffected**, because its input channel is `theta`, not `c`, and
+  `mu` is concave and non-decreasing in `(u, theta)` jointly;
+* **the convex programs get a relaxation with a guarantee.** Optimise over
+  `(u, theta)` as *independent* variables and recover `c` afterwards. `mu` is
+  non-decreasing in both, so dropping the consistency link `u = u(c)`,
+  `theta = theta(c)` is a **relaxation** and its optimum is an upper bound on the
+  true one — which composes with the discipline §13.2 and §13.3 already run under,
+  since the head is a certified upper bound (§13.2c) and every optimum is
+  LP-round-tripped anyway. The kink location `c^eq_m` is known per metabolite, so
+  a branch on "does this metabolite sit above or below equilibrium" is also
+  available and is exact; the relaxation is the cheap version.
+
+#### What the estimators need — and it is a coordinate, not an architecture
+
+**Head A: no architectural change.** Add a second per-metabolite input channel,
+the inhibition factor `theta_m`, exactly as `u_m` is the channel for uptake. Input
+width 444 -> 888; the max-affine head's planes are affine over the whole input
+vector, so a second block of coordinates is native to it.
+
+1. **Monotonicity survives, and the change table below is wrong about it.** That
+   table says the `-softplus` constraint "becomes **signed per channel**". That is
+   only true in `c`. In `(u, theta)` the head is non-decreasing in *both* —
+   more secretion capacity can only enlarge the feasible set, exactly as more
+   uptake can — so the constraint stays uniform, and signing it would be strictly
+   weaker for nothing. Same lesson as
+   [[concavity-imposed-in-the-wrong-coordinate]], a third time.
+2. **Seeding transfers for free.** `init_from_tangents` writes the labels' duals
+   into layer 1 as planes; the secretion duals come out of the *same* LP, so a
+   label tangent already carries components in both halves. The current best head
+   is the frozen `--epochs 0 --gm-init labels` one, so this is the cheapest
+   possible transfer — and it is the reason not to reach for a new architecture
+   before trying the existing one in the extended coordinate.
+3. **What is genuinely new is a `_kink_scale` analogue for `theta`.** The `x =
+   u/(u+s)` rescale exists because 99.9% of the `u` range carries no signal;
+   `theta` lives in `[0, 1]` with the informative region near `theta -> 0`, and
+   the same "no resolution where the bound binds" failure that cost M11 its
+   essentiality gap is plausible. `demand_probe`'s mirror image (below) is what
+   would anchor it.
+
+**Head B: no architectural change either, and this is where a gain is likely.**
+Every architectural arm on Head B is refuted on file — B1's low-rank basis null,
+B2 refuted from the labels, B3 the wrong sign, B6 refuted before building — and
+its residual is extrapolation to community-regime states, not capacity.
+Inhibition does not change that diagnosis; it *shrinks* the set the head can
+extrapolate into. What it adds is a second inference-time clamp,
+`z_m <= Vmax * theta_m`, beside §3.3's existing `z_m >= -Vmax * u_m`, and two
+recorded numbers make it the best-aimed constraint yet proposed for this head:
+
+* **48-69% of Head B's error is on secretion**, which no bound currently
+  constrains at all;
+* it violates the *uptake* bound on 28 of 213 exchanges by up to **186x**, so
+  there is no reason to assume it respects a secretion one.
+
+Two preconditions, both from this file's own scar tissue.
+[[constraint-worth-at-most-the-violation]]: measure the violation rate *first* —
+B1 was null because the component it removed had already been measured at 0.9-8.7%
+against a 12-26% error. And [[enforcing-is-not-projecting]]: it must be the
+min-norm projection, with its **fire rate checked against the measured violation
+rate**, because a sign-inverted feasibility test once made a live projection read
+as a null.
+
+**One caution that does *not* transfer.**
+[[rhs-accuracy-does-not-buy-the-endpoint]] has seven instances, and every one of
+them is a batch **endpoint**. §13.5's `E` is a static rate at a fixed medium and a
+fixed reference abundance — there is no integration and nothing empties — so here
+an rhs improvement *is* the deliverable rather than a proxy for it. Do not import
+the pessimism across use cases.
 
 Concretely, the hyperbolic form would cost §13.2 (M10, **met**) and §13.3 (M11,
 **V6 passes 4/4**) their convexity — the two use cases that currently clear their
@@ -5731,8 +5824,8 @@ parameter; a point estimate in the base model is not.
 | `sampling/active_subspace.py` | a second active set: metabolites whose **secretion** bound can bind. `demand_probe`'s mirror image — bisect for the concentration at which secretion starts to limit |
 | `sampling/design.py` | band the secretion-active metabolites too. The design currently holds the background *replete*, which under inhibition is the **worst** case, not the neutral one |
 | `surrogate/data.py` | `_organism_arrays`' dual clamp becomes **side-aware**. Today it clamps at 0 because a positive dual on an uptake bound is the metabolite's network value, not `d(mu)/d(supply)`. The secretion side has the opposite sign convention and the same dust problem |
-| `surrogate/groupmax.py`, `picnn_u.py` | the monotone constraint (`-softplus`) becomes **signed per channel**. The frozen `--gm-init labels --epochs 0` head may need *nothing*: it copies label tangents, which already carry the right signs |
-| `compose/dfba.py` | a secretion clamp beside the §3.3 uptake clamp in `mu_and_z`. This is a **free win for Head B**, whose worst measured failure is over-predicted flux magnitude — a second convex projection the true `z` is already inside |
+| `surrogate/groupmax.py`, `picnn_u.py` | ~~the monotone constraint (`-softplus`) becomes **signed per channel**~~ — **retracted, see "What the estimators need" above**: in the `(u, theta)` coordinate the head is non-decreasing in *both* channels, so the constraint stays uniform. A second per-metabolite channel widens the input 444 -> 888 and nothing else. The frozen `--gm-init labels --epochs 0` head may need *nothing*: it copies label tangents, and the secretion duals come from the same LP |
+| `compose/dfba.py` | a secretion clamp `z_m <= Vmax * theta_m` beside the §3.3 uptake clamp in `mu_and_z`, aimed at the **48-69% of Head B's error that sits on secretion** and is currently unconstrained. Measure the violation rate before building it and make it a min-norm projection, not a shrink |
 | `science/steady.py` | the chain rule in `_head_mu_rows`/`_lp_mu_rows` gains the secretion term |
 | `science/interaction.py` | §13.5 can finally express **negative** interaction (interference), not only handover |
 
@@ -5902,9 +5995,200 @@ run-to-exhaustion label root would serve product inhibition and Head B's known
 coverage gap at the same time. That is the design to cost before committing to
 M16.
 
-**Verdict: M16 stays scheduled last, and its Stage 1 is now blocked on a design
-decision rather than on implementation.** Do not build `mm_upper_bound` against
-the current label root; it would be exactly inert.
+**Verdict as of Stage 0: M16 stays scheduled last, and its Stage 1 is now blocked
+on a design decision rather than on implementation.** Do not build
+`mm_upper_bound` against the current label root; it would be exactly inert.
+
+#### Rescheduled 2026-09-07: M16 goes next, through §13.5 and without a relabel
+
+Stage 0 refuted inhibition **in the label design**, and Stage 1 was written as a
+relabel, so the two got tied together. They are separable, and the untying is what
+makes M16 runnable now: **§13.5 is the one use case whose ground truth is an LP
+solve at a medium the search itself designs.** `cfs interactions` already proposes
+with the surrogate and accepts with the true LP (P29/P22 forced that), so the
+inhibition can go into the *truth* alone — no `mm_upper_bound` in the label
+pipeline, no relabel, no `x_scale` move, and nothing in this document invalidated.
+
+Three things this buys that the relabel route does not:
+
+* **Stage 0's blocker does not apply.** Stage 0 measured accumulation at media
+  §4.3 *drew*; §13.5's designer chooses concentrations inside the trust region and
+  is scored by the LP, so it can walk toward the concentrations at which secretion
+  binds instead of waiting for a design that never visits them. If the trust region
+  cannot reach them, that is Stage 0's finding reproduced in the use case — also a
+  result, and it costs a run rather than a relabel.
+* **It is the use case the mechanism was for.** §13.5 today can only express
+  handover; interference — a member's waste suppressing its neighbour — is exactly
+  what a secretion bound adds, and it is the negative half of "interaction".
+* **The two arms are directly comparable by construction**, because the heads,
+  labels and search are byte-identical between them. That is the ablation P26 asks
+  for, available for free rather than as an extra control.
+
+**Sequence.**
+
+| stage | what | cost |
+| --- | --- | --- |
+| **1'** | `mm_upper_bound` + `ceq` threaded to the true LP only; `cfs interactions --inhibition <json>`; the FBA arm stays the default and stays bit-identical | **done 2026-09-07** |
+| **2'** | `c^eq` per exchange, **complete by construction**: a `"default"` in the `--inhibition` JSON reaches every unbuffered exchange, with per-metabolite overrides where a value is known | **done 2026-09-07** |
+| 3' | Both arms on the same communities, draws and seeds, and 2' makes it a **sweep in `c^eq`** rather than one point estimate. First half — at what `c^eq` does the bound first bind at the *designed* media — is **answered without a solve, and the answer is yes** (below). Second half — does `E_true` fall, do new *negative* links appear — is `20hm_bands/inhibition_sweep.sh`, 5 cells x {FBA, 5 `c^eq`} | one run per cell per `c^eq` |
+| 3'b | Only if 3' puts the binding threshold anywhere near the measured intracellular range (0.1-10 mM, Bennett et al. 2009): per-metabolite `c^eq` from eQuilibrator `ΔG'°` on the **transport** reaction via MetaNetX, over a measured intracellular pool. Not before — it is a ~1 GB compound cache and a 75%-coverage table for a question the sweep answers without either | the real work, deferred |
+| 4' | Only if 3' shows the bound binding: the concentrated, run-to-exhaustion **second** label root, which §8.6f's deep-regime gap wants anyway, then Stages 1-2 as originally written | the relabel |
+
+**Why the sweep comes before eQuilibrator, and why the layer is defaulted rather
+than mapped.** Two reasons, and the first is P30 rather than effort.
+
+1. **A 75%-coverage table is the shape P30 warns about.** An exchange with no
+   `c^eq` is modelled as infinitely tolerant of its own product, and the LP
+   maximises growth, so it routes secretion through exactly the unparameterised
+   ones. A complete-but-approximate layer is what an optimisation model can carry;
+   a scattered accurate one biases towards whatever MetaNetX happened to miss. The
+   `"default"` key is that completeness, in the file format.
+2. **The decisive question is a threshold, not a point estimate.** Stage 0's
+   finding was that `Q/Keq` never approaches 1 — a statement about *scale*. Sweeping
+   one `c^eq` over decades asks directly at what equilibrium concentration the
+   bound first binds at a **designed** medium, and whether that lands inside the
+   measured intracellular range (0.1-10 mM). One curve, no dependency, and it is
+   what decides whether per-metabolite values are worth acquiring at all.
+
+**One trap, and it is load-bearing.** The default must skip the **buffered**
+species. §13.5 pins them at `1e3 * Km` to stand for a solvent and a pH
+controller, so any finite `c^eq` puts their secretion bound at exactly zero — a
+community that cannot excrete a proton or a water molecule. That is not
+inhibition, it is an infeasible model, and it would have read as "inhibition kills
+every community". Naming one explicitly still works; only the default skips them.
+
+#### Stage 3', first half: the bound *does* bind at the designed media — 2026-09-07
+
+`20hm_bands/stage3_binding.py`, **no solves**: §13.5's designed media are already
+on disk (`interact_*/media.npz`) with the true per-donor secretion rates beside
+them, and §3.3 gives every exchange `ub = 1000`, so the inhibited capacity
+`ub = 1000 (1 - c/c^eq)` cuts a true secretion `z > 0` exactly when
+
+```
+c^eq  <  c / (1 - z/1000)  ==  c^eq*
+```
+
+Over **123 true-secreting (donor, metabolite) pairs** from three existing runs
+(`interact_cand3`, `interact_v4`, `interact_draws2`):
+
+| | value |
+| --- | --- |
+| `c^eq*` p05 / **median** / p95 | 2.9e-05 / **0.113 mM** / 3.9e+10 |
+| pairs binding at `c^eq` = 0.1 mM | **66 / 123** |
+| pairs binding at `c^eq` = 10 mM | 16 / 123 |
+| pairs already secreting at `Vmax` (bind at *any* `c^eq`) | 1, plus the whole upper tail |
+
+**The median threshold lands at 0.113 mM — the bottom of the measured
+intracellular range (0.1-10 mM), so roughly half the handovers §13.5 designs would
+be inhibited at physiological values.** Stage 0's "inert" verdict does **not**
+carry over, and the reason is a difference in the question, not in the media:
+
+* **Stage 0 asked about dynamic accumulation** — how much product *builds up* along
+  a trajectory — and found a median rise of 4.6 uM on a 0.1 mM background. A
+  thermodynamic bound needs `c` to *reach* `c^eq`, and nothing accumulated that far.
+* **§13.5 has no trajectory.** `E` is a capacity at a fixed reference abundance and
+  a designed medium, so what the bound sees is the **standing** concentration, not
+  the rise. The design's own 0.1 mM background is already at the low end of
+  intracellular concentrations, so the bound binds without anything accumulating.
+
+That distinction is the whole reason this use case was worth splitting out from the
+relabel, and it was available for the price of reading files already on disk (P25,
+used the way it is meant to be used rather than as a veto).
+
+**Two things the number does not say.** The upper tail is dominated by donors the
+LP is already secreting at **exactly `z = 1000`** — i.e. the *uninhibited* default
+bound is binding on them today, which is an arbitrary cap the current model
+happens to impose; those bind at any finite `c^eq`, and it is fair to read them as
+"already inhibited, by a constant nobody chose". And `c^eq* ~ c` means the sweep is
+really asking where the design's concentration scale sits relative to the
+intracellular one — the same §13.10 `Vmax`/scale defect, a third axis over, so
+stage 3'b's per-metabolite values matter less than the scale does.
+
+**Smoke-tested end to end** on one cell, 4 draws, 2 verify steps: 442 of 444
+exchanges inhibited (the two buffered excluded), 49 s, and the arms are not
+identical — true designed `E` 22.25 (FBA) against 25.95 at `c^eq = 1 mM`, with the
+search taking a different path because the acceptance test changed. Direction
+unread at n=1; that is what the sweep is for.
+
+#### Stage 3', second half: the two models disagree about which medium to run — 2026-09-08
+
+`20hm_bands/inhibition_sweep.sh`, 30 runs, 6 h 29 m: the five 2-member cells under
+FBA and under `c^eq` in {0.01, 0.1, 1, 10, 100} mM, everything else identical
+(same heads, same labels, same draws, same seed, `--starts 3 --verify-steps 8`).
+`E_true` at each arm's own designed medium:
+
+| cell | FBA | 0.01 | 0.1 | 1.0 | 10.0 | 100.0 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 483.5 | 202.2 | 163.6 | 332.7 | 284.4 | 464.2 |
+| 1 | 896.0 | 692.7 | 876.5 | 792.4 | 708.5 | **896.0** |
+| 2 | 816.1 | 415.9 | 395.6 | **1326** | 811.6 | 804.9 |
+| 3 | 439.1 | 13.2 | 86.0 | **524.8** | 119.7 | 405.7 |
+| 4 | 371.1 | 268.3 | **702.6** | **551.8** | 377.3 | 371.7 |
+
+V5 passes 5/5 in **every** arm. But the table cannot be read as "what inhibition
+does", because each arm *designed its own medium* — the acceptance test changed, so
+the search went somewhere else. Separating the two took **40 s of LP**
+(`inhibition_crosseval.py`: score every designed medium under both models, same
+abundances, only the secretion bound differing) and it changes the reading.
+
+**1. The `c^eq` = 100 mM arm is the null control, and it passes on all five
+cells** — ratio 0.92-1.00 at the FBA medium, and cell 1 reproduces FBA *exactly*
+(896.0, gain 267.2, `E_hat/E` 1.975, 2 links). `stage3_binding.py` predicted almost
+nothing binds up there, and nothing does. The plumbing is inert where it should be.
+
+**2. At a *fixed* medium inhibition usually destroys the interaction, and the
+collapse is severe.** `E_true` at the FBA arm's own design, as a ratio to FBA:
+
+| `c^eq` (mM) | cell 0 | 1 | 2 | 3 | 4 |
+| --- | --- | --- | --- | --- | --- |
+| 0.01 | **0** | 0.31 | **0** | **0** | 0.011 |
+| 0.1 | **0** | 0.73 | 0.083 | 2.9e-06 | **1.63** |
+| 1.0 | 0.60 | 1.00 | 0.74 | 0.008 | **1.13** |
+| 10.0 | 0.51 | 1.00 | 0.94 | 0.69 | **1.02** |
+
+**3. But not always — and E is not the LP's objective, which is why.** Cell 4 goes
+*up* at a fixed medium, 371.1 -> 605 at `c^eq` = 0.1 mM. The LP maximises growth,
+not exchange, so closing an overflow route forces the flux somewhere else, and the
+somewhere else can be a metabolite a partner consumes. **Inhibition is not a
+monotone suppressor of `E`**; predicting its sign per cell needs the solve.
+
+**4. The headline: inhibition creates media that FBA cannot see.** Five of the
+inhibited arms' designed media score **`E_true` = 0.000 under plain FBA** and 86 to
+**1326** under inhibition (cell 2 at `c^eq` = 1 mM is 0 -> 1326; cell 3, 0 -> 525).
+The designer is not recovering lost handovers — it is finding media where the
+handover exists *only because* secretion is inhibited. The converse holds too: the
+inhibited designs are bad FBA media (41.7, 91.2, and the five zeros) and the FBA
+designs are mostly bad inhibited ones.
+
+**So the practical verdict is a use-case statement, not a model-accuracy one.**
+`E` is a capacity a medium supports, and the two models disagree about **which
+medium is worth running** — not by a magnitude, but qualitatively, at the level of
+"is there an interaction here at all". An experiment designed under FBA is the
+wrong experiment if inhibition is real at that `c^eq`, and vice versa. That is a
+much stronger reason to care than "the rate is 20% off", and it is squarely inside
+P22's advice to trust structure over magnitude.
+
+**What stage 3' still does not deliver: an observable for interference.**
+`E = min(secretion, uptake) >= 0` by construction, so a member's waste suppressing
+its neighbour shows up only as a *smaller* `E`, never as a negative link. The
+change table's promise that "§13.5 can finally express **negative** interaction" is
+**not discharged by this stage** — it needs a second metric (the obvious candidate
+being each member's `mu` with and without its partners at the same medium, which is
+`G + 1` solves and no new machinery). Not built.
+
+**Caveats.** Five 2-member cells, one seed, one draw set; the search path is
+stochastic and `E_true` is non-monotone in `c^eq` on every cell, so no single arm's
+number is a point estimate. And `c^eq*` ~ `c`, so the sweep is probing where the
+design's concentration scale sits against the intracellular one — stage 3'b's
+per-metabolite values matter less than that scale does.
+
+**What this route deliberately does not get.** The surrogate stays uninhibited, so
+`E_hat` is an upper bound on a quantity the truth now constrains further — the head
+will over-propose exactly the handovers inhibition suppresses. That widens the
+already-measured `E_hat/E_true` spread rather than introducing a new failure mode,
+and the LP acceptance test is what makes it reportable, as it already is for P22.
+Anything needing an *inhibited surrogate* — §13.2, §13.3, §13.4's `k = 1`, the dFBA
+rhs — still needs stage 4'.
 
 #### Staged plan, cheapest decisive test first
 

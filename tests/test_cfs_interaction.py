@@ -141,3 +141,18 @@ def test_candidate_links_are_a_secretion_meeting_an_uptake(tmp_path):
     lo, hi = donor_box["EX_b_e"]
     assert np.allclose(lo, [7.0, 5.0, 3.0])
     assert np.allclose(hi, [9.0, 9.0, 9.0])
+
+
+def test_ceq_map_completes_the_layer_and_skips_buffered():
+    """§13.11 stage 2': a "default" must reach every exchange except the buffered."""
+    from cfs.science.interaction import ceq_map, keep_mask
+
+    ex = ["EX_ac_e", "EX_glc__D_e", "EX_h_e", "EX_h2o_e"]
+    keep = keep_mask(ex)
+
+    m = ceq_map({"default": 1.0, "EX_ac_e": 3.0}, ex, keep)
+    assert m == {"EX_ac_e": 3.0, "EX_glc__D_e": 1.0}  # P30: no silent uninhibited gap
+    # A buffered species pinned at 1e3*Km would get ub = 0 under any finite c^eq,
+    # i.e. a community that cannot excrete a proton. Only the default skips them.
+    assert ceq_map({"default": 1.0, "EX_h_e": 5.0}, ex, keep)["EX_h_e"] == 5.0
+    assert ceq_map({"EX_ac_e": 3.0}, ex, keep) == {"EX_ac_e": 3.0}  # no default, no fill
