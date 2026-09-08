@@ -1373,6 +1373,29 @@ def run(
                 member_z(sur, c_best, al), X, sur.exchanges, gids, z_true=zt_best, keep=keep
             )
             cell.update(structure_score(hat_best, e_best))
+            if ceq:
+                # §13.11's actual deliverable: which handovers exist *only*
+                # because of inhibition, and which it destroyed. Same medium,
+                # same abundances, only the bound differing -- the arms' own
+                # optima are not comparable, since each designed its own medium.
+                # G solves.
+                e_fba = exchange(
+                    true_z(models, sur.exchanges, c_best, ceq=None), X, keep
+                )
+                t = _LINK_TOL * max(float(e_best.max()), float(e_fba.max()), 1e-30)
+                cell.update(
+                    {
+                        "E_true_designed_under_fba": float(e_fba.sum()),
+                        "inhibition_only_links": [
+                            sur.exchanges[j]
+                            for j in np.flatnonzero((e_best > t) & (e_fba <= t))
+                        ],
+                        "inhibition_suppressed_links": [
+                            sur.exchanges[j]
+                            for j in np.flatnonzero((e_fba > t) & (e_best <= t))
+                        ],
+                    }
+                )
             cell.update(
                 {
                     "E_true_best_draw": float(e_draw.sum()),
@@ -1439,6 +1462,9 @@ def run(
                 "median_recall": med("recall"),
                 "median_rate_spearman": med("rate_spearman"),
                 "median_draw_rank_spearman": med("draw_rank_spearman"),
+                "n_cells_with_inhibition_only_links": int(
+                    sum(bool(c.get("inhibition_only_links")) for c in cells)
+                ),
                 # V5, in this use case's terms: the designed medium must not be
                 # *worse* than the draw it started from under the true LP.
                 "passed": bool((gain >= 0).all()),
