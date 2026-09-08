@@ -201,14 +201,15 @@ def test_resupplementation_keeps_secretions_and_restores_uptake():
     assert resup[1] == spent[0][1]  # what it secreted is kept
 
 
-def test_target_level_respects_the_secretion_bound():
-    """Under §13.11 the two halves of a handover want opposite concentrations."""
-    lvl = interaction.target_level
-    km = 0.01
-    assert lvl(km, None) == pytest.approx(1000 * km)  # uninhibited: unchanged
-    # c^eq well above Km: sit inside the window, not at the saturating level.
-    assert lvl(km, 1.0) == pytest.approx(0.3)
-    # c^eq at or below Km: no concentration satisfies both halves -- skip it.
-    assert lvl(km, km) is None and lvl(km, km / 2) is None
-    # A c^eq so high it never binds leaves the original level alone.
-    assert lvl(km, 1e6) == pytest.approx(1000 * km)
+def test_target_level_balances_the_two_halves():
+    """`E` is a min, so the best level is where uptake and secretion are equal."""
+    lvl, km = interaction.target_level, 0.01
+    assert lvl(km, None)[0] == pytest.approx(1000 * km)  # uninhibited: unchanged
+    assert lvl(km, 1e6)[0] == pytest.approx(1000 * km)  # a c^eq that never binds
+    for ceq in (1.0, 0.1, km, km / 100):
+        c, f = lvl(km, ceq)
+        assert c / (km + c) == pytest.approx(1.0 - c / ceq)  # the two halves meet
+        assert f == pytest.approx(c / (km + c))
+    # Not a hard window: `c^eq = Km` still hands over, at 38% of both capacities.
+    assert lvl(km, km)[1] == pytest.approx(0.382, abs=1e-3)
+    assert lvl(km, km / 100)[1] < lvl(km, km)[1] < lvl(km, 10 * km)[1]

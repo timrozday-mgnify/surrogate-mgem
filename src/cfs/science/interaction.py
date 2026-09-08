@@ -477,37 +477,50 @@ def candidate_links(
     return links, donor_media, donor_box
 
 
-# Fraction of `c^eq` a candidate start sits at when inhibition is on. Well below
-# 1 because the donor's secretion bound is `Vmax*(1 - c/c^eq)`: at 0.9 of `c^eq`
-# it can still only secrete a tenth of `Vmax`.
-_CEQ_FRAC = 0.3
+# A candidate is dropped when neither half of the handover can reach this
+# fraction of its own capacity. Not a window test -- there is no hard window (see
+# `target_level`) -- just a floor below which a start is not worth an LP screen.
+_MIN_FEASIBLE = 1e-3
 
 
-def target_level(km: float, ceq_m: float | None) -> float | None:
-    """Concentration to set the candidate metabolite at. ``None`` = skip it.
+def target_level(km: float, ceq_m: float | None) -> tuple[float, float]:
+    """``(concentration, achievable fraction)`` for a candidate metabolite.
 
     **Under §13.11 the two halves of a handover want opposite concentrations of
     the same metabolite.** The recipient's uptake bound is ``-Vmax * c/(Km+c)``,
-    so the uptake half wants ``c >> Km``; the donor's secretion bound is
-    ``Vmax * max(0, 1 - c/c^eq)``, so the secretion half wants ``c < c^eq``. The
-    window is ``Km <~ c < c^eq`` and it can be **empty** -- at ``c^eq`` = 0.01 mM
-    86.5% of this index's exchanges have ``Km >= c^eq``, i.e. no concentration
-    hands that metabolite over at all.
+    rising in ``c``; the donor's secretion bound is ``Vmax * max(0, 1 - c/c^eq)``,
+    falling in ``c``. ``E`` is a **min** of the two, so the level that maximises
+    it is where they are equal -- and that is a quadratic with a closed form:
 
-    Uninhibited (``ceq_m is None``) this is the original ``_BUFFER_SAT * Km``.
+        c/(Km+c) = 1 - c/c^eq   =>   c = (-Km + sqrt(Km^2 + 4 Km c^eq)) / 2
+
+    which is ``sqrt(Km c^eq)`` -- the geometric centre of the window -- whenever
+    ``Km << c^eq``, and stays correct where it is not. The second return value is
+    the fraction of capacity **both** halves reach there.
+
+    **This retracts "the window can be empty".** The earlier reading required
+    ``c >= Km`` for the uptake half, which is not a requirement but a preference:
+    uptake at ``c < Km`` is weak, not forbidden. So a handover is possible at
+    *any* ``c^eq > 0``, with the achievable fraction shrinking smoothly (at
+    ``c^eq = Km`` both halves reach 0.382; at ``c^eq = Km/100``, 0.0098). The
+    number to report is that fraction, not a feasibility flag.
+
+    Uninhibited (``ceq_m is None``) this is the original ``_BUFFER_SAT * Km`` at
+    full uptake capacity.
     """
     sat = _BUFFER_SAT * km
     if ceq_m is None:
-        return sat
-    if ceq_m <= km:
-        return None
-    return min(sat, _CEQ_FRAC * ceq_m)
+        return sat, sat / (km + sat)
+    c = 0.5 * (-km + np.sqrt(km * km + 4.0 * km * ceq_m))
+    if c >= sat:  # c^eq so high it never binds: the original level is better
+        return sat, min(sat / (km + sat), max(0.0, 1.0 - sat / ceq_m))
+    return float(c), float(c / (km + c))
 
 
 def candidate_media(
     sur, labels_dir, gids: list[str], links: dict, donor_media: dict, donor_box: dict,
     keep: np.ndarray, seed: int, box: int = 3, scales=None,
-    ceq: dict[str, float] | None = None,
+    ceq: dict[str, float] | None = None, extra: int = 0,
 ):
     """Starts per candidate metabolite: ``(C, targets)``.
 
@@ -548,19 +561,41 @@ def candidate_media(
     active = {e for g in gids for e in subs[g].active}
     variants = ["uptake", "uptake+secretion", "uptake+secretion+exclusive"] + ["box"] * box
 
+    # **Capability, not observed behaviour.** `links` comes from the label
+    # shards, which are plain FBA, so it cannot contain a handover that exists
+    # *because of* inhibition -- and stage 3' found five designs whose `E_true`
+    # is 0.000 under FBA and up to 1326 under it. Any metabolite two members
+    # both exchange is a candidate on the model's own structure, with no solve
+    # and no label. Appended, never substituted: §13.5 measured neither the
+    # candidate set nor the draws to contain the other.
+    extras: list[str] = []
+    if extra > 0:
+        shared = [
+            e for j, e in enumerate(sur.exchanges)
+            if keep[j] and sum(bool(sur.mask[i][j]) for i in range(len(gids))) >= 2
+        ]
+        pool = sorted(set(shared) - set(cand))
+        extras = sorted(
+            np.random.default_rng(seed).permutation(np.array(pool, dtype=object))[
+                :extra
+            ].tolist()
+        ) if pool else []
+
     C, targets = [], []
-    for k, m in enumerate(cand):
-        donor = links[m].get("best_donor")
+    for k, m in enumerate(cand + extras):
+        donor = links.get(m, {}).get("best_donor")
         # `None` means no concentration satisfies both halves at once under
         # §13.11's secretion bound -- a start for it cannot work, so do not
         # emit one. Without this every candidate start sits at `1000 * Km`,
         # which is >= `c^eq` for 100% of this index's exchanges at
         # `c^eq <= 1 mM`: the donor's secretion of the very metabolite the
         # start exists to hand over is pinned at exactly zero.
-        level = target_level(float(sur.km[col[m]]), None if ceq is None else ceq.get(m))
-        if level is None:
+        level, feasible = target_level(
+            float(sur.km[col[m]]), None if ceq is None else ceq.get(m)
+        )
+        if feasible < _MIN_FEASIBLE:
             continue
-        for d, var in enumerate(variants):
+        for d, var in enumerate(["analytic"] if m in extras else variants):
             rng = np.random.default_rng(seed + 1000 * k + d)
             spec: dict[int, float] = {}
             c = buffer_medium(
@@ -594,8 +629,9 @@ def candidate_media(
                 {
                     "metabolite": m,
                     "variant": var,
-                    "donors": links[m]["donors"],
-                    "recipients": links[m]["recipients"],
+                    "donors": links.get(m, {}).get("donors"),
+                    "recipients": links.get(m, {}).get("recipients"),
+                    "feasible_frac": feasible,
                     "best_donor": donor,
                 }
             )
@@ -961,6 +997,7 @@ def run(
     seed_mode: str = "candidate",
     box: int = 3,
     inhibition: Path | None = None,
+    extra_candidates: int = 0,
 ) -> dict:
     """Survey the interactions a community can reach, then design media for them.
 
@@ -1037,7 +1074,8 @@ def run(
             # on 4 of 5 cells.
             Cc, targets = candidate_media(
                 sur, labels_dir, gids, links, donor_media, donor_box, keep,
-                seed + n * 1000, box=box, scales=scales, ceq=ceq
+                seed + n * 1000, box=box, scales=scales, ceq=ceq,
+                extra=extra_candidates,
             )
             targets = [{"metabolite": None, "variant": "draw"}] * len(C) + targets
             C = np.concatenate([C, Cc])
@@ -1126,6 +1164,14 @@ def run(
                             "max_links_at_one_medium": int(
                                 (EX_true[sel] > 1e-6).sum(1).max()
                             ),
+                            # Which handovers this variant actually realised --
+                            # the question the `analytic` arm exists for, since
+                            # a link outside `cand` is one the FBA labels could
+                            # not have proposed.
+                            "interactive": [
+                                sur.exchanges[j]
+                                for j in np.flatnonzero((EX_true[sel] > 1e-6).any(0))
+                            ],
                         }
                         for v in dict.fromkeys(t["variant"] for t in targets)
                         for sel in [np.array([t["variant"] == v for t in targets])]

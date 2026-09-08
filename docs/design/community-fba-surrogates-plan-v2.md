@@ -6301,47 +6301,71 @@ here the *uninhibited labels* did.
 
 **The structural fact, and it is a result rather than a bug:** under inhibition
 the two halves of a handover want **opposite** concentrations of the same
-metabolite. The window is `Km <~ c_m < c^eq`, and it can be empty:
+metabolite — uptake is `c/(Km+c)`, rising; secretion is `max(0, 1 - c/c^eq)`,
+falling.
 
-| `c^eq` | >= 1 decade of window | **no window at all** |
-| --- | --- | --- |
-| 0.01 mM | 0.000 | **0.865** |
-| 0.1 mM | 0.135 | 0.011 |
-| 1.0 mM | 0.989 | 0.000 |
+**`E` is a min of the two, so the best level is where they are equal, and that
+has a closed form:**
 
-At 0.01 mM, 86.5% of exchanges cannot be handed over at *any* concentration.
+    c/(Km+c) = 1 - c/c^eq   =>   c* = (-Km + sqrt(Km^2 + 4 Km c^eq)) / 2
 
-**Fixed** (`interaction.target_level`): the level is `min(1000 Km, 0.3 c^eq)`, and
-a candidate whose `c^eq <= Km` is **skipped** rather than emitted as a start that
-cannot work. Uninhibited it is the original `1000 Km` bit for bit.
+which is `sqrt(Km c^eq)` — the geometric centre of the window — whenever
+`Km << c^eq`, and stays correct where it is not. **`interaction.target_level`
+returns `(c*, f)`** with `f` the fraction of capacity *both* halves reach there.
+Uninhibited it is the original `1000 Km` bit for bit.
 
-**Still open — the sampling itself, and it needs a replacement rather than a
-patch.** Two independent problems the level clamp does not touch:
+**This retracts "the window can be empty", written earlier the same day.** That
+reading required `c >= Km` for the uptake half, which is a preference and not a
+requirement: uptake below `Km` is weak, not forbidden. A handover is possible at
+**any** `c^eq > 0`, with `f` shrinking smoothly — 0.905 at `c^eq = 100 Km`, 0.730
+at `10 Km`, **0.382 at `c^eq = Km`**, 0.0098 at `Km/100`. So the claim "at 0.01 mM
+86.5% of exchanges cannot be handed over at any concentration" is **wrong**; those
+metabolites hand over at ~38% of both capacities. `f` is the number to report, and
+a candidate is dropped only below `_MIN_FEASIBLE = 1e-3` — a floor on whether a
+start is worth an LP screen, not a feasibility test.
 
-1. **The candidate set comes from uninhibited labels.** `candidate_links`
-   enumerates `z > 0` for one member meeting `z < 0` for another over the label
-   shards, which are plain FBA. Under inhibition that set is **over-inclusive**
-   (secretions the bound forbids) and, worse, **under-inclusive**: stage 3'
-   already found five designs whose `E_true` is 0.000 under plain FBA and up to
-   1326 under inhibition, and no enumeration over FBA labels can ever propose
-   those. This is the half that decides whether the inhibited arm is exploring
-   its own model at all.
-2. **The box is a region where the donor secreted *under FBA*.** `donor_box` is
-   the envelope of the labelled media in which the donor secreted `m`; under
-   inhibition the interaction-competent region is a different set, and it is
-   the one the search should be sampling. The measured payoff of the box was
-   1.1-1704x the base secretion rate on the uninhibited model — that number has
-   no inhibited counterpart.
+**(ii) is built: `--extra-candidates N`.** The remaining half of the problem was
+that `candidate_links` enumerates from the **label shards**, which are plain FBA,
+so it cannot contain a handover that exists *because of* inhibition — and stage 3'
+found five designs whose `E_true` is 0.000 under FBA and up to 1326 under it. The
+replacement takes candidates from **capability**: any exchange two members both
+carry is a handover the model's own structure allows, which needs no solve and no
+label, and each is seeded at `c*` (variant `analytic`, one start per metabolite —
+there is no labelled donor recipe for them, and with the level analytic there does
+not need to be). Appended, never substituted, per §13.5's own measurement that
+neither the candidate set nor the draws contains the other.
 
-Candidate replacements, none costed: (i) **re-enumerate from an inhibited label
-pass** at the swept `c^eq` — no relabel of the heads, only a second solve over
-existing media, but one pass per `c^eq`; (ii) **derive the window analytically**
-and seed at its geometric centre per (donor, metabolite) instead of from labels,
-which needs no solves and covers the created-by-inhibition links the labels
-cannot; (iii) **drop the enumeration** and let the LP-screened random draws carry
-the seeding, accepting the coverage loss measured in §13.5 (24 of 52 links from
-candidates against 22 from draws, 20 in common). (ii) is the cheapest and is the
-only one that can propose a handover FBA does not have.
+First measurement (AAXE02 + ABCC02, `c^eq` = 0.1 mM, 8 draws, 16 extras, V5
+passes), `E_true` per variant with the handovers each realised:
+
+| variant | starts | `E_true` max | links realised |
+| --- | --- | --- | --- |
+| draw | 8 | 114.9 | nh4, no2 |
+| uptake | 11 | 382.7 | glu__L, glyc3p, glyc, nh4, no2 |
+| uptake+secretion | 11 | **641.0** | glu__L, glyc, nh4, no2 |
+| uptake+secretion+exclusive | 11 | 56.8 | acald, glyc3p, glyc |
+| box | 33 | 219.3 | glu__L, glyc, nh4, no2, pi, val__L |
+| **analytic** | **16** | 194.8 | nh4, no2, pi, val__L |
+
+1. **It beats the random draws at one start per metabolite** — 194.8 against
+   114.9, and three simultaneous links against two.
+2. **It realises links outside the label-derived candidate set** (`nh4`,
+   `val__L`), which is what the arm exists for.
+3. **On this cell it found nothing the other arms did not** — its links are a
+   subset of their union. One cell, one seed, one `c^eq`; the claim that
+   capability seeding reaches the inhibition-created handovers is **supported in
+   principle and not yet demonstrated exclusively**. Default 0.
+
+**Still open — the box region.** `donor_box` is the envelope of the labelled media
+in which the donor secreted `m` **under FBA**; under inhibition the
+interaction-competent region is a different set. The box's measured 1.1-1704x
+payoff has no inhibited counterpart, and the analytic seed replaces only the
+target metabolite's level, not the donor's background. The third option remains:
+
+**(i) re-enumerate from an inhibited label pass** at each swept `c^eq` — no head
+relabel, only a second solve over existing media, but one pass per arm, and it is
+the only option that would give the extras a *donor background* as well as a
+level.
 
 #### (a) The directional spent-medium assay — built and measured, 2026-09-08
 

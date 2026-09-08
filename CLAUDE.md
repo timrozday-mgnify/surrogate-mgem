@@ -3430,15 +3430,35 @@ lower bound, not an estimate**. P29 one level deeper: there the model chose the
 starts, here the *uninhibited labels* did.
 
 The structural fact is a result, not a bug: **under inhibition the two halves of
-a handover want opposite concentrations of the same metabolite**, window
-`Km <~ c_m < c^eq`, which can be **empty** — at `c^eq` = 0.01 mM, 86.5% of
-exchanges have `Km >= c^eq` and cannot be handed over at any concentration.
-`interaction.target_level` now sets `min(1000 Km, 0.3 c^eq)` and **skips** a
-candidate with no window; uninhibited it is the original value bit for bit.
-**Still open**: the candidate *set* and the box region both come from
-**uninhibited** labels, so they cannot propose the handovers inhibition creates
-(stage 3' found five, `E_true` 0.000 under FBA and up to 1326 under inhibition).
-Three replacements ranked in design spec §13.11.
+a handover want opposite concentrations of the same metabolite** — uptake
+`c/(Km+c)` rising, secretion `max(0, 1 - c/c^eq)` falling. **`E` is a min, so the
+best level is where they are equal, and that has a closed form**:
+`c* = (-Km + sqrt(Km^2 + 4 Km c^eq))/2`, which is `sqrt(Km c^eq)` when
+`Km << c^eq`. `interaction.target_level` returns `(c*, f)` with `f` the fraction
+of capacity both halves reach there; uninhibited it is the original `1000 Km` bit
+for bit.
+
+**RETRACTED, same day: "the window can be empty".** That required `c >= Km` for
+the uptake half, which is a preference, not a requirement — uptake below `Km` is
+weak, not forbidden. A handover is possible at **any** `c^eq > 0`: `f` is 0.905
+at `c^eq = 100 Km`, 0.730 at `10 Km`, **0.382 at `c^eq = Km`** and 0.0098 at
+`Km/100`. So "at 0.01 mM, 86.5% of exchanges cannot be handed over at any
+concentration" is wrong — they hand over at ~38% of both capacities. Report `f`;
+`_MIN_FEASIBLE = 1e-3` is a floor on whether a start is worth an LP screen, not a
+feasibility test.
+
+**`--extra-candidates N` (new)** is §13.11's option (ii): candidates from
+**capability** — any exchange two members both carry — instead of from the label
+shards, each seeded at `c*` (variant `analytic`, one start each). The labels are
+plain FBA, so they cannot contain a handover that exists *because of* inhibition.
+First measurement (AAXE02+ABCC02, `c^eq` 0.1 mM, 8 draws, 16 extras, V5 passes):
+`analytic` reaches `E_true` **194.8 from 16 one-shot starts against the draws'
+114.9 from 8**, three simultaneous links against two, and realises `EX_nh4_e` and
+`EX_val__L_e`, **both outside the label-derived candidate set** — but on this cell
+its links are a *subset* of the other variants' union, so capability seeding is
+supported in principle and not yet shown to reach anything exclusively. Default 0.
+**Still open**: the box region is still the envelope where the donor secreted
+*under FBA*, so the extras get an analytic level but no donor background.
 
 **How the standing product level should be set — (b) and (c) are recorded, not
 built** (design spec §13.11, "How the product concentration is set"). (b) close

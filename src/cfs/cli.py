@@ -608,6 +608,15 @@ def build_parser() -> argparse.ArgumentParser:
         "convex and would cost §13.2/§13.3 their convexity (P30/P31).",
     )
     ix.add_argument(
+        "--extra-candidates", type=int, default=0,
+        help="With --inhibition: this many extra candidate metabolites taken from "
+        "*capability* — any exchange two members share — rather than from the "
+        "label shards, each seeded at the analytic level where the uptake and "
+        "secretion halves of the handover are balanced. The labels are plain FBA, "
+        "so they cannot contain a handover that exists *because of* inhibition, "
+        "and stage 3' found five designs whose E_true is 0.000 under FBA.",
+    )
+    ix.add_argument(
         "--box", type=int, default=3,
         help="With --seed-mode candidate: extra starts per candidate drawn inside "
         "the envelope of every labelled medium where the donor secreted that "
@@ -1164,6 +1173,7 @@ def main(argv: list[str] | None = None) -> int:
             seed_mode=args.seed_mode,
             box=args.box,
             inhibition=args.inhibition,
+            extra_candidates=args.extra_candidates,
         )
         print(json.dumps({k: v for k, v in report.items() if k != "cells"}, indent=2))
         return 0 if report.get("passed", True) else 1
