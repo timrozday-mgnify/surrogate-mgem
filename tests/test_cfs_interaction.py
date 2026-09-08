@@ -188,3 +188,14 @@ def test_interference_media_never_goes_negative():
         np.array([1.0]), np.array([[-100.0]]), np.array([1.0]), frac=10.0
     )
     assert (alone >= 0).all() and (joint >= 0).all()
+
+
+def test_resupplementation_keeps_secretions_and_restores_uptake():
+    """The control that separates "your waste inhibits me" from "you ate my food"."""
+    c = np.array([1.0, 1.0])
+    z = np.array([[-1.0, +1.0]])  # the donor eats m0 and secretes m1
+    _, spent, _ = interaction.interference_media(c, z, np.array([1.0]))
+    resup = np.maximum(spent[0], c)
+    assert spent[0][0] < c[0] and spent[0][1] > c[1]  # depleted, and conditioned
+    assert resup[0] == c[0]  # what the donor ate is restored
+    assert resup[1] == spent[0][1]  # what it secreted is kept

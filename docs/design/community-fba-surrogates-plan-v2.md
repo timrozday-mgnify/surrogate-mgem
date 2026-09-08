@@ -6233,6 +6233,98 @@ and the LP acceptance test is what makes it reportable, as it already is for P22
 Anything needing an *inhibited surrogate* — §13.2, §13.3, §13.4's `k = 1`, the dFBA
 rhs — still needs stage 4'.
 
+#### How the product concentration is set — three models, one built
+
+Stage 3' reads a **standing** concentration: `E` is evaluated at a fixed medium,
+so a product's level is a coordinate the search picks directly and nothing makes
+it one a vessel could hold. That is why Stage 0's *dynamic accumulation* (4.7e-07
+to 0.0046 mM) and stage 3'a's *binding threshold* (median 0.113 mM) are not in
+contradiction — they are different questions. Three ways to make the level
+physical, cheapest first.
+
+**(a) Spent medium, one assay per direction — BUILT 2026-09-08, see below.** No
+new physics: the conditioned medium is `interference_media`'s own `alone[j]`, and
+the recipient is absent while it is made. It is the experiment a bench would run.
+
+**(b) Close the chemostat on itself — small, not built.** At a §13.4 steady state
+a product not in the feed satisfies exactly
+
+    c_p = sum_i X_i z_ip / D
+
+so the standing level is **not free**: it is the secretion rate over `D`. A short
+fixed point over the product coordinates only (solve -> recompute `c_p` -> solve,
+a few passes) makes `--inhibition` self-consistent and moves the level from the
+search to the operator. Three things to know before building it:
+
+* **`D` cannot vary per component.** One vessel has one `D`, and it sets *every*
+  product concentration at once, each proportional to `1/D` — acetate cannot be
+  washed out while glucose is held. A design that wants per-metabolite removal is
+  describing a **dialysis or membrane reactor**, and the honest way to write that
+  is a per-metabolite removal rate, `dc_m/dt = -k_m c_m + sum_i X_i z_im`, with
+  `k_m = D` by default so the layer is **complete** — P30 exactly, since a
+  scattered removal-rate layer is one the growth-maximising LP will route flux
+  through.
+* **It changes what §13.5 designs.** Once `c_p` is dependent, the design variables
+  are the *feed* and `D`, not the medium — i.e. §13.5 becomes §13.4-shaped and
+  inherits its 60% Newton failure rate and its sub-resolution R* ties.
+* **`D` is not a free knob**: it also decides who survives (§13.4's `k = 1`
+  competitive exclusion), so raising it to lower the product level changes the
+  community.
+
+**(c) Batch to exhaustion at realistic concentrations — costed, not built.** The
+only version where products genuinely *accumulate*, and Stage 0 priced it: at this
+design's scale (biomass 0.0093 gDW/L against 0.1-10, glucose 0.1 mM against M9's
+22) accumulation is 100-1000x short of the 0.1-10 mM intracellular range. It needs
+the **second label root** — concentrated, run to exhaustion — which would also
+serve §8.6f's deep-regime coverage gap. Worth it only for a genuinely dynamic
+claim ("inhibition starts at hour 6"), not for a comparative one.
+
+#### (a) The directional spent-medium assay — built and measured, 2026-09-08
+
+`interaction.spent_medium_assay`. :func:`interference` is *simultaneous*, so a
+suppressed community reads as "this community suppresses itself" — it cannot say
+who suppresses whom. This conditions the medium with **one donor at a time** and
+grows each other member in the filtrate, baseline the *fresh* medium (the
+recipient is absent while the medium is made, so no self-depletion arm is needed).
+`2G(G-1) + G` FBAs, no QP, capped at 8 members.
+
+**The control is the load-bearing half.** A spent medium is depleted as well as
+conditioned, so a drop mixes "your waste inhibits me" with "you ate my substrate".
+Re-supplementing every component the donor consumed back to `c` — `max(spent, c)`,
+keeping what it secreted — and re-solving isolates the conditioning term.
+
+Ten ordered pairs (the same five 2-member cells and designs as stage 3'),
+conditioning term in 1/h:
+
+| | conditioning `>= 0` | conditioning `< 0` | worst |
+| --- | --- | --- | --- |
+| FBA | **10 of 10** | 0 | — |
+| `c^eq` = 0.1 mM | 2 (one `~0`) | **8 of 10** | -4968 |
+
+1. **Under plain FBA there is no chemical interference at all, and the control
+   proves it.** Every negative *total* in the FBA arm is depletion: `ABCC02 ->
+   AAXE02` is -137.7/h in total with a conditioning term of **exactly 0**. Without
+   the control that pair reads as interference.
+2. **Under inhibition the conditioning term goes negative on 8 of 10 pairs**, at
+   -1396 to -4968/h — the same qualitative flip as the simultaneous metric, now
+   attributable to a named donor.
+3. **It resolves one-way relationships the symmetric metric cannot.** On
+   `CR626927.1 + GCA_000151225.1` under inhibition the first conditions the second
+   *down* (-4060/h) while the second conditions the first *up* (+1.09e4/h) — one-way
+   interference against one-way facilitation, in the same community.
+4. **The two terms can cancel, which is the strongest argument for running the
+   control.** `CP070062.1 -> CP040530.1` has a total of only -56/h from a
+   conditioning term of **-1989/h** against +1933/h of restoration. The raw
+   spent-medium number says nothing is happening.
+5. **A positive restoration term is the monotonicity loss, made observable.**
+   Under FBA the decomposition is signed as designed — restoring a consumed
+   nutrient can only help, so `total <= conditioning` on 10 of 10 pairs. Under
+   inhibition it is violated (the +1933 above): `max(spent, c)` raises a *secreted*
+   metabolite's concentration too, which tightens its own secretion bound. §13.11
+   predicted `mu` stops being non-decreasing in `c`; this is the first measurement
+   of it. **Read `depletion_per_h` as "the effect of restoring what the donor
+   consumed", not as a depletion cost, whenever `ceq` is on.**
+
 #### Staged plan, cheapest decisive test first
 
 **Stage 0 — RUN 2026-09-07, and the answer is no; see the section above.** The

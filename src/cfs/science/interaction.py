@@ -679,6 +679,20 @@ def interference_media(
     return dt, alone, np.clip(c + dt * dc, 0.0, None)
 
 
+def _mu_at(exchanges: list[str], ceq: dict[str, float] | None = None):
+    """``(model, medium) -> mu_max``: FBA only, §3.3 bounds, no elastic-net stage."""
+    from cfs.groundtruth.solve import apply_mm_bounds, load_km_defaults, mu_optimize
+
+    km_cfg = load_km_defaults()
+
+    def mu(model, medium):
+        with model:
+            apply_mm_bounds(model, dict(zip(exchanges, medium.tolist(), strict=True)), km_cfg, ceq)
+            return float(mu_optimize(model, "spent-medium"))
+
+    return mu
+
+
 def interference(
     models: list,
     exchanges: list[str],
@@ -701,15 +715,8 @@ def interference(
     ``2G`` FBAs and no QP: only ``mu`` is wanted, and the elastic-net stage is
     the expensive half of :func:`cfs.groundtruth.solve.solve`.
     """
-    from cfs.groundtruth.solve import apply_mm_bounds, load_km_defaults, mu_optimize
-
-    km_cfg = load_km_defaults()
     dt, alone, joint = interference_media(c, z, X, frac)
-
-    def mu(model, medium):
-        with model:
-            apply_mm_bounds(model, dict(zip(exchanges, medium.tolist(), strict=True)), km_cfg, ceq)
-            return float(mu_optimize(model, "interference"))
+    mu = _mu_at(exchanges, ceq)
 
     rows = []
     for i, model in enumerate(models):
@@ -735,6 +742,92 @@ def interference(
         "n_interfered": int(sum(d < -1e-6 for d in deltas)),
         "n_facilitated": int(sum(d > 1e-6 for d in deltas)),
         "min_delta_rel_per_h": min(deltas) if deltas else None,
+    }
+
+
+# `2G(G-1) + G` FBAs, so it is quadratic in the community size. Capped rather
+# than made a knob: the §13.5 communities are 2-5 members and the roster cell is
+# 21, where the pair set is 840 solves for a question every pair answers the same
+# way. Raise it if a mid-size community ever needs it.
+_MAX_PAIRS_G = 8
+
+
+def spent_medium_assay(
+    models: list,
+    exchanges: list[str],
+    c: np.ndarray,
+    z: np.ndarray,
+    X: np.ndarray,
+    genome_ids: list[str],
+    *,
+    frac: float = _INTERFERE_FRAC,
+    ceq: dict[str, float] | None = None,
+) -> dict | None:
+    """The **directional** version of :func:`interference`: one donor at a time.
+
+    :func:`interference` is simultaneous, so a suppressed community reads as
+    "this community suppresses itself" -- it cannot say *who* suppresses *whom*.
+    This is the assay a bench would run instead: condition the medium with one
+    donor, filter, and grow each other member in the filtrate. The conditioned
+    medium is exactly :func:`interference_media`'s ``alone[j]``, and the
+    recipient is absent while it is made, so the baseline is the *fresh* medium
+    ``c`` -- no self-depletion arm is needed here, unlike the simultaneous case.
+
+    **A spent medium is depleted as well as conditioned**, so a drop mixes "your
+    waste inhibits me" with "you ate my substrate". The control separates them:
+    re-supplement every component the donor consumed back to ``c``
+    (``max(spent, c)``, which keeps what the donor secreted and restores what it
+    removed) and re-solve. What is left is the conditioning-only term. Both are
+    reported, as rates -- ``delta_rel`` alone is a property of ``frac``.
+
+    Returns ``None`` above :data:`_MAX_PAIRS_G` members.
+    """
+    G = len(models)
+    if G > _MAX_PAIRS_G:
+        return None
+    dt, spent, _ = interference_media(c, z, X, frac)
+    mu = _mu_at(exchanges, ceq)
+    fresh = [mu(m, np.asarray(c, dtype=np.float64)) for m in models]
+
+    def rate(v, base):
+        return float((v - base) / base / dt) if base > 0 and dt > 0 else None
+
+    pairs = []
+    for j in range(G):
+        resup = np.maximum(spent[j], np.asarray(c, dtype=np.float64))
+        for i in range(G):
+            if i == j:
+                continue
+            tot = rate(mu(models[i], spent[j]), fresh[i])
+            inh = rate(mu(models[i], resup), fresh[i])
+            pairs.append(
+                {
+                    "donor": genome_ids[j],
+                    "recipient": genome_ids[i],
+                    "mu_fresh": fresh[i],
+                    # The whole spent-medium effect, and the half of it that
+                    # survives restoring what the donor ate.
+                    "total_per_h": tot,
+                    "conditioning_per_h": inh,
+                    "depletion_per_h": (
+                        None if tot is None or inh is None else tot - inh
+                    ),
+                }
+            )
+    live = [p for p in pairs if p["conditioning_per_h"] is not None]
+    return {
+        "dt": dt,
+        "frac": frac,
+        "pairs": pairs,
+        "n_suppressed_by_conditioning": int(
+            sum(p["conditioning_per_h"] < -1e-6 for p in live)
+        ),
+        "n_facilitated_by_conditioning": int(
+            sum(p["conditioning_per_h"] > 1e-6 for p in live)
+        ),
+        "worst_conditioning_per_h": (
+            min(p["conditioning_per_h"] for p in live) if live else None
+        ),
     }
 
 
@@ -1081,6 +1174,11 @@ def run(
             # The interference observable: `E` cannot go negative, so suppression
             # is invisible to it. 2G FBAs at the designed medium.
             cell["interference"] = interference(
+                models, sur.exchanges, c_best, zt_best, X, gids, ceq=ceq
+            )
+            # ...and the directional form: which member's waste suppresses which,
+            # with the donor's depletion controlled for. `None` on a large cell.
+            cell["spent_medium"] = spent_medium_assay(
                 models, sur.exchanges, c_best, zt_best, X, gids, ceq=ceq
             )
             e_draw, e_best = exchange(zt_draw, X, keep), exchange(zt_best, X, keep)

@@ -3356,6 +3356,43 @@ so nothing is exhausted inside the step, and the reported number is
 and members saturate at -1, unstable in `frac` — one member died in its **own** arm
 at 0.01 and lived at 0.001.
 
+**And the directional form — `spent_medium_assay`, 2026-09-08.** `interference`
+is simultaneous, so a suppressed community reads as "this community suppresses
+itself". This conditions the medium with **one donor at a time** and grows each
+other member in the filtrate (baseline: the *fresh* medium — the recipient is
+absent while it is made), which is the assay a bench would run. `2G(G-1) + G`
+FBAs, capped at 8 members. **The control is the load-bearing half**: a spent
+medium is depleted as well as conditioned, so re-supplement what the donor ate
+back to `c` (`max(spent, c)`, keeping what it secreted) and re-solve — what
+survives is conditioning only.
+
+Ten ordered pairs, same five cells: the conditioning term is **`>= 0` on 10/10
+under FBA** and **negative on 8/10 under `c^eq` = 0.1 mM** (-1396 to -4968/h).
+Four readings: (i) under plain FBA there is no chemical interference at all —
+every negative *total* is depletion, `ABCC02 -> AAXE02` being -137.7/h in total
+with a conditioning term of exactly 0; (ii) one-way relationships are now
+visible — `CR626927.1` conditions `GCA_000151225.1` **down** (-4060/h) while
+`GCA_000151225.1` conditions it **up** (+1.09e4/h); (iii) the two terms can
+cancel, `CP070062.1 -> CP040530.1` totalling -56/h from -1989 conditioning
+against +1933 restoration, so the raw spent-medium number says nothing is
+happening; (iv) **a positive restoration term is §13.11's predicted monotonicity
+loss, observed** — `max(spent, c)` raises a *secreted* metabolite too, tightening
+its own secretion bound, so under `ceq` read `depletion_per_h` as "the effect of
+restoring what the donor consumed", not as a depletion cost. Under FBA the
+decomposition is signed as designed on 10/10.
+
+**How the standing product level should be set — (b) and (c) are recorded, not
+built** (design spec §13.11, "How the product concentration is set"). (b) close
+the chemostat on itself: at a §13.4 steady state `c_p = sum_i X_i z_ip / D`
+exactly, so a short fixed point over the product coordinates makes `--inhibition`
+self-consistent — but `D` is one number for the whole vessel (every product scales
+as `1/D`; per-metabolite removal is a *dialysis reactor*, written as a complete
+`k_m` layer with `k_m = D` by default, P30), it makes §13.5 design a feed and a
+`D` rather than a medium, and it decides who survives. (c) batch to exhaustion at
+realistic concentrations — the only version where products truly accumulate, and
+Stage 0 priced it at 100-1000x short, so it needs the costed **second label root**
+(concentrated, run to exhaustion), which would also serve §8.6f's deep-regime gap.
+
 `d(log mu)/dt`, 1/h, at each arm's own designed medium, five 2-member cells:
 FBA gives zero or **positive** on 6 of 10 members (facilitation, up to +2e4);
 `c^eq` = 0.1 mM gives **negative on 9 of 10**, one to two orders larger
