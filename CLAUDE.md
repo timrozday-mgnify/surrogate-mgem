@@ -3344,11 +3344,24 @@ min-norm projection, not a shrink. The seven-instance "a better rhs is not a bet
 trajectory" caution does **not** transfer — `E` is a static rate, so an rhs
 improvement is the deliverable rather than a proxy.
 
-**Not delivered: an observable for interference.** `E = min(secretion, uptake) >= 0`
-by construction, so suppression shows only as a smaller `E`, never as a negative
-link. §13.11's promise that §13.5 "can finally express negative interaction" is
-**not discharged**; the obvious candidate is each member's `mu` with and without
-its partners at the same medium (`G + 1` solves, no new machinery). Not built.
+**The interference observable — delivered 2026-09-08.** `E = min(secretion,
+uptake) >= 0`, so suppression can only show as a *smaller* `E`, never as a
+negative link. `interaction.interference` asks directly: step the designed medium
+by the pool derivative **with and without the partners**, re-solve each member's
+`mu`. `2G` FBAs, no QP, no search, no relabel — it runs on designs already on disk
+(`20hm_bands/interference.py`). Both arms carry the member's own depletion so it
+cancels; `dt` is `frac` of the time to the *first* depletion (`min`, not `median`)
+so nothing is exhausted inside the step, and the reported number is
+**`delta_rel / dt`**, a rate. With `median` the step exhausts a trace metabolite
+and members saturate at -1, unstable in `frac` — one member died in its **own** arm
+at 0.01 and lived at 0.001.
+
+`d(log mu)/dt`, 1/h, at each arm's own designed medium, five 2-member cells:
+FBA gives zero or **positive** on 6 of 10 members (facilitation, up to +2e4);
+`c^eq` = 0.1 mM gives **negative on 9 of 10**, one to two orders larger
+(-56 to -1.9e4). First expression of negative interaction in the project. It is
+**not redundant with `E`**: cell 4's inhibited design has the higher `E_true`
+(702.6 vs 371.1) *and* the more negative interference (-4572 vs -601/h).
 
 Scripts (`20hm_bands/`): `stage3_binding.py` (no solves), `inhibition_sweep.sh`
 (resume-safe, one invocation per cell), `inhibition_report.py`,

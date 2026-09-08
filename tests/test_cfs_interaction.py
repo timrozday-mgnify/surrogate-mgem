@@ -1,6 +1,9 @@
 """§13.5's objective: the arithmetic that decides what an interaction is."""
 
 import numpy as np
+import pytest
+
+from cfs.science import interaction
 
 from cfs.science.interaction import distinguishing, exchange, exchange_batch, link_rows
 
@@ -156,3 +159,32 @@ def test_ceq_map_completes_the_layer_and_skips_buffered():
     # i.e. a community that cannot excrete a proton. Only the default skips them.
     assert ceq_map({"default": 1.0, "EX_h_e": 5.0}, ex, keep)["EX_h_e"] == 5.0
     assert ceq_map({"EX_ac_e": 3.0}, ex, keep) == {"EX_ac_e": 3.0}  # no default, no fill
+
+
+def test_interference_media_isolates_the_partners():
+    """Self-depletion is in both arms and cancels; only the partner term differs."""
+    c = np.array([1.0, 1.0])
+    z = np.array([[-1.0, 0.0], [0.0, -2.0]])  # member 0 eats m0, member 1 eats m1
+    X = np.array([1.0, 1.0])
+    dt, alone, joint = interaction.interference_media(c, z, X, frac=0.1)
+    assert dt == pytest.approx(0.05)  # first depletion is m1, at t = 0.5
+    assert alone[0] == pytest.approx([0.95, 1.0])
+    assert alone[1] == pytest.approx([1.0, 0.9])
+    assert joint == pytest.approx([0.95, 0.9])
+    # partner effect on member 0 = joint - alone[0], i.e. m1 only
+    assert (joint - alone[0]) == pytest.approx([0.0, -0.1])
+
+
+def test_interference_media_never_exhausts_a_metabolite():
+    """The step is `frac` of the *first* depletion, so nothing reaches zero."""
+    _, alone, joint = interaction.interference_media(
+        np.array([1.0, 1e-9]), np.array([[-1.0, -1e-6]]), np.array([1.0])
+    )
+    assert (alone > 0).all() and (joint > 0).all()
+
+
+def test_interference_media_never_goes_negative():
+    dt, alone, joint = interaction.interference_media(
+        np.array([1.0]), np.array([[-100.0]]), np.array([1.0]), frac=10.0
+    )
+    assert (alone >= 0).all() and (joint >= 0).all()

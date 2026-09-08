@@ -645,6 +645,99 @@ def true_z(
     return z
 
 
+_INTERFERE_FRAC = 0.1
+
+
+def interference_media(
+    c: np.ndarray, z: np.ndarray, X: np.ndarray, frac: float = _INTERFERE_FRAC
+) -> tuple[float, np.ndarray, np.ndarray]:
+    """Step the medium by the pool derivative, with and without the partners.
+
+    Returns ``(dt, alone, joint)`` -- ``alone[i]`` is ``c`` advanced by member
+    ``i``'s own exchange only, ``joint`` by the whole pool. Comparing ``mu_i``
+    across the two attributes the difference to the *partners*: self-depletion
+    is present in both arms and cancels, which comparing against ``mu_i(c)``
+    would not do.
+
+    ``dt`` is ``frac`` of the time to the first depletion under the pool
+    derivative, so there is no arbitrary time unit -- but it is still a scale.
+    Read the sign; the magnitude is a one-step linearisation.
+    """
+    c = np.asarray(c, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    dc = (np.asarray(X, dtype=np.float64)[:, None] * z).sum(0)
+    drain = (dc < 0) & (c > 0)
+    # **min, so no metabolite is ever exhausted inside the step.** The fastest
+    # draining metabolite loses exactly ``frac`` of itself and every other one
+    # less, which is what makes the difference a derivative rather than an
+    # outcome. Measured with ``median`` instead: the step exhausts a trace
+    # metabolite and a member reads ``delta_rel = -1`` -- saturated, and
+    # unstable in ``frac`` (one cell's member died in its *own* arm at 0.01 and
+    # lived at 0.001). Report the rate, not the step's own number.
+    dt = frac * float(np.min(c[drain] / -dc[drain])) if drain.any() else 0.0
+    alone = np.clip(c + dt * np.asarray(X, dtype=np.float64)[:, None] * z, 0.0, None)
+    return dt, alone, np.clip(c + dt * dc, 0.0, None)
+
+
+def interference(
+    models: list,
+    exchanges: list[str],
+    c: np.ndarray,
+    z: np.ndarray,
+    X: np.ndarray,
+    genome_ids: list[str],
+    *,
+    frac: float = _INTERFERE_FRAC,
+    ceq: dict[str, float] | None = None,
+) -> dict:
+    """Each member's ``mu`` with and without its partners, at the same medium.
+
+    ``E = min(secretion, uptake) >= 0`` by construction, so a member's waste
+    suppressing its neighbour shows up only as a *smaller* handover -- never as
+    a negative link. This is the second metric §13.11's change table promised:
+    a negative ``delta_rel`` is interference, a positive one facilitation, and
+    both are read off the same solve.
+
+    ``2G`` FBAs and no QP: only ``mu`` is wanted, and the elastic-net stage is
+    the expensive half of :func:`cfs.groundtruth.solve.solve`.
+    """
+    from cfs.groundtruth.solve import apply_mm_bounds, load_km_defaults, mu_optimize
+
+    km_cfg = load_km_defaults()
+    dt, alone, joint = interference_media(c, z, X, frac)
+
+    def mu(model, medium):
+        with model:
+            apply_mm_bounds(model, dict(zip(exchanges, medium.tolist(), strict=True)), km_cfg, ceq)
+            return float(mu_optimize(model, "interference"))
+
+    rows = []
+    for i, model in enumerate(models):
+        a, j = mu(model, alone[i]), mu(model, joint)
+        rows.append(
+            {
+                "genome_id": genome_ids[i],
+                "mu_alone": a,
+                "mu_with_partners": j,
+                # None, not a number: a member that does not grow alone has no
+                # baseline to be suppressed relative to.
+                "delta_rel": float((j - a) / a) if a > 0 else None,
+                # The step-free number: a relative growth-rate change per hour of
+                # partner activity. `delta_rel` alone is a property of `frac`.
+                "delta_rel_per_h": float((j - a) / a / dt) if a > 0 and dt > 0 else None,
+            }
+        )
+    deltas = [r["delta_rel_per_h"] for r in rows if r["delta_rel_per_h"] is not None]
+    return {
+        "dt": dt,
+        "frac": frac,
+        "members": rows,
+        "n_interfered": int(sum(d < -1e-6 for d in deltas)),
+        "n_facilitated": int(sum(d > 1e-6 for d in deltas)),
+        "min_delta_rel_per_h": min(deltas) if deltas else None,
+    }
+
+
 def verified_ascent(
     sur,
     models: list,
@@ -985,6 +1078,11 @@ def run(
         if verify:
             zt_draw = true_z(models, sur.exchanges, c_draw, ceq=ceq)
             zt_best = true_z(models, sur.exchanges, c_best, ceq=ceq)
+            # The interference observable: `E` cannot go negative, so suppression
+            # is invisible to it. 2G FBAs at the designed medium.
+            cell["interference"] = interference(
+                models, sur.exchanges, c_best, zt_best, X, gids, ceq=ceq
+            )
             e_draw, e_best = exchange(zt_draw, X, keep), exchange(zt_best, X, keep)
             hat_draw = exchange(member_z(sur, c_draw, al), X, keep)
             hat_best = exchange(member_z(sur, c_best, al), X, keep)
