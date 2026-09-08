@@ -3417,6 +3417,29 @@ its own secretion bound, so under `ceq` read `depletion_per_h` as "the effect of
 restoring what the donor consumed", not as a depletion cost. Under FBA the
 decomposition is signed as designed on 10/10.
 
+**The candidate seeding was self-defeating under inhibition — fixed 2026-09-08.**
+`candidate_media` sets the targeted metabolite to `_BUFFER_SAT * Km` in **every**
+variant, `box` included — the *uptake* half of the handover. §13.11's secretion
+bound is `Vmax * max(0, 1 - c/c^eq)`, so that same level is what stops the donor
+making it: `Km` is 0.001-0.1 mM (median 0.01), so `c_m = 1000 Km` is 1-100 mM
+(median 10) and **`c_m >= c^eq` for 100% of exchanges at `c^eq <= 1 mM`**. At
+every `c^eq` stage 3' cared about, the donor's secretion of the targeted
+metabolite was pinned at **exactly zero at every candidate seed** — only the
+appended random draws could find anything, so **stage 3's inhibited `E_true` is a
+lower bound, not an estimate**. P29 one level deeper: there the model chose the
+starts, here the *uninhibited labels* did.
+
+The structural fact is a result, not a bug: **under inhibition the two halves of
+a handover want opposite concentrations of the same metabolite**, window
+`Km <~ c_m < c^eq`, which can be **empty** — at `c^eq` = 0.01 mM, 86.5% of
+exchanges have `Km >= c^eq` and cannot be handed over at any concentration.
+`interaction.target_level` now sets `min(1000 Km, 0.3 c^eq)` and **skips** a
+candidate with no window; uninhibited it is the original value bit for bit.
+**Still open**: the candidate *set* and the box region both come from
+**uninhibited** labels, so they cannot propose the handovers inhibition creates
+(stage 3' found five, `E_true` 0.000 under FBA and up to 1326 under inhibition).
+Three replacements ranked in design spec §13.11.
+
 **How the standing product level should be set — (b) and (c) are recorded, not
 built** (design spec §13.11, "How the product concentration is set"). (b) close
 the chemostat on itself: at a §13.4 steady state `c_p = sum_i X_i z_ip / D`

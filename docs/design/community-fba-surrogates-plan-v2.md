@@ -6279,6 +6279,70 @@ the **second label root** — concentrated, run to exhaustion — which would al
 serve §8.6f's deep-regime coverage gap. Worth it only for a genuinely dynamic
 claim ("inhibition starts at hour 6"), not for a comparative one.
 
+#### The candidate seeding was self-defeating under inhibition — fixed 2026-09-08, and the sampling is still open
+
+`candidate_media` sets the targeted metabolite to `_BUFFER_SAT * Km` in **every**
+variant, `box` included — that is the *uptake* half of the handover. §13.11's
+secretion bound is `Vmax * max(0, 1 - c/c^eq)`, so the same concentration is what
+stops the donor making it. Measured on this index, no solves:
+
+| | value |
+| --- | --- |
+| `Km` across the index | 0.001-0.1 mM, median 0.01 |
+| candidate target `c_m = 1000 Km` | 1-100 mM, median **10** |
+| exchanges with `c_m >= c^eq` | **1.000** at `c^eq <= 1 mM`, 0.865 at 10, 0.011 at 100 |
+
+So at every `c^eq` stage 3' cared about (0.01-1 mM, the threshold being 0.113),
+the donor's secretion of the targeted metabolite was pinned at **exactly zero at
+every candidate seed**. Only the appended random §4.3 draws could find anything,
+which makes **stage 3's inhibited `E_true` a lower bound on what is achievable**,
+not an estimate of it. P29 one level deeper: there the model chose the starts,
+here the *uninhibited labels* did.
+
+**The structural fact, and it is a result rather than a bug:** under inhibition
+the two halves of a handover want **opposite** concentrations of the same
+metabolite. The window is `Km <~ c_m < c^eq`, and it can be empty:
+
+| `c^eq` | >= 1 decade of window | **no window at all** |
+| --- | --- | --- |
+| 0.01 mM | 0.000 | **0.865** |
+| 0.1 mM | 0.135 | 0.011 |
+| 1.0 mM | 0.989 | 0.000 |
+
+At 0.01 mM, 86.5% of exchanges cannot be handed over at *any* concentration.
+
+**Fixed** (`interaction.target_level`): the level is `min(1000 Km, 0.3 c^eq)`, and
+a candidate whose `c^eq <= Km` is **skipped** rather than emitted as a start that
+cannot work. Uninhibited it is the original `1000 Km` bit for bit.
+
+**Still open — the sampling itself, and it needs a replacement rather than a
+patch.** Two independent problems the level clamp does not touch:
+
+1. **The candidate set comes from uninhibited labels.** `candidate_links`
+   enumerates `z > 0` for one member meeting `z < 0` for another over the label
+   shards, which are plain FBA. Under inhibition that set is **over-inclusive**
+   (secretions the bound forbids) and, worse, **under-inclusive**: stage 3'
+   already found five designs whose `E_true` is 0.000 under plain FBA and up to
+   1326 under inhibition, and no enumeration over FBA labels can ever propose
+   those. This is the half that decides whether the inhibited arm is exploring
+   its own model at all.
+2. **The box is a region where the donor secreted *under FBA*.** `donor_box` is
+   the envelope of the labelled media in which the donor secreted `m`; under
+   inhibition the interaction-competent region is a different set, and it is
+   the one the search should be sampling. The measured payoff of the box was
+   1.1-1704x the base secretion rate on the uninhibited model — that number has
+   no inhibited counterpart.
+
+Candidate replacements, none costed: (i) **re-enumerate from an inhibited label
+pass** at the swept `c^eq` — no relabel of the heads, only a second solve over
+existing media, but one pass per `c^eq`; (ii) **derive the window analytically**
+and seed at its geometric centre per (donor, metabolite) instead of from labels,
+which needs no solves and covers the created-by-inhibition links the labels
+cannot; (iii) **drop the enumeration** and let the LP-screened random draws carry
+the seeding, accepting the coverage loss measured in §13.5 (24 of 52 links from
+candidates against 22 from draws, 20 in common). (ii) is the cheapest and is the
+only one that can propose a handover FBA does not have.
+
 #### (a) The directional spent-medium assay — built and measured, 2026-09-08
 
 `interaction.spent_medium_assay`. :func:`interference` is *simultaneous*, so a

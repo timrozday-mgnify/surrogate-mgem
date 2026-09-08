@@ -477,9 +477,37 @@ def candidate_links(
     return links, donor_media, donor_box
 
 
+# Fraction of `c^eq` a candidate start sits at when inhibition is on. Well below
+# 1 because the donor's secretion bound is `Vmax*(1 - c/c^eq)`: at 0.9 of `c^eq`
+# it can still only secrete a tenth of `Vmax`.
+_CEQ_FRAC = 0.3
+
+
+def target_level(km: float, ceq_m: float | None) -> float | None:
+    """Concentration to set the candidate metabolite at. ``None`` = skip it.
+
+    **Under §13.11 the two halves of a handover want opposite concentrations of
+    the same metabolite.** The recipient's uptake bound is ``-Vmax * c/(Km+c)``,
+    so the uptake half wants ``c >> Km``; the donor's secretion bound is
+    ``Vmax * max(0, 1 - c/c^eq)``, so the secretion half wants ``c < c^eq``. The
+    window is ``Km <~ c < c^eq`` and it can be **empty** -- at ``c^eq`` = 0.01 mM
+    86.5% of this index's exchanges have ``Km >= c^eq``, i.e. no concentration
+    hands that metabolite over at all.
+
+    Uninhibited (``ceq_m is None``) this is the original ``_BUFFER_SAT * Km``.
+    """
+    sat = _BUFFER_SAT * km
+    if ceq_m is None:
+        return sat
+    if ceq_m <= km:
+        return None
+    return min(sat, _CEQ_FRAC * ceq_m)
+
+
 def candidate_media(
     sur, labels_dir, gids: list[str], links: dict, donor_media: dict, donor_box: dict,
     keep: np.ndarray, seed: int, box: int = 3, scales=None,
+    ceq: dict[str, float] | None = None,
 ):
     """Starts per candidate metabolite: ``(C, targets)``.
 
@@ -523,6 +551,15 @@ def candidate_media(
     C, targets = [], []
     for k, m in enumerate(cand):
         donor = links[m].get("best_donor")
+        # `None` means no concentration satisfies both halves at once under
+        # §13.11's secretion bound -- a start for it cannot work, so do not
+        # emit one. Without this every candidate start sits at `1000 * Km`,
+        # which is >= `c^eq` for 100% of this index's exchanges at
+        # `c^eq <= 1 mM`: the donor's secretion of the very metabolite the
+        # start exists to hand over is pinned at exactly zero.
+        level = target_level(float(sur.km[col[m]]), None if ceq is None else ceq.get(m))
+        if level is None:
+            continue
         for d, var in enumerate(variants):
             rng = np.random.default_rng(seed + 1000 * k + d)
             spec: dict[int, float] = {}
@@ -544,7 +581,7 @@ def candidate_media(
                     lo = max(float(blo[j]), _SCARCE * float(sur.km[j]))
                     hi = max(float(bhi[j]), lo)
                     spec[j] = float(10.0 ** rng.uniform(np.log10(lo), np.log10(hi)))
-            spec[col[m]] = _BUFFER_SAT * sur.km[col[m]]
+            spec[col[m]] = level
             if var.endswith("exclusive"):
                 spec |= {
                     col[o]: _SCARCE * sur.km[col[o]]
@@ -1000,7 +1037,7 @@ def run(
             # on 4 of 5 cells.
             Cc, targets = candidate_media(
                 sur, labels_dir, gids, links, donor_media, donor_box, keep,
-                seed + n * 1000, box=box, scales=scales
+                seed + n * 1000, box=box, scales=scales, ceq=ceq
             )
             targets = [{"metabolite": None, "variant": "draw"}] * len(C) + targets
             C = np.concatenate([C, Cc])

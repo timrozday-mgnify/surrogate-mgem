@@ -199,3 +199,16 @@ def test_resupplementation_keeps_secretions_and_restores_uptake():
     assert spent[0][0] < c[0] and spent[0][1] > c[1]  # depleted, and conditioned
     assert resup[0] == c[0]  # what the donor ate is restored
     assert resup[1] == spent[0][1]  # what it secreted is kept
+
+
+def test_target_level_respects_the_secretion_bound():
+    """Under §13.11 the two halves of a handover want opposite concentrations."""
+    lvl = interaction.target_level
+    km = 0.01
+    assert lvl(km, None) == pytest.approx(1000 * km)  # uninhibited: unchanged
+    # c^eq well above Km: sit inside the window, not at the saturating level.
+    assert lvl(km, 1.0) == pytest.approx(0.3)
+    # c^eq at or below Km: no concentration satisfies both halves -- skip it.
+    assert lvl(km, km) is None and lvl(km, km / 2) is None
+    # A c^eq so high it never binds leaves the original level alone.
+    assert lvl(km, 1e6) == pytest.approx(1000 * km)
