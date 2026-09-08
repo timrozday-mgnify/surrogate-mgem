@@ -1108,7 +1108,6 @@ def main(argv: list[str] | None = None) -> int:
             invade_rel=args.invade_rel,
             warm_start=args.warm_start,
             seed_mode=args.seed_mode,
-            box=args.box,
             seed_probes=args.seed_probes,
             seed=args.seed,
             scales=args.scales,
