@@ -532,6 +532,27 @@ def build_parser() -> argparse.ArgumentParser:
     ix.add_argument(
         "--communities", required=True, help="Semicolon-separated member lists, 'A,B;C,D,E'."
     )
+    ix.add_argument(
+        "--objective", choices=("handover", "interference", "interference-rel"),
+        default="handover",
+        help="What the design maximises. 'handover': E = min(secretion, uptake), "
+        "the mass passed between members — positive interaction, and >= 0 by "
+        "construction, so suppression is invisible to it. 'interference': the "
+        "growth-rate loss the partners impose at the same medium (each member's "
+        "mu with and without them, differenced, weighted by biomass and "
+        "summed) — competition for a limited component "
+        "and product inhibition together; run --inhibition for the second to "
+        "have a mechanism at all, and read the designed medium's `spent_medium` "
+        "block to separate them. 'interference-rel' normalises that loss by each "
+        "member's own mu and is REFUTED as a design objective: a relative rate "
+        "saturates at (4/19)Vmax/Km in the scarce regime, so its optimum is a "
+        "model constant (2.105e6 on 10 of 10 runs) reached by starving a trace "
+        "metal — kept only so the negative result can be re-derived. "
+        "The survey, the candidate enumeration and every E_* report key are "
+        "unchanged either way; only the ascent, the LP screen's ranking and the "
+        "acceptance test move, and the objective's own numbers are the obj_* "
+        "keys.",
+    )
     ix.add_argument("--draws", type=int, default=64, help="Media surveyed per community.")
     ix.add_argument(
         "--starts", type=int, default=4,
@@ -1183,6 +1204,7 @@ def main(argv: list[str] | None = None) -> int:
             inhibition=args.inhibition,
             extra_candidates=args.extra_candidates,
             inhibited_media=args.inhibited_links,
+            objective_name=args.objective,
         )
         print(json.dumps({k: v for k, v in report.items() if k != "cells"}, indent=2))
         return 0 if report.get("passed", True) else 1

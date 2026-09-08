@@ -213,3 +213,124 @@ def test_target_level_balances_the_two_halves():
     # Not a hard window: `c^eq = Km` still hands over, at 38% of both capacities.
     assert lvl(km, km)[1] == pytest.approx(0.382, abs=1e-3)
     assert lvl(km, km / 100)[1] < lvl(km, km)[1] < lvl(km, 10 * km)[1]
+
+
+def test_buffered_species_do_not_set_the_step():
+    """The vessel holds them, so they can neither deplete nor scale `dt`.
+
+    Without the mask a proton or water term is ordinarily the fastest-draining
+    entry in `dc`, so it sets the whole step and every reported rate is scaled
+    by a species the buffer is holding constant.
+    """
+    c = np.array([1.0, 1.0])
+    z = np.array([[-1.0, -100.0]])  # m1 drains 100x faster and is buffered
+    X = np.array([1.0])
+    keep = np.array([1.0, 0.0])
+    dt, alone, joint = interaction.interference_media(c, z, X, frac=0.1, keep=keep)
+    assert dt == pytest.approx(0.1)  # set by m0 (t=1), not by m1 (t=0.01)
+    assert alone[0][1] == 1.0 and joint[1] == 1.0  # the buffered species is held
+
+
+class _ToySur:
+    """Two members over two metabolites, both eating m0; only member 1 eats m1.
+
+    `z` is constant so the step is hand-computable, and `mu` is each member's
+    own substrate concentration so the growth response is too.
+    """
+
+    km = np.array([1.0, 1.0])
+    genome_ids = ["a", "b"]
+    members = np.array([0, 1])
+    Z = np.array([[-1.0, 0.0], [-1.0, -2.0]])
+
+    def mu_batch(self, C):
+        return np.stack([np.asarray(C)[:, 0], np.asarray(C)[:, 1]])
+
+    def mu_and_z_batch(self, C, alpha):
+        return self.mu_batch(C), np.repeat(self.Z[:, None, :], len(C), axis=1)
+
+    def mu_and_z(self, c, alpha):
+        mu, z = self.mu_and_z_batch(np.asarray(c)[None], alpha)
+        return mu[:, 0], z[:, 0]
+
+
+def test_interference_objective_sees_competition_E_cannot():
+    """Two members sharing m0: `E` is 0, the interference objective is not.
+
+    Nobody secretes anything here, so `min(secretion, uptake) = 0` on every
+    metabolite -- the handover objective is blind to a pure substrate
+    competition by construction, which is the whole reason for the second mode.
+    """
+    sur, c, X = _ToySur(), np.array([1.0, 1.0]), np.array([1.0, 1.0])
+    assert interaction.objective(sur, c, X)[0] == 0.0
+
+    # dt = 0.1 * min(1/2, 1/2) = 0.05; member 0 sees m0 at 0.95 alone and 0.90
+    # with its partner, member 1's own substrate m1 is untouched by member 0.
+    v, d = interaction.objective_interference(sur, c, X, frac=0.1)
+    assert d[0] == pytest.approx(1.0 * 0.05 / 0.05)  # X_0 * (0.95 - 0.90) / dt
+    assert d[1] == pytest.approx(0.0)
+    assert v == pytest.approx(d.sum()) and v > 0  # positive == suppression
+
+    vr, dr = interaction.objective_interference(sur, c, X, frac=0.1, relative=True)
+    assert dr[0] == pytest.approx(0.05 / (0.95 * 0.05))  # divided by mu_alone
+    assert vr == pytest.approx(dr.sum()) and vr > 0
+
+
+def test_the_absolute_loss_vanishes_where_the_relative_rate_saturates():
+    """Why the objective is absolute: starving everyone must not be the optimum.
+
+    In the scarce regime uptake is proportional to `c`, so the depletion time
+    `c/|dc|` cancels `c` and the *relative* rate saturates at a model constant
+    -- measured at `(4/19) Vmax/Km` on 10 of 10 design runs, reached by starving
+    a trace metal (§13.5). The absolute loss keeps the numerator only, so it goes
+    to zero on the same path and the degenerate optimum eliminates itself.
+    """
+    sur, X = _MMSur(), np.array([1.0, 1.0])
+    out = [
+        (
+            interaction.objective_interference(sur, np.array([c0, 1.0]), X, frac=0.1)[0],
+            interaction.objective_interference(
+                sur, np.array([c0, 1.0]), X, frac=0.1, relative=True
+            )[0],
+        )
+        for c0 in (1.0, 1e-3, 1e-6)
+    ]
+    absolute, relative = zip(*out, strict=True)
+    # Starve the shared substrate over six decades: the absolute loss follows it
+    # down, the relative rate holds at its cap.
+    assert absolute[0] > absolute[1] > absolute[2]
+    assert absolute[2] < absolute[0] / 1e5
+    assert all(r > 0.5 for r in relative) and relative[2] > relative[0]
+
+
+class _MMSur(_ToySur):
+    """`_ToySur` with §3.3's uptake bound, so `z` falls with `c` as the LP's does.
+
+    `_ToySur`'s constant `z` cannot show the saturation the objective choice
+    turns on -- uptake has to be proportional to `c` in the scarce limit for the
+    depletion time to cancel it.
+    """
+
+    def mu_and_z_batch(self, C, alpha):
+        C = np.asarray(C, dtype=np.float64)
+        u = C / (self.km + C)  # (B, M)
+        return self.mu_batch(C), self.Z[:, None, :] * u[None]
+
+
+def test_interference_objective_batch_matches_the_single_path():
+    sur, X = _ToySur(), np.array([1.0, 1.0])
+    C = np.array([[1.0, 1.0], [2.0, 0.5]])
+    v, d = interaction.objective_interference_batch(sur, C, X)
+    for b, c in enumerate(C):
+        v1, d1 = interaction.objective_interference(sur, c, X)
+        assert v[b] == pytest.approx(v1) and d[b] == pytest.approx(d1)
+
+
+def test_objective_spec_handover_truth_is_the_exchange_sum():
+    z = np.array([[+1.0, -2.0], [-1.0, +1.0]])
+    X = np.array([1.0, 1.0])
+    spec = interaction.objective_spec("handover")
+    got = spec.truth(None, ["EX_a_e", "EX_b_e"], np.ones(2), z, X, ["a", "b"])
+    assert got == pytest.approx(interaction.exchange(z, X).sum())
+    with pytest.raises(ValueError):
+        interaction.objective_spec("nope")

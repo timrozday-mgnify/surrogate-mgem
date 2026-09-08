@@ -46,6 +46,9 @@ from __future__ import annotations
 import itertools
 import json
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -88,6 +91,10 @@ _BUFFERED = ("EX_h_e", "EX_h2o_e")
 # transporters see a saturating supply, which is what a solvent and a pH
 # controller provide.
 _BUFFER_SAT = 1e3
+
+# §13.5's interference step: the fraction of the time-to-first-depletion the
+# medium is advanced by. Read the sign of the result, not its size.
+_INTERFERE_FRAC = 0.1
 
 
 def keep_mask(exchanges: list[str], buffered=_BUFFERED) -> np.ndarray:
@@ -159,7 +166,110 @@ def objective_batch(sur, C, X, alpha: float = 1.0, keep=None):
     return e.sum(1), e
 
 
-def grad_fd(sur, c: np.ndarray, X: np.ndarray, alpha: float = 1.0, rel: float = 1e-3, keep=None):
+def member_mu_batch(sur, C: np.ndarray) -> np.ndarray:
+    """Head A only, community members only, ``(n_members, B)``."""
+    return sur.mu_batch(C)[sur.members]
+
+
+def interference_deltas(mu_alone: np.ndarray, mu_joint: np.ndarray, dt) -> np.ndarray:
+    """``(mu_joint - mu_alone) / (mu_alone * dt)``, and 0 where that is undefined.
+
+    Same quantity as :func:`interference`'s ``delta_rel_per_h`` -- a relative
+    growth-rate change per hour of partner activity -- but vectorised and with
+    the undefined cases (a member that does not grow alone, a medium nothing
+    drains) folded to 0 rather than ``None``, because this one is inside an
+    optimiser. Negative is suppression.
+    """
+    a = np.asarray(mu_alone, dtype=np.float64)
+    j = np.asarray(mu_joint, dtype=np.float64)
+    ok = (a > 0) & (np.asarray(dt, dtype=np.float64) > 0)
+    return np.where(ok, (j - a) / np.where(ok, a * dt, 1.0), 0.0)
+
+
+def interference_losses(mu_alone, mu_joint, dt, X) -> np.ndarray:
+    """``X_i (mu_alone_i - mu_joint_i) / dt``, and 0 where ``dt`` is undefined.
+
+    The **absolute, biomass-weighted** growth-rate loss the partners impose --
+    the same finite difference as :func:`interference_deltas` with the
+    normalisation by the member's own ``mu`` removed. Positive is suppression.
+
+    That normalisation is exactly what made the relative form unusable as a
+    design objective (§13.5): dividing a quantity proportional to ``c`` by
+    another proportional to ``c`` gives a constant, so the relative rate
+    saturates at ``Vmax/Km`` and the search reaches the cap by starving. This
+    form has the numerator only, so in the same limit it goes to
+    ``a (G-1) Vmax c / Km -> 0``: **starving everyone scores zero**, and the
+    degenerate optimum is self-eliminating rather than optimal.
+    """
+    a = np.asarray(mu_alone, dtype=np.float64)
+    j = np.asarray(mu_joint, dtype=np.float64)
+    dt = np.asarray(dt, dtype=np.float64)
+    ok = dt > 0
+    return np.where(ok, np.asarray(X, dtype=np.float64) * (a - j) / np.where(ok, dt, 1.0), 0.0)
+
+
+def objective_interference_batch(
+    sur, C, X, alpha: float = 1.0, keep=None, frac: float = _INTERFERE_FRAC,
+    relative: bool = False,
+):
+    """``(total suppression per medium, per-member detail)``, positive = suppression.
+
+    ``relative=False`` (default) is :func:`interference_losses`, the absolute
+    biomass-weighted loss. ``relative=True`` is the refuted
+    :func:`interference_deltas` form, kept runnable because its negative result
+    is worth being able to re-derive -- see §13.5.
+
+    The surrogate reading of :func:`interference`, so the designer can propose
+    against it: step each medium by the pool derivative with and without the
+    partners (:func:`interference_media`) and score the growth-rate difference.
+    ``E`` cannot express this at all -- it is a ``min`` of two non-negative sums,
+    so suppression is invisible to it -- which is why maximising negative
+    interaction needs its own objective rather than a sign on the old one.
+
+    Cost is ``G+1`` Head-A evaluations per medium and **no Head B** beyond the
+    one ``z`` the step is built from, hence :func:`member_mu_batch`: the
+    per-state active-set projection in ``mu_and_z_batch`` is a Python loop over
+    the batch and this objective would pay for it ``G+1`` times over.
+    """
+    C = np.asarray(C, dtype=np.float64)
+    B, M = C.shape
+    Z = member_z_batch(sur, C, alpha)  # (G, B, M)
+    G = Z.shape[0]
+    media = np.empty((B, G + 1, M))
+    dt = np.empty(B)
+    for b in range(B):
+        dt[b], media[b, 1:], media[b, 0] = interference_media(C[b], Z[:, b, :], X, frac, keep)
+    mu = member_mu_batch(sur, media.reshape(B * (G + 1), M)).reshape(G, B, G + 1)
+    i = np.arange(G)
+    alone = mu[i, :, 1 + i].T  # (B, G): member i in its own no-partner arm
+    joint = mu[i, :, 0].T
+    if relative:
+        d = -interference_deltas(alone, joint, dt[:, None])
+    else:
+        d = interference_losses(alone, joint, dt[:, None], np.asarray(X)[None])
+    return d.sum(1), d
+
+
+def objective_interference(
+    sur, c, X, alpha: float = 1.0, keep=None, frac: float = _INTERFERE_FRAC,
+    relative: bool = False,
+):
+    """:func:`objective_interference_batch` at one medium."""
+    v, d = objective_interference_batch(
+        sur, np.asarray(c, dtype=np.float64)[None], X, alpha, keep, frac, relative
+    )
+    return float(v[0]), d[0]
+
+
+def grad_fd(
+    sur,
+    c: np.ndarray,
+    X: np.ndarray,
+    alpha: float = 1.0,
+    rel: float = 1e-3,
+    keep=None,
+    obj_batch=None,
+):
     """``(E, dE/dc)`` by forward differences, the whole Jacobian in one batch call.
 
     Head B is reached through numpy (§3.3's clamp, the active-set projection in
@@ -186,7 +296,7 @@ def grad_fd(sur, c: np.ndarray, X: np.ndarray, alpha: float = 1.0, rel: float = 
     M = len(c)
     C = np.repeat(c[None], M + 1, axis=0)
     C[1 + np.arange(M), np.arange(M)] += h
-    E, _ = objective_batch(sur, C, X, alpha, keep)
+    E, _ = (obj_batch or objective_batch)(sur, C, X, alpha, keep)
     return float(E[0]), (E[1:] - E[0]) / h
 
 
@@ -203,8 +313,14 @@ def maximise(
     iters: int = 120,
     tol: float = 1e-9,
     keep: np.ndarray | None = None,
+    obj: Objective | None = None,
 ) -> tuple[np.ndarray, list[float]]:
-    """Projected gradient ascent on ``E``, backtracking step. Returns ``(c*, path)``.
+    """Projected gradient ascent on ``obj``, backtracking step. Returns ``(c*, path)``.
+
+    ``obj`` defaults to the handover rate ``E`` (:func:`objective_spec`); the
+    other choice is the interference rate, which is what makes *negative*
+    interaction designable at all. Both are non-concave, so the multistart and
+    the LP acceptance test below apply either way.
 
     Unlike §13.2's this is **not** a convex program -- ``E`` is a min of two
     functions that are neither concave nor convex, and the relu kinks make the
@@ -218,20 +334,21 @@ def maximise(
     trials (measured: 1 accepted in 20). Taking the gradient only after a step is
     accepted turned 36 s into ~5 s for the same path.
     """
+    obj = obj or objective_spec("handover")
     c = project(np.asarray(c0, dtype=np.float64), cost, budget, c_lo, c_hi)
-    E, g = grad_fd(sur, c, X, alpha, keep=keep)
+    E, g = grad_fd(sur, c, X, alpha, keep=keep, obj_batch=obj.hat_batch)
     path = [E]
     gn = max(float(np.linalg.norm(g)), 1e-30)
     step = 0.1 * float(np.linalg.norm(c_hi)) / gn
     for _ in range(iters):
         cand = project(c + step * g, cost, budget, c_lo, c_hi)
-        E_c = objective(sur, cand, X, alpha, keep)[0]
+        E_c = obj.hat(sur, cand, X, alpha, keep)[0]
         if E_c > E:
             c, E = cand, E_c
             path.append(E)
             if len(path) > 2 and path[-1] - path[-2] < tol * max(abs(E), 1e-12):
                 break
-            E, g = grad_fd(sur, c, X, alpha, keep=keep)
+            E, g = grad_fd(sur, c, X, alpha, keep=keep, obj_batch=obj.hat_batch)
             step *= 1.5
         else:
             step *= 0.5
@@ -369,7 +486,6 @@ def survey(sur, C: np.ndarray, X: np.ndarray, alpha: float = 1.0, chunk: int = 6
         E.append(e)
         EX.append(ex)
     return np.concatenate(E), np.concatenate(EX)
-
 
 
 # --------------------------------------------------------------------------- #
@@ -795,11 +911,13 @@ def true_z(
     return z
 
 
-_INTERFERE_FRAC = 0.1
-
 
 def interference_media(
-    c: np.ndarray, z: np.ndarray, X: np.ndarray, frac: float = _INTERFERE_FRAC
+    c: np.ndarray,
+    z: np.ndarray,
+    X: np.ndarray,
+    frac: float = _INTERFERE_FRAC,
+    keep: np.ndarray | None = None,
 ) -> tuple[float, np.ndarray, np.ndarray]:
     """Step the medium by the pool derivative, with and without the partners.
 
@@ -812,10 +930,20 @@ def interference_media(
     ``dt`` is ``frac`` of the time to the first depletion under the pool
     derivative, so there is no arbitrary time unit -- but it is still a scale.
     Read the sign; the magnitude is a one-step linearisation.
+
+    ``keep`` is the buffered mask (:func:`keep_mask`), and it belongs here for
+    the same reason it belongs in ``E``: the vessel holds protons and water, so
+    the members can neither deplete nor accumulate them. Without it they are
+    ordinarily the fastest-draining entries in ``dc`` and therefore **set
+    ``dt``** -- the whole step is then scaled by a species the buffer is holding
+    constant.
     """
     c = np.asarray(c, dtype=np.float64)
     z = np.asarray(z, dtype=np.float64)
-    dc = (np.asarray(X, dtype=np.float64)[:, None] * z).sum(0)
+    zw = np.asarray(X, dtype=np.float64)[:, None] * z
+    if keep is not None:
+        zw = zw * np.asarray(keep, dtype=np.float64)[None]
+    dc = zw.sum(0)
     drain = (dc < 0) & (c > 0)
     # **min, so no metabolite is ever exhausted inside the step.** The fastest
     # draining metabolite loses exactly ``frac`` of itself and every other one
@@ -825,8 +953,7 @@ def interference_media(
     # unstable in ``frac`` (one cell's member died in its *own* arm at 0.01 and
     # lived at 0.001). Report the rate, not the step's own number.
     dt = frac * float(np.min(c[drain] / -dc[drain])) if drain.any() else 0.0
-    alone = np.clip(c + dt * np.asarray(X, dtype=np.float64)[:, None] * z, 0.0, None)
-    return dt, alone, np.clip(c + dt * dc, 0.0, None)
+    return dt, np.clip(c + dt * zw, 0.0, None), np.clip(c + dt * dc, 0.0, None)
 
 
 def _mu_at(exchanges: list[str], ceq: dict[str, float] | None = None):
@@ -853,6 +980,7 @@ def interference(
     *,
     frac: float = _INTERFERE_FRAC,
     ceq: dict[str, float] | None = None,
+    keep: np.ndarray | None = None,
 ) -> dict:
     """Each member's ``mu`` with and without its partners, at the same medium.
 
@@ -865,9 +993,10 @@ def interference(
     ``2G`` FBAs and no QP: only ``mu`` is wanted, and the elastic-net stage is
     the expensive half of :func:`cfs.groundtruth.solve.solve`.
     """
-    dt, alone, joint = interference_media(c, z, X, frac)
+    dt, alone, joint = interference_media(c, z, X, frac, keep)
     mu = _mu_at(exchanges, ceq)
 
+    Xa = np.asarray(X, dtype=np.float64)
     rows = []
     for i, model in enumerate(models):
         a, j = mu(model, alone[i]), mu(model, joint)
@@ -876,6 +1005,14 @@ def interference(
                 "genome_id": genome_ids[i],
                 "mu_alone": a,
                 "mu_with_partners": j,
+                # The absolute, biomass-weighted form -- what `--objective
+                # interference` maximises. Positive is suppression. Unlike
+                # `delta_rel_per_h` it is defined at a member that does not grow
+                # alone, and it goes to 0 rather than to a constant as the
+                # medium is starved (§13.5).
+                "abs_loss_per_h": (
+                    float(Xa[i] * (a - j) / dt) if dt > 0 else None
+                ),
                 # None, not a number: a member that does not grow alone has no
                 # baseline to be suppressed relative to.
                 "delta_rel": float((j - a) / a) if a > 0 else None,
@@ -892,6 +1029,20 @@ def interference(
         "n_interfered": int(sum(d < -1e-6 for d in deltas)),
         "n_facilitated": int(sum(d > 1e-6 for d in deltas)),
         "min_delta_rel_per_h": min(deltas) if deltas else None,
+        # The scalar `--objective interference-rel` maximises. **Refuted as a
+        # design objective** -- it saturates at `(4/19) Vmax/Km` and the search
+        # reaches that constant by starving a trace metal (§13.5). Kept because
+        # it is the bench-comparable relative number and because the negative
+        # result is worth being able to re-derive.
+        "total_suppression_per_h": -float(sum(deltas)) if deltas else 0.0,
+        # The scalar `--objective interference` maximises: positive is
+        # suppression. Summed rather than `min`, so a medium that suppresses two
+        # members is worth more than one that suppresses one -- and because the
+        # ascent is on a finite difference, where a `min` over members changes
+        # which member it is halfway through a step.
+        "total_abs_loss_per_h": float(
+            sum(r["abs_loss_per_h"] for r in rows if r["abs_loss_per_h"] is not None)
+        ),
     }
 
 
@@ -912,6 +1063,7 @@ def spent_medium_assay(
     *,
     frac: float = _INTERFERE_FRAC,
     ceq: dict[str, float] | None = None,
+    keep: np.ndarray | None = None,
 ) -> dict | None:
     """The **directional** version of :func:`interference`: one donor at a time.
 
@@ -935,7 +1087,7 @@ def spent_medium_assay(
     G = len(models)
     if G > _MAX_PAIRS_G:
         return None
-    dt, spent, _ = interference_media(c, z, X, frac)
+    dt, spent, _ = interference_media(c, z, X, frac, keep)
     mu = _mu_at(exchanges, ceq)
     fresh = [mu(m, np.asarray(c, dtype=np.float64)) for m in models]
 
@@ -981,6 +1133,65 @@ def spent_medium_assay(
     }
 
 
+@dataclass(frozen=True)
+class Objective:
+    """What the design maximises: the surrogate value, its batch form, the truth.
+
+    Two are defined (:func:`objective_spec`), and they answer different
+    questions rather than being two signs of one:
+
+    * ``handover`` -- ``E = min(secretion, uptake) >= 0``, the mass actually
+      passed between members. Positive interaction, and structurally incapable
+      of going negative.
+    * ``interference`` -- the **absolute, biomass-weighted** growth-rate loss the
+      partners impose at the same medium, ``sum_i X_i (mu_alone_i - mu_joint_i)
+      / dt``, positive being suppression. This is competition for a limited
+      component and product inhibition together; :func:`spent_medium_assay` is
+      what separates them afterwards, and under `--inhibition` the conditioning
+      half has a mechanism at all.
+    * ``interference-rel`` -- the same difference normalised by each member's own
+      ``mu``. **Refuted as a design objective** (§13.5): a relative rate divides
+      a quantity proportional to ``c`` by another proportional to ``c``, so in
+      the scarce regime it saturates at ``(4/19) Vmax/Km`` -- a model constant,
+      2.105e6 on 10 of 10 runs -- and the search reaches it by starving a trace
+      metal, destroying the handover on the way. Kept runnable, off by default.
+
+    ``truth`` takes the true ``z`` the caller already solved for, so the
+    handover objective costs no extra LP and the interference one costs ``2G``
+    FBAs rather than another ``G`` elastic-net solves.
+    """
+
+    name: str
+    hat: Callable[..., tuple[float, np.ndarray]]
+    hat_batch: Callable[..., tuple[np.ndarray, np.ndarray]]
+    truth: Callable[..., float]
+
+
+def objective_spec(name: str, frac: float = _INTERFERE_FRAC) -> Objective:
+    """The named :class:`Objective`. ``name`` is ``handover`` or ``interference``."""
+    if name == "handover":
+        return Objective(
+            name,
+            objective,
+            objective_batch,
+            lambda models, exchanges, c, z, X, gids, keep=None, ceq=None: float(
+                exchange(z, X, keep).sum()
+            ),
+        )
+    if name in ("interference", "interference-rel"):
+        rel = name.endswith("-rel")
+        key = "total_suppression_per_h" if rel else "total_abs_loss_per_h"
+        return Objective(
+            name,
+            partial(objective_interference, frac=frac, relative=rel),
+            partial(objective_interference_batch, frac=frac, relative=rel),
+            lambda models, exchanges, c, z, X, gids, keep=None, ceq=None: interference(
+                models, exchanges, c, z, X, gids, frac=frac, ceq=ceq, keep=keep
+            )[key],
+        )
+    raise ValueError(f"unknown objective {name!r}")
+
+
 def verified_ascent(
     sur,
     models: list,
@@ -996,8 +1207,10 @@ def verified_ascent(
     eps: float = 1e-3,
     keep: np.ndarray | None = None,
     ceq: dict[str, float] | None = None,
+    obj: Objective | None = None,
+    genome_ids: list[str] | None = None,
 ) -> tuple[np.ndarray, dict]:
-    """Trust-region search on ``E`` with the **true LP as the acceptance test**.
+    """Trust-region search on ``obj`` with the **true LP as the acceptance test**.
 
     §13.2's bundle TRF corrects the model to the LP with a tangent, which works
     because ``mu_true`` is concave and the LP's dual *is* its gradient. Neither
@@ -1020,15 +1233,23 @@ def verified_ascent(
     number to read instead is how much true gain the search actually found.
     Cost is one FBA per member per iteration.
     """
+    obj = obj or objective_spec("handover")
+    gids = genome_ids or [f"m{i}" for i in range(len(models))]
+
+    def truth(medium):
+        z = true_z(models, sur.exchanges, medium, eps, ceq)
+        return float(obj.truth(models, sur.exchanges, medium, z, X, gids, keep, ceq))
+
     c = np.asarray(c0, dtype=np.float64)
-    best_true = float(exchange(true_z(models, sur.exchanges, c, eps, ceq), X, keep).sum())
+    best_true = truth(c)
     start_true, r, n_lp, accepted = best_true, float(decades), 1, 0
     for _ in range(max_it):
         lo, hi = trust_box(sur, c, r, keep)
         cand, _ = maximise(
-            sur, c, X, alpha, cost=cost, budget=budget, c_lo=lo, c_hi=hi, iters=iters, keep=keep
+            sur, c, X, alpha, cost=cost, budget=budget, c_lo=lo, c_hi=hi, iters=iters,
+            keep=keep, obj=obj,
         )
-        e_true = float(exchange(true_z(models, sur.exchanges, cand, eps, ceq), X, keep).sum())
+        e_true = truth(cand)
         n_lp += 1
         if e_true > best_true:
             c, best_true, accepted = cand, e_true, accepted + 1
@@ -1038,8 +1259,8 @@ def verified_ascent(
             if r < 1e-3:
                 break
     return c, {
-        "E_true_start": start_true,
-        "E_true": best_true,
+        "obj_true_start": start_true,
+        "obj_true": best_true,
         "trf_accepted": accepted,
         "trf_radius": r,
         "n_lp": n_lp,
@@ -1076,6 +1297,7 @@ def run(
     inhibition: Path | None = None,
     extra_candidates: int = 0,
     inhibited_media: int = 0,
+    objective_name: str = "handover",
 ) -> dict:
     """Survey the interactions a community can reach, then design media for them.
 
@@ -1087,6 +1309,13 @@ def run(
     surrogate's weakest axis is exactly the magnitude this objective is built on.
     """
     from cfs.compose.dfba import Surrogate, community_medium
+
+    # What the design maximises. The survey, the candidate enumeration and the
+    # structural report are unchanged either way -- only the ascent's objective,
+    # the LP screen's ranking and the acceptance test move. `handover` is `E`;
+    # `interference` is the growth-rate cost partners impose, which is the
+    # competition-and-inhibition half `E` cannot express by construction.
+    spec = objective_spec(objective_name)
 
     # §13.11: exchange id -> equilibrium concentration, in the medium's own units.
     # It reaches only the *true* LP -- the heads are unchanged and the labels are
@@ -1215,22 +1444,45 @@ def run(
         # down -- and with every start at zero the LP acceptance test has nothing
         # to discriminate against either, since any positive step "improves" it.
         # One LP per member per draw is the highest-value LP in the whole run.
-        rank_rho = float("nan")
+        rank_rho = obj_rho = float("nan")
         if verify and screen:
             # Keep the per-metabolite vector, not just its sum: the sum ranks
             # the starts, the vector says which handovers were realised at all.
-            EX_true = np.array(
-                [exchange(true_z(models, sur.exchanges, c, ceq=ceq), X, keep) for c in C]
-            )
+            Zt = [true_z(models, sur.exchanges, c, ceq=ceq) for c in C]
+            EX_true = np.array([exchange(z, X, keep) for z in Zt])
             E_true_draws = EX_true.sum(1)
-            best = np.argsort(-E_true_draws)[:starts]
+            # Rank the starts on the objective being designed. In `handover`
+            # mode this *is* `E_true_draws`; in `interference` mode it is 2G
+            # FBAs per draw on top of the solves already done, and ranking by
+            # the handover rate instead would seed the suppression search at the
+            # media with the most cross-feeding -- the wrong end.
+            obj_true_draws = (
+                E_true_draws
+                if spec.name == "handover"
+                else np.array([
+                    spec.truth(models, sur.exchanges, c, z, X, gids, keep, ceq)
+                    for c, z in zip(C, Zt, strict=True)
+                ])
+            )
+            del Zt
+            best = np.argsort(-obj_true_draws)[:starts]
+            obj_hat_draws = E if spec.name == "handover" else spec.hat_batch(sur, C, X, al, keep)[0]
             if len(E_true_draws) > 2 and E_true_draws.std() > 0 and E.std() > 0:
                 from scipy.stats import spearmanr
 
                 rank_rho = float(spearmanr(E, E_true_draws).statistic)
+            if (
+                len(obj_true_draws) > 2
+                and obj_true_draws.std() > 0
+                and np.std(obj_hat_draws) > 0
+            ):
+                from scipy.stats import spearmanr
+
+                obj_rho = float(spearmanr(obj_hat_draws, obj_true_draws).statistic)
         else:
-            EX_true = E_true_draws = None
-            best = np.argsort(-E)[:starts]
+            EX_true = E_true_draws = obj_true_draws = None
+            best = np.argsort(-(E if spec.name == "handover"
+                                else spec.hat_batch(sur, C, X, al, keep)[0]))[:starts]
 
         # Coverage: of the metabolites the labels say could be handed over, how
         # many have a start the *LP* calls interactive. The point of candidate
@@ -1288,12 +1540,16 @@ def run(
                 c_star, extra = verified_ascent(
                     sur, models, c0, X, al, cost=cost, budget=budget,
                     decades=trust_decades, max_it=verify_steps, iters=iters, keep=keep,
-                    ceq=ceq,
+                    ceq=ceq, obj=spec, genome_ids=gids,
                 )
+                # In `handover` mode the design objective *is* E, so the older
+                # key names still mean what every report on disk says they mean.
+                if spec.name == "handover":
+                    extra["E_true"] = extra["obj_true"]
             else:
                 c_star, path = maximise(
                     sur, c0, X, al, cost=cost, budget=budget, c_lo=lo, c_hi=hi,
-                    iters=iters, keep=keep,
+                    iters=iters, keep=keep, obj=spec,
                 )
                 extra = {"iterations": len(path) - 1}
             E_star, _ = objective(sur, c_star, X, al, keep)
@@ -1303,6 +1559,10 @@ def run(
                     "target": None if targets is None else targets[int(s)],
                     "E_start": float(E[s]),
                     "E_hat": E_star,
+                    "obj_hat": (
+                        E_star if spec.name == "handover"
+                        else float(spec.hat(sur, c_star, X, al, keep)[0])
+                    ),
                     "changed": distinguishing(c_star, c0, sur.exchanges),
                     **extra,
                 }
@@ -1312,7 +1572,7 @@ def run(
         # Rank on the truth where we have it. Ranking multistarts by `E_hat` is
         # ranking them by how optimistic the head is at each -- the exact quantity
         # the search is exploiting.
-        key = "E_true" if verify_steps else "E_hat"
+        key = "obj_true" if verify_steps else "obj_hat"
         top = int(np.argmax([d[key] for d in designs]))
         c_best = saved[-len(designs) + top][3]
         c_draw = C[int(best[0])]
@@ -1335,6 +1595,11 @@ def run(
             # Whether the head can rank media for this objective at all. If this
             # is ~0 the survey's *ordering* is not usable and only its structure is.
             "draw_rank_spearman": rank_rho,
+            # The same question for the objective actually being designed:
+            # can the head order media for it? Equal to `draw_rank_spearman`
+            # in `handover` mode.
+            "objective": spec.name,
+            "obj_rank_spearman": obj_rho,
             "E_true_draws_max": (
                 float(E_true_draws.max()) if E_true_draws is not None else None
             ),
@@ -1357,12 +1622,12 @@ def run(
             # The interference observable: `E` cannot go negative, so suppression
             # is invisible to it. 2G FBAs at the designed medium.
             cell["interference"] = interference(
-                models, sur.exchanges, c_best, zt_best, X, gids, ceq=ceq
+                models, sur.exchanges, c_best, zt_best, X, gids, ceq=ceq, keep=keep
             )
             # ...and the directional form: which member's waste suppresses which,
             # with the donor's depletion controlled for. `None` on a large cell.
             cell["spent_medium"] = spent_medium_assay(
-                models, sur.exchanges, c_best, zt_best, X, gids, ceq=ceq
+                models, sur.exchanges, c_best, zt_best, X, gids, ceq=ceq, keep=keep
             )
             e_draw, e_best = exchange(zt_draw, X, keep), exchange(zt_best, X, keep)
             hat_draw = exchange(member_z(sur, c_draw, al), X, keep)
@@ -1413,6 +1678,24 @@ def run(
                         else None
                     ),
                     "start_is_zero": bool(e_draw.sum() <= 0),
+                    # V5 in the designed objective's own terms. Equal to the
+                    # E_* pair above in `handover` mode; in `interference` mode
+                    # the E_* keys are still the handover rate at the same
+                    # medium, which is the structural half of the report.
+                    "obj_true_best_draw": float(
+                        spec.truth(models, sur.exchanges, c_draw, zt_draw, X, gids, keep, ceq)
+                    ),
+                    # Not reused from `cell["interference"]` above, even though
+                    # that is the same 2G FBAs at the same medium: naming the key
+                    # here duplicated `Objective.truth`'s choice of it, and the
+                    # duplicate went stale the moment a second interference
+                    # objective existed -- V5 was then stated on the *relative*
+                    # rate while the search maximised the absolute loss. The
+                    # saving was 2G mu-only FBAs; the cost was the one number the
+                    # gate is read from.
+                    "obj_true_designed": float(
+                        spec.truth(models, sur.exchanges, c_best, zt_best, X, gids, keep, ceq)
+                    ),
                     # `None` rather than a number when the LP finds no interaction
                     # at all: a ratio against a 1e-30 floor reads 2e33 and is not a
                     # magnitude error, it is a divide by zero. That case happened.
@@ -1438,9 +1721,13 @@ def run(
         # inhibited one are never confused in a directory of reports.
         "inhibition": None if ceq_spec is None else str(inhibition),
         "n_inhibited_exchanges": 0 if ceq is None else len(ceq),
+        "objective": spec.name,
     }
     if verify:
+        for c in cells:
+            c["obj_gain"] = c["obj_true_designed"] - c["obj_true_best_draw"]
         gain = np.array([c["true_gain"] for c in cells])
+        obj_gain = np.array([c["obj_gain"] for c in cells])
         # `n_created` is the outcome `true_gain_rel` cannot express: a medium that
         # turns an interaction on where there was none.
         n_created = int(sum(c["start_is_zero"] and not c["true_is_zero"] for c in cells))
@@ -1462,12 +1749,15 @@ def run(
                 "median_recall": med("recall"),
                 "median_rate_spearman": med("rate_spearman"),
                 "median_draw_rank_spearman": med("draw_rank_spearman"),
+                "median_obj_rank_spearman": med("obj_rank_spearman"),
+                "n_obj_improved": int((obj_gain > 0).sum()),
                 "n_cells_with_inhibition_only_links": int(
                     sum(bool(c.get("inhibition_only_links")) for c in cells)
                 ),
                 # V5, in this use case's terms: the designed medium must not be
-                # *worse* than the draw it started from under the true LP.
-                "passed": bool((gain >= 0).all()),
+                # *worse* than the draw it started from under the true LP --
+                # measured on the objective that was actually designed.
+                "passed": bool((obj_gain >= 0).all()),
             }
         )
     np.savez_compressed(

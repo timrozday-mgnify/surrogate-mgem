@@ -179,6 +179,30 @@ class Surrogate:
             out = m if out is None else np.minimum(out, m)
         return out
 
+    def _mu_batch_x(self, xj) -> np.ndarray:
+        """Head A over the ensemble at pre-transformed ``x``: ``(G, B)``."""
+        mu = None
+        for mod, heads, scale, cal in self._ens:
+            raw = np.asarray(mod.batched_value(heads, xj))  # (G, B)
+            m = calibrate.apply(raw, self.value_cal if cal is None else cal)
+            m = m * np.asarray(scale).reshape(-1, 1)
+            mu = m if mu is None else np.minimum(mu, m)
+        return np.maximum(mu, 0.0)  # P2: an infeasible medium has mu_max = 0.
+
+    def mu_batch(self, C: np.ndarray) -> np.ndarray:
+        """Head A only at ``B`` media: ``(G, B)``.
+
+        :meth:`mu_and_z_batch` also runs Head B and its per-state active-set
+        projection, which is a Python loop over the batch -- so a caller that
+        only wants growth rates (§13.5's interference objective evaluates
+        ``G+1`` media per design medium) pays for the expensive half it does not
+        use. Same transform, same ensemble min, same P2 clamp.
+        """
+        C = np.asarray(C, dtype=np.float64)
+        u = self.lam[:, None, None] * (C / (self.km + C))[None]  # (G, B, M)
+        x = (u / (u + self.x_scale[:, None, :])).astype(np.float32)
+        return self._mu_batch_x(self._jnp.asarray(x))
+
     def mu_and_z_batch(self, C: np.ndarray, alpha: np.ndarray):
         """``(mu, z)`` at ``B`` media at once: ``C`` is ``(B, M)``, out ``(G,B)``/``(G,B,M)``.
 
@@ -196,14 +220,7 @@ class Surrogate:
         x = (u / (u + self.x_scale[:, None, :])).astype(np.float32)  # (G,B,M)
         xj = jnp.asarray(x)
         a = jnp.asarray(np.broadcast_to(np.asarray(alpha)[:, None], (G, B)), dtype=jnp.float32)
-
-        mu = None
-        for mod, heads, scale, cal in self._ens:
-            raw = np.asarray(mod.batched_value(heads, xj))  # (G, B)
-            m = calibrate.apply(raw, self.value_cal if cal is None else cal)
-            m = m * np.asarray(scale).reshape(-1, 1)
-            mu = m if mu is None else np.minimum(mu, m)
-        mu = np.maximum(mu, 0.0)  # P2: an infeasible medium has mu_max = 0.
+        mu = self._mu_batch_x(xj)
 
         zmu = (
             None

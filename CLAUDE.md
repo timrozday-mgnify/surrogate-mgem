@@ -3556,6 +3556,112 @@ FBA gives zero or **positive** on 6 of 10 members (facilitation, up to +2e4);
 **not redundant with `E`**: cell 4's inhibited design has the higher `E_true`
 (702.6 vs 371.1) *and* the more negative interference (-4572 vs -601/h).
 
+**Maximising *negative* interaction: `--objective interference` — built 2026-09-08,
+not yet run.** `E = min(secretion, uptake) >= 0` cannot express suppression, so
+this is a second objective, not a sign on the first: ascend
+`-sum_i (mu_i(joint) - mu_i(alone_i)) / (mu_i(alone_i) dt)`, the growth-rate cost
+the partners impose at the same medium, with self-depletion in both arms and
+therefore cancelling. Under plain FBA it designs **pure resource competition** —
+the conditioning term is `>= 0` on 10/10 ordered pairs, i.e. FBA has no chemical
+interference at all — and under `--inhibition` it designs **product inhibition**;
+`spent_medium_assay`'s depletion/conditioning split at the designed medium says
+which. Everything else is shared: the survey, the candidate enumeration, the
+buffering, the trust region and every `E_*` report key are untouched, and only the
+ascent, the LP screen's *ranking* of seeds and `verified_ascent`'s acceptance test
+switch — so a `--objective handover` run reproduces the old numbers exactly. The
+objective's own numbers are the `obj_*` keys, and V5/`passed` is stated on
+`obj_gain`. P29 applies harder here than for `E`: the objective is a difference of
+two Head A evaluations at *drawn-down* media, which is where the `z` the step is
+built from is least accurate, so keep the LP screen on and read
+`obj_rank_spearman`. Cost is `G+1` Head-A evaluations per medium and no Head B
+beyond that one `z` — hence `Surrogate.mu_batch`, split out of `mu_and_z_batch`
+because that method's per-state active-set projection is a Python loop over the
+batch. **Latent bug it found: `interference_media` was draining the buffered
+species**, which are ordinarily the fastest-draining entries in `dc` and therefore
+**set `dt`** — so every `*_per_h` reported before this was scaled by a species the
+vessel holds constant. `keep` now reaches it.
+
+**...and the objective is refuted as parametrised — 10 runs, 2026-09-08.** The
+five 2-member cells x {FBA, `c^eq` 0.1 mM}, matched to `inhibition_sweep.sh`
+(`interference_sweep.sh`, `interference_report.py`, ~4 min/run). **All ten land on
+`I = 2.105e6`, and there is a closed form for it.** `delta_rel` is exactly
+**-1/19** for both members of every cell, at growth rates from 0.607 to 14.44 /h:
+deep in the linear Monod regime `|z| = Vmax c/Km`, so the depletion time `c/|dc|`
+**cancels `c`** and becomes `Km/(G Vmax)`, giving `I -> (4/19) Vmax/Km` =
+2.105e6 at `Vmax` 1000 and the ion class's `Km` 1e-3. The whole `obj_gain`
+(<= 0.2%) is the last approach to that ceiling.
+
+1. **Not the `/dt` normalisation** — the dt-free analytic form saturates
+   identically (`(dmu/dc)(X_j z_j)/mu = -Vmax/Km`, `c` cancelling). **Relative**
+   suppression is capped at `Vmax/Km` and only starvation is needed to reach it.
+2. **The optimum is degenerate**: the designs starve trace metals (23 of the 26
+   most-starved entries across 30 designs are ions) and destroy the handover
+   (`E_true_designed` = 0.000 on 6 of 10). P21 in a new use case.
+3. **P15, sharpest instance on file**: the ceiling is maximised by the *smallest*
+   `Km`, so *which* metabolite gets starved is decided by `km_defaults.yaml`'s
+   unmeasured class constants (ion 0.001 < aa 0.005 < sugar 0.01 < gas 0.1) —
+   which that file's own header says makes a result unsupported.
+4. **Inhibition does not escape it**: at `c^eq` 0.1 the same ceiling is reached and
+   `spent_medium_assay` reports **conditioning 0, depletion -1e6 on every ordered
+   pair of every cell**. Starvation reaches the cap; inhibition cannot beat a cap.
+5. **`obj_rank_spearman` collapses under inhibition** — 0.59-0.88 under FBA (better
+   than handover's `draw_rank_spearman` on the same media), **0.075-0.437** under
+   `c^eq`, so the LP screen carries the whole search in the arm the mechanism was
+   for.
+6. **V5 passing 5/5 in both arms is the warning, not the result** —
+   `verified_ascent` makes it true by construction, so it is compatible with an
+   objective that measures nothing.
+
+**The fix is not a better normalisation** — it is to drop it.
+`interference_losses` = `X_i (mu_alone_i - mu_joint_i)/dt` keeps the numerator
+only, so the scarce limit goes to `a (G-1) Vmax c/Km -> 0` and **starving everyone
+scores zero**. `--objective interference` is now that; the refuted relative form
+is kept runnable as `--objective interference-rel`, and `interference()` reports
+both scalars so every design is scored on both.
+
+**Re-run, same ten runs, same everything else — it works.** FBA arm, `abs_loss` /
+`obj_gain` / `rank_rho` / `E_true` / hardest cut:
+
+| cell | 0 | 1 | 2 | 3 | 4 |
+| --- | --- | --- | --- | --- | --- |
+| `abs_loss` | 8.35e7 | 1.03e8 | 1.09e8 | 5.56e7 | 7.82e7 |
+| `obj_gain` | 8.5e4 | 1.16e7 | 4.83e6 | 2.28e7 | 3.35e6 |
+| `E_true` | 19.8 | 40.1 | **458.2** | 2.6 | 106.4 |
+| hardest cut | cobalt2 -2.4 | his -2.2 | **pi -0.0** | mg2 -3.7 | **ca2 -0.0** |
+
+against the relative form's 2.105e6 / <=476 / 0-13.3 / -3.0 to -7.2 on all five.
+
+1. **Degeneracy gone on every axis**: values cell-dependent, the search climbs
+   (0.1-41% of the objective against <=0.02%), two cells starve nothing, and the
+   handover **survives** — 458.2 against the handover objective's own 816.1 on
+   that cell, so the design keeps 56% of the achievable cross-feeding.
+2. **The relative rate at those media is 85-100% of its cap**, so it cannot
+   separate media differing 2x in absolute loss. "Near its ceiling" is not
+   evidence of a good design.
+3. **Chemical interference is recovered on 3/10 ordered pairs at `c^eq` 0.1, most
+   negative -4852/h, where the relative form found it on 0/10.** Under FBA both
+   are 0/10, correctly. The absolute form is the only one of the three objectives
+   that produces product inhibition at all.
+4. **Depletion still dominates ~200x** (1e6/h vs 5e3/h), so this is a
+   **competition** designer with inhibition as a minority component. Designing
+   inhibition specifically means maximising the *conditioning term*, not total
+   interference — `spent_medium_assay`'s decomposition inside the objective,
+   `2G(G-1)+G` FBAs per evaluation plus a surrogate analogue. Not built.
+5. **`obj_rank_spearman` still collapses under inhibition** (0.03-0.40 vs
+   0.67-0.88 under FBA) — a property of the head at drawn-down media, not of the
+   objective, so the LP screen carries the search there.
+6. **V5 passes 5/5 in both arms and now means something**, because the values
+   differ per cell; the identical 5/5 under the relative objective was compatible
+   with measuring nothing. **Read a construction-guaranteed gate together with the
+   spread of what it gates.**
+
+**A bug this caught, worth more than the arm.** `obj_true_designed` reused
+`cell["interference"]["total_suppression_per_h"]` to save `2G` FBAs, duplicating
+the key `Objective.truth` already picks. It went stale the moment a second
+interference objective existed: V5 was stated on the *relative* rate while the
+search maximised the absolute loss, and the first cell exited 1. Removed — it
+calls `spec.truth` like the best-draw column. Full write-up: design spec §13.5.
+
 Scripts (`20hm_bands/`): `stage3_binding.py` (no solves), `inhibition_sweep.sh`
 (resume-safe, one invocation per cell), `inhibition_report.py`,
 `inhibition_crosseval.py`, `ceq_*.json`.
