@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from cfs.science.growth import maximise, project
 
@@ -58,3 +59,28 @@ def test_ascent_spends_the_budget_on_the_valuable_metabolite():
     assert path[-1] > path[0]
     assert cost @ c_star <= 3.0 + 1e-6
     assert c_star[0] > c_star[1] > c_star[2]
+
+
+def _toy():
+    """One nutrient, one exchange, biomass = uptake. `mu_true` is the uptake bound."""
+    cobra = pytest.importorskip("cobra")
+    m = cobra.Model("toy")
+    a = cobra.Metabolite("a_e")
+    ex = cobra.Reaction("EX_a_e", lower_bound=-10.0, upper_bound=1000.0)
+    ex.add_metabolites({a: -1.0})  # +ve flux = secretion, -ve = uptake
+    bio = cobra.Reaction("BIOMASS", lower_bound=0.0, upper_bound=1000.0)
+    bio.add_metabolites({a: -1.0})
+    m.add_reactions([ex, bio])
+    m.objective = bio
+    return m
+
+
+def test_mu_lower_is_a_bound_and_uses_the_predicted_uptake():
+    from cfs.science.growth import mu_lower, mu_true
+
+    m, c = _toy(), np.array([1e6])  # replete, so §3.3's bound is the model's own
+    assert mu_true(m, ["EX_a_e"], c) == pytest.approx(10.0, rel=1e-6)
+    # Head B predicting an uptake of 3 restricts the LP to a feasible subset.
+    assert mu_lower(m, ["EX_a_e"], c, np.array([-3.0])) == pytest.approx(3.0, rel=1e-6)
+    # Tighten only: a prediction *beyond* the MM bound cannot loosen it.
+    assert mu_lower(m, ["EX_a_e"], c, np.array([-99.0])) == pytest.approx(10.0, rel=1e-6)

@@ -333,9 +333,42 @@ it matters.** 182 (point, organism) pairs against the true LP:
 **The honest cost, stated up front:** Head B predicts *exchange* fluxes only, so
 turning it into a certified primal bound needs a completion to a full flux vector
 — an LP *feasibility* problem. Cheaper than the FBA optimisation and warm-startable
-(§4C), but not free. Whether the bound is tight enough to be useful is unmeasured;
-the gap can be measured on states already on disk, with the LP, before anything is
-built.
+(§4C), but not free.
+
+**The lower half is built and measured — 2026-09-08 (`cfs.science.growth.mu_lower`,
+`20hm_bands/bracket.py`).** The completion does not have to be solved separately:
+**restrict each exchange's uptake to what Head B predicts and hand the network back
+to the LP**, which completes the vector itself. Tightening a bound can only shrink
+the feasible set, so `mu_lower <= mu_true` **by construction** — validity is not a
+measurement, only tightness is. Same LP size as a plain FBA, no QP, and it reuses
+`apply_mm_bounds`; the bounds are tightened with `max`/`min` so a prediction beyond
+§3.3's Michaelis-Menten bound cannot loosen anything.
+
+98 (state, organism) points, `value_p4r2` + `behaviour_p4r2`:
+
+| point set | n | `lo` valid | median width | median lower half | median upper half | p90 width | `lo = 0` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| held-out design media | 72 | 1.000 | **0.069** | 0.069 | 0.00044 | 0.50 | 0.04 |
+| §4.3 community-regime draws | 26 | 1.000 | **0.0078** | 0.0077 | 4.0e-06 | 1.00 | 0.00 |
+
+1. **The bracket is tight where it is used: 0.8% wide at community-regime media**
+   and 6.9% on the design's own held-out set, which is the certified error bar P20
+   has been blocked on — a bound, not a fitted residual distribution, and no chain
+   is needed to justify it.
+2. **It is Head B's bracket.** The upper half contributes 4e-06 to 4e-04 of the
+   width; essentially all of it is the lower bound's slack, i.e. how much growth
+   the network could still make from an uptake Head B under-predicted. So the
+   width is an instrument for Head B, which is where every remaining §8.6g
+   residual sits.
+3. **It is tight typically and uninformative on a tail** — p90 width 0.50-1.00,
+   with `mu_lower = 0` on 3-4% of design points (Head B predicts no uptake of
+   something essential). An error bar that goes wide exactly where the surrogate
+   is least trustworthy is the desired behaviour, not a defect, but it means the
+   *width* is the trigger, never the midpoint.
+4. **Capping secretion at the predicted rate as well is worse, as predicted, and
+   the ablation is cheap** (`--secretion`): median width 6.9% -> 7.9% and
+   0.78% -> 1.4%, with `mu_lower = 0` on **12%** of community points against 0%.
+   The network needs secretions Head B under-predicts. Uptake-only is the default.
 
 ---
 

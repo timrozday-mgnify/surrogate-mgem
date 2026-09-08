@@ -207,6 +207,53 @@ def mu_true(model, exchanges: list[str], c: np.ndarray) -> float:
     return 0.0 if v is None or not np.isfinite(v) else float(v)
 
 
+def mu_lower(
+    model,
+    exchanges: list[str],
+    c: np.ndarray,
+    z_hat: np.ndarray,
+    *,
+    secretion: bool = False,
+) -> float:
+    """A **certified lower bound** on ``mu_max(c)`` from Head B's exchange fluxes.
+
+    §13.2c measured the repaired Head A to be a valid *upper* bound off
+    distribution; this is the other half of P20's error model. Tightening a
+    bound can only shrink the LP's feasible set, so restricting each exchange's
+    uptake to what Head B predicts gives an optimum that is ``<= mu_true(c)`` by
+    construction -- no measurement establishes validity, only tightness.
+
+    It is the cheap form of "complete Head B to a feasible flux vector": rather
+    than solving a feasibility problem for the internal fluxes and reading off
+    the biomass, hand the restricted network to the LP and let it complete the
+    vector itself. Same LP size as :func:`mu_true`, and the two together give a
+    certified bracket ``[mu_lower, mu_hat]`` at any state, with no fitted
+    residual distribution anywhere.
+
+    ``secretion`` also caps each exchange's *secretion* at the predicted rate.
+    That is a tighter restriction and therefore a weaker (lower) bound whenever
+    Head B under-predicts a secretion the network needs, which is the common
+    case -- off by default.
+    """
+    from cfs.groundtruth.solve import apply_mm_bounds, load_km_defaults
+
+    z_hat = np.asarray(z_hat, dtype=np.float64)
+    with model:
+        apply_mm_bounds(model, dict(zip(exchanges, c.tolist(), strict=True)), load_km_defaults())
+        for ex_id, zi in zip(exchanges, z_hat.tolist(), strict=True):
+            if ex_id not in model.reactions:
+                continue
+            rxn = model.reactions.get_by_id(ex_id)
+            # Tighten only: `max`/`min` keep the restricted set inside the
+            # original one even where Head B predicts more uptake than §3.3's
+            # Michaelis-Menten bound allows, which it does off-distribution.
+            rxn.lower_bound = max(rxn.lower_bound, min(0.0, zi))
+            if secretion:
+                rxn.upper_bound = min(rxn.upper_bound, max(0.0, zi))
+        v = model.slim_optimize()
+    return 0.0 if v is None or not np.isfinite(v) else float(v)
+
+
 def lp_value_and_grad(model, exchanges: list[str], c: np.ndarray, km_cfg=None):
     """``(mu_max, d mu_max/dc)`` from **one** FBA — the LP is a first-order oracle.
 
