@@ -426,38 +426,56 @@ def candidate_links(
     col = {e: i for i, e in enumerate(exchanges)}
     S, U, best = {}, {}, {}
     for g in gids:
-        loc = json.loads((Path(labels_dir) / f"{g}.exchanges.json").read_text())
-        loc = loc["exchanges"] if isinstance(loc, dict) else loc
-        idx = np.array([col[e] for e in loc if e in col])
-        s = np.zeros(len(exchanges), bool)
-        u = np.zeros(len(exchanges), bool)
-        # Per metabolite: the largest secretion seen, the medium it happened at,
-        # and the envelope of every medium where it was secreted at all.
-        top = np.zeros(len(exchanges))
-        med = np.zeros((len(exchanges), len(exchanges)))
-        lo = np.full((len(exchanges), len(exchanges)), np.inf)
-        hi = np.full((len(exchanges), len(exchanges)), -np.inf)
+        idx = _local_index(labels_dir, g, col)
+        acc = _new_stats(len(exchanges))
         for f in sorted((Path(labels_dir) / g / f"eps_{eps}").glob("part*.parquet")):
             tab = pq.read_table(f, columns=["z", "medium"]).slice(0, rows)
-            Z = np.stack(tab.column("z").to_numpy(zero_copy_only=False))
-            M = np.stack(tab.column("medium").to_numpy(zero_copy_only=False))
-            # Same threshold discipline as `data._DUAL_TOL`: half the "non-zero"
-            # entries in these shards are solver dust.
-            t = _LINK_TOL * float(np.abs(Z).max())
-            s[idx] |= (Z > t).any(0)
-            u[idx] |= (Z < -t).any(0)
-            r = Z.argmax(0)
-            v = Z[r, np.arange(Z.shape[1])]
-            better = v > top[idx]
-            top[idx[better]] = v[better]
-            med[np.ix_(idx[better], idx)] = M[r[better]]
-            for a, j in enumerate(idx):
-                sel = Z[:, a] > t
-                if sel.any():
-                    lo[np.ix_([j], idx)] = np.minimum(lo[j, idx], M[sel].min(0))
-                    hi[np.ix_([j], idx)] = np.maximum(hi[j, idx], M[sel].max(0))
-        S[g], U[g], best[g] = s, u, (top, med, lo, hi)
+            _link_stats(
+                acc,
+                idx,
+                np.stack(tab.column("z").to_numpy(zero_copy_only=False)),
+                np.stack(tab.column("medium").to_numpy(zero_copy_only=False)),
+            )
+        S[g], U[g], best[g] = acc[0], acc[1], acc[2:]
+    return _pair_links(gids, exchanges, S, U, best)
 
+
+def _local_index(labels_dir, g: str, col: dict[str, int]) -> np.ndarray:
+    """The organism's own exchange order, mapped to the global index."""
+    loc = json.loads((Path(labels_dir) / f"{g}.exchanges.json").read_text())
+    loc = loc["exchanges"] if isinstance(loc, dict) else loc
+    return np.array([col[e] for e in loc if e in col])
+
+
+def _new_stats(n: int) -> list:
+    """``[secreted, taken_up, top, medium_at_top, box_lo, box_hi]``, all global."""
+    return [
+        np.zeros(n, bool), np.zeros(n, bool), np.zeros(n),
+        np.zeros((n, n)), np.full((n, n), np.inf), np.full((n, n), -np.inf),
+    ]
+
+
+def _link_stats(acc: list, idx: np.ndarray, Z: np.ndarray, M: np.ndarray) -> None:
+    """Fold one ``(Z, M)`` block of solved media into ``acc``, in place."""
+    s, u, top, med, lo, hi = acc
+    # Same threshold discipline as `data._DUAL_TOL`: half the "non-zero" entries
+    # in these shards are solver dust.
+    t = _LINK_TOL * float(np.abs(Z).max()) if Z.size else 0.0
+    s[idx] |= (Z > t).any(0)
+    u[idx] |= (Z < -t).any(0)
+    r = Z.argmax(0)
+    v = Z[r, np.arange(Z.shape[1])]
+    better = v > top[idx]
+    top[idx[better]] = v[better]
+    med[np.ix_(idx[better], idx)] = M[r[better]]
+    for a, j in enumerate(idx):
+        sel = Z[:, a] > t
+        if sel.any():
+            lo[np.ix_([j], idx)] = np.minimum(lo[j, idx], M[sel].min(0))
+            hi[np.ix_([j], idx)] = np.maximum(hi[j, idx], M[sel].max(0))
+
+
+def _pair_links(gids, exchanges, S, U, best):
     links: dict[str, dict] = {}
     donor_media: dict[str, np.ndarray] = {}
     donor_box: dict[str, tuple[np.ndarray, np.ndarray]] = {}
@@ -475,6 +493,65 @@ def candidate_links(
                 donor_media[ex] = best[a][1][m]
                 donor_box[ex] = (best[a][2][m], best[a][3][m])
     return links, donor_media, donor_box
+
+
+def inhibited_links(
+    models: list,
+    labels_dir,
+    gids: list[str],
+    exchanges: list[str],
+    ceq: dict[str, float],
+    *,
+    n_media: int = 300,
+    eps_str: str = "0.001",
+    eps: float = 1e-3,
+    seed: int = 0,
+) -> tuple[dict, dict, dict]:
+    """:func:`candidate_links`, re-enumerated under the **inhibited** LP.
+
+    §13.11's option (i). The label shards are plain FBA, so an enumeration over
+    them is over-inclusive under inhibition (secretions the bound forbids) and
+    **under-inclusive**: stage 3' found five designs whose ``E_true`` is 0.000
+    under FBA and up to 1326 under it, and no FBA enumeration can propose those.
+    This re-solves a subsample of the *same* labelled media with ``ceq`` on and
+    folds the result through the identical aggregation, so the donor's medium and
+    its box come from the inhibited model too -- which is what
+    ``--extra-candidates`` (option ii) cannot supply.
+
+    Costs ``n_media`` solves per member -- FBA plus the elastic-net QP, since it
+    is ``z`` that is wanted. No relabel: the heads and ``x_scale`` do not move.
+    """
+    import pyarrow.parquet as pq
+
+    from cfs.groundtruth.solve import load_km_defaults, solve
+
+    km_cfg = load_km_defaults()
+    col = {e: i for i, e in enumerate(exchanges)}
+    S, U, best = {}, {}, {}
+    for model, g in zip(models, gids, strict=True):
+        loc = json.loads((Path(labels_dir) / f"{g}.exchanges.json").read_text())
+        loc = loc["exchanges"] if isinstance(loc, dict) else loc
+        idx = _local_index(labels_dir, g, col)
+        parts = sorted((Path(labels_dir) / g / f"eps_{eps_str}").glob("part*.parquet"))
+        M = np.concatenate([
+            np.stack(pq.read_table(f, columns=["medium"])
+                     .column("medium").to_numpy(zero_copy_only=False))
+            for f in parts
+        ])
+        take = np.random.default_rng(seed).permutation(len(M))[:n_media]
+        M = M[take]
+        Z = np.zeros((len(M), len(idx)))
+        for r, m in enumerate(M):
+            sol = solve(model, dict(zip(loc, m.tolist(), strict=False)), 1.0, eps, km_cfg, ceq)
+            if sol.status != "optimal":
+                continue  # P2: no growth, no fluxes -- and no link either
+            for ex, v in sol.z.items():
+                if ex in loc:
+                    Z[r, loc.index(ex)] = v
+        acc = _new_stats(len(exchanges))
+        _link_stats(acc, idx, Z, M)
+        S[g], U[g], best[g] = acc[0], acc[1], acc[2:]
+    return _pair_links(gids, exchanges, S, U, best)
 
 
 # A candidate is dropped when neither half of the handover can reach this
@@ -998,6 +1075,7 @@ def run(
     box: int = 3,
     inhibition: Path | None = None,
     extra_candidates: int = 0,
+    inhibited_media: int = 0,
 ) -> dict:
     """Survey the interactions a community can reach, then design media for them.
 
@@ -1054,6 +1132,28 @@ def run(
         # comparable -- "which reachable handovers did this seeding actually
         # realise" is the question, and a random draw has to be scored on it too.
         links, donor_media, donor_box = candidate_links(labels_dir, gids, sur.exchanges)
+        if ceq and inhibited_media and verify:
+            # §13.11(i): re-enumerate under the inhibited LP, so the candidate
+            # set and the donor's own recipe come from the model the acceptance
+            # test uses. **Unioned, not substituted** -- §13.5's measured rule,
+            # and measured again here: substituting raises the realised handover
+            # count 5 -> 8 and *drops* the designed rate 641 -> 605 (200 media)
+            # and 383 (800), because the inhibited pass re-picks `best_donor`
+            # from a secretion ranking the bound has compressed. The union keeps
+            # the FBA recipe where there is one and adds the links only the
+            # inhibited model has.
+            ilinks, imedia, ibox = inhibited_links(
+                models, labels_dir, gids, sur.exchanges, ceq,
+                n_media=inhibited_media, seed=seed + n,
+            )
+            fresh = [m for m in ilinks if m not in links]
+            links = {**links, **{m: ilinks[m] for m in fresh}}
+            donor_media |= {m: imedia[m] for m in fresh if m in imedia}
+            donor_box |= {m: ibox[m] for m in fresh if m in ibox}
+            LOGGER.info(
+                "community %d: %d FBA candidates + %d inhibition-only = %d",
+                n, len(links) - len(fresh), len(fresh), len(links),
+            )
         C = np.array(
             [buffer_medium(
                 sur,

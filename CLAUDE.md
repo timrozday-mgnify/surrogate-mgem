@@ -3457,8 +3457,31 @@ First measurement (AAXE02+ABCC02, `c^eq` 0.1 mM, 8 draws, 16 extras, V5 passes):
 `EX_val__L_e`, **both outside the label-derived candidate set** — but on this cell
 its links are a *subset* of the other variants' union, so capability seeding is
 supported in principle and not yet shown to reach anything exclusively. Default 0.
-**Still open**: the box region is still the envelope where the donor secreted
-*under FBA*, so the extras get an analytic level but no donor background.
+**`--inhibited-links N` (new)** is option (i), and it is the one that works:
+re-solve `N` of the same labelled media per member with `ceq` on and fold them
+through the identical aggregation, so the candidate set, the donor's medium and
+its box all come from the inhibited model. No relabel, `x_scale` unmoved, ~2 min
+per 2-member cell at `N` = 200. Same cell/seed/draws, `c^eq` 0.1 mM, V5 passes
+throughout:
+
+| arm | `E_true` designed | candidates | handovers realised |
+| --- | --- | --- | --- |
+| control — FBA labels | **641.1** | 11 | 5 |
+| substituting, 200 / 800 media | 605.4 / **382.7** | 14 / 15 | 8 / 8 |
+| **union, 200 media (shipped)** | **641.1** | 17 | **9** |
+
+(a) The FBA enumeration is wrong in **both** directions: the inhibited pass drops
+`chol`/`lcts`/`mal__L` and adds `glc__D`/`glu__L`/`gua`/`lys__L`/`nh4`/`val__L`,
+three of which are realised under the true inhibited LP — handovers FBA labels
+cannot propose. (b) **Substituting costs the rate and more media makes it worse**
+(641 -> 605 -> 383, realised flat at 8), so it is not sample size: `best_donor` is
+picked by largest secretion seen and inhibition *caps* secretion at
+`Vmax(1-c/c^eq)`, so media pile up near the cap and "secreted hardest" stops
+discriminating. (c) **The union dominates** — the control's rate and nearly twice
+its handovers. "Append, never substitute", measured a second time. (d) It
+**subsumes (ii)** here: `--extra-candidates 16` left the rate at 641.1 with 5
+links, capability seeding supplying a level but no donor background. Both default
+0 on one cell of evidence.
 
 **How the standing product level should be set — (b) and (c) are recorded, not
 built** (design spec §13.11, "How the product concentration is set"). (b) close

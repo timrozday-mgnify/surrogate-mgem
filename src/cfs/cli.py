@@ -617,6 +617,14 @@ def build_parser() -> argparse.ArgumentParser:
         "and stage 3' found five designs whose E_true is 0.000 under FBA.",
     )
     ix.add_argument(
+        "--inhibited-links", type=int, default=0,
+        help="With --inhibition: re-enumerate the candidate handovers by re-solving "
+        "this many labelled media per member under the inhibited LP (§13.11 option "
+        "i), instead of reading them off the plain-FBA label shards. Unlike "
+        "--extra-candidates this also gives the donor's medium and its box under "
+        "the inhibited model. Costs N solves per member; no relabel.",
+    )
+    ix.add_argument(
         "--box", type=int, default=3,
         help="With --seed-mode candidate: extra starts per candidate drawn inside "
         "the envelope of every labelled medium where the donor secreted that "
@@ -1174,6 +1182,7 @@ def main(argv: list[str] | None = None) -> int:
             box=args.box,
             inhibition=args.inhibition,
             extra_candidates=args.extra_candidates,
+            inhibited_media=args.inhibited_links,
         )
         print(json.dumps({k: v for k, v in report.items() if k != "cells"}, indent=2))
         return 0 if report.get("passed", True) else 1

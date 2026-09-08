@@ -6362,10 +6362,43 @@ interaction-competent region is a different set. The box's measured 1.1-1704x
 payoff has no inhibited counterpart, and the analytic seed replaces only the
 target metabolite's level, not the donor's background. The third option remains:
 
-**(i) re-enumerate from an inhibited label pass** at each swept `c^eq` — no head
-relabel, only a second solve over existing media, but one pass per arm, and it is
-the only option that would give the extras a *donor background* as well as a
-level.
+**(i) is built and measured: `--inhibited-links N`.** Re-solve `N` of the
+*same* labelled media per member with `ceq` on and fold them through the identical
+aggregation, so the candidate set, the donor's medium and its box all come from
+the model the acceptance test uses. No head relabel and no new labels — `x_scale`
+does not move. `N` solves per member (FBA + the elastic-net QP, since it is `z`
+that is wanted): ~2 min for a 2-member cell at `N` = 200.
+
+Same cell, same seed, same draws, `c^eq` = 0.1 mM, V5 passes in every arm:
+
+| arm | `E_true` designed | candidates | **handovers realised** |
+| --- | --- | --- | --- |
+| control — FBA labels (~3000 rows) | **641.1** | 11 | 5 |
+| (i) substituting, 200 media | 605.4 | 14 | 8 |
+| (i) substituting, 800 media | 382.7 | 15 | 8 |
+| **(i) union, 200 media** | **641.1** | 17 | **9** |
+
+1. **The enumeration is wrong under FBA in both directions, as predicted.** The
+   inhibited pass drops `chol`, `lcts`, `mal__L` (secretions the bound forbids)
+   and adds `glc__D`, `glu__L`, `gua`, `lys__L`, `nh4`, `val__L`. Three of the
+   additions are realised under the true inhibited LP, so they are handovers the
+   FBA enumeration **cannot** propose — the gap stage 3' identified, closed.
+2. **Substituting costs the rate, and more media makes it worse** — 641 -> 605 at
+   200 media and **383** at 800, with the realised count flat at 8. Sample size is
+   therefore not the cause: the mechanism is that `best_donor`/`donor_media` are
+   picked by *largest secretion seen*, and inhibition **caps** secretion at
+   `Vmax(1 - c/c^eq)`, so media pile up near the cap and "the medium where it
+   secreted hardest" stops discriminating. More media means more near-ties, so a
+   more arbitrary recipe.
+3. **The union dominates**: the control's rate *and* nearly twice its handovers
+   (9 against 5), for 200 solves per member. §13.5's own "append, never
+   substitute" rule, measured a second time and for a different reason — here the
+   FBA recipe is worth keeping even where the FBA *enumeration* is wrong. That is
+   what ships; default 0 on one cell of evidence.
+4. **It subsumes (ii) on this cell** — `--extra-candidates 16` left the designed
+   rate unchanged at 641.1 with 5 realised links, because capability seeding
+   supplies a level but no donor background. (i) is the more expensive and the
+   more effective of the two.
 
 #### (a) The directional spent-medium assay — built and measured, 2026-09-08
 
