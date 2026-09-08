@@ -3517,6 +3517,26 @@ its handovers. "Append, never substitute", measured a second time. (d) It
 links, capability seeding supplying a level but no donor background. Both default
 0 on one cell of evidence.
 
+**The re-run is partial, and it retracts the caveat it was for.** Cell 0
+completed 5 of 6 arms before cancellation. The **FBA control reproduces 483.5
+exactly** (same candidates, same realised links), so `target_level` and
+`--inhibited-links` are inert without `ceq` as designed. But the fix moves the
+inhibited rate **-21% to +9% with no systematic direction** (0.01: 202->160,
+0.1: 164->168, 1.0: 333->362, 10: 284->228), so **"every inhibited number is a
+lower bound under broken seeding" is RETRACTED** — the appended random draws and
+the ascent compensated, and the spread is inside the stochastic-search noise this
+section already records. Stage 3's conclusions stand; the other 24 runs were
+cancelled on that basis.
+
+**What the re-run did pay for is the fixed-medium observable**: at `c^eq` 0.1 and
+1.0 the designed medium yields **3.6x and 4.4x more interaction under inhibition
+than the same medium under plain FBA** (168.2 vs 46.96; 362.3 vs 82.14), with
+`EX_nh4_e` and `EX_no2_e` handed over **only** because of inhibition and
+`EX_udcpp_e` suppressed by it — "the two models disagree about which medium to
+run", as named metabolites rather than an inference across per-arm optima. The
+inhibited enumeration is community-dependent (11 -> 11/12 candidates here against
+13 -> 19 on AAXE02+ABCC02).
+
 **How the standing product level should be set — (b) and (c) are recorded, not
 built** (design spec §13.11, "How the product concentration is set"). (b) close
 the chemostat on itself: at a §13.4 steady state `c_p = sum_i X_i z_ip / D`

@@ -6461,6 +6461,45 @@ Same cell, same seed, same draws, `c^eq` = 0.1 mM, V5 passes in every arm:
    supplies a level but no donor background. (i) is the more expensive and the
    more effective of the two.
 
+#### The re-run, partial: the seeding fix does not move the conclusions — 2026-09-08
+
+The sweep was re-run with `target_level`'s analytic balance point and
+`--inhibited-links 200` (`inhibition_sweep2.sh`) and **cancelled after cell 0**,
+which completed 5 of its 6 arms — enough to answer the question it existed for.
+Same cell, same seed, same draws as the original sweep:
+
+| `c^eq` | old `E_true` | new `E_true` | inhibition-only links | **same medium under FBA** |
+| --- | --- | --- | --- | --- |
+| FBA | 483.5 | **483.5** | — | — |
+| 0.01 | 202.2 | 160.2 | none | 160.2 |
+| 0.1 | 163.6 | 168.2 | `EX_nh4_e` | **46.96** |
+| 1.0 | 332.7 | 362.3 | `EX_no2_e` | **82.14** |
+| 10.0 | 284.4 | 228.2 | none | 206.1 |
+
+1. **The control passes exactly.** The FBA arm reproduces 483.5 with the same 11
+   candidates and 7 realised links, so `target_level` and `--inhibited-links` are
+   inert without `ceq` — as designed — and nothing else moved between the two
+   sweeps. Any difference below is the seeding.
+2. **RETRACTED: "every inhibited number is a lower bound under broken seeding".**
+   The fix moves the rate by **-21% to +9% with no systematic direction**. The
+   self-defeating seeds were real — the donor's secretion of the targeted
+   metabolite *was* pinned at zero — but the appended random draws and the ascent
+   compensated, and the spread sits inside the noise band this section already
+   records ("the search path is stochastic and `E_true` is non-monotone in `c^eq`
+   on every cell"). **Stage 3's conclusions stand as written**, and the remaining
+   24 runs were cancelled on that basis rather than completed. One cell.
+3. **The fixed-medium observable is what the re-run actually paid for.** At
+   `c^eq` = 0.1 and 1.0 the designed medium yields **3.6x and 4.4x more
+   interaction under inhibition than the same medium yields under plain FBA**
+   (168.2 against 46.96; 362.3 against 82.14), with `EX_nh4_e` and `EX_no2_e`
+   handed over **only** because of inhibition and `EX_udcpp_e` suppressed by it.
+   That turns "the two models disagree about which medium to run" from an
+   inference across per-arm optima into named metabolites at one medium — the
+   comparison [[compare-at-a-fixed-medium]] asks for, now inside the tool.
+4. **The inhibited enumeration is community-dependent**: 11 -> 11/12 candidates
+   here against 13 -> 19 on AAXE02+ABCC02, so its value is not a constant and a
+   cell that gains nothing from it costs only the 200 solves per member.
+
 #### (a) The directional spent-medium assay — built and measured, 2026-09-08
 
 `interaction.spent_medium_assay`. :func:`interference` is *simultaneous*, so a
