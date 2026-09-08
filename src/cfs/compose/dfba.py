@@ -65,8 +65,55 @@ class Trajectory:
     dc: np.ndarray  # (T, M) pool derivative used for each step
 
 
+def dx_dc(sur, x: np.ndarray, c: np.ndarray) -> np.ndarray:
+    """``dx/dc`` per head-input coordinate, ``(G, M)`` or ``(G, 2M)``, at medium ``c``.
+
+    The head's input is ``x = v/(v+s)`` with ``dx/dv = (1-x)^2/s`` in **both**
+    blocks (`cfs.surrogate.train._du`); what differs is the inner map:
+
+    * uptake, ``v = lam * c/(Km+c)``  ->  ``dv/dc = lam * Km/(Km+c)^2 > 0``;
+    * inhibition, ``v = max(0, 1 - c/c^eq)``  ->  ``dv/dc = -1/c^eq`` below
+      equilibrium and **0** above it (§13.11 stage 4').
+
+    A free function rather than a method, and read through ``getattr``, because
+    every caller in ``cfs.science`` is duck-typed on a small interface -- the
+    tests stand in objects that are not ``Surrogate`` at all.
+    """
+    c = np.asarray(c, dtype=np.float64)
+    km = np.asarray(sur.km, dtype=np.float64)
+    lam = np.reshape(np.asarray(getattr(sur, "lam", 1.0), dtype=np.float64), (-1, 1))
+    dxdv = (1.0 - np.asarray(x, dtype=np.float64)) ** 2 / np.asarray(sur.x_scale, dtype=np.float64)
+    dudc = lam * (km / (km + c) ** 2)  # (G, M)
+    ceq = getattr(sur, "_ceq_vec", None)
+    if ceq is None:
+        return dxdv * dudc
+    safe = np.where(np.isfinite(ceq), ceq, 1.0)
+    dthdc = np.where(np.isfinite(ceq) & (c < ceq), -1.0 / safe, 0.0)
+    return dxdv * np.concatenate([np.broadcast_to(dudc, dxdv[..., : len(km)].shape),
+                                  np.broadcast_to(dthdc, dxdv[..., len(km):].shape)], axis=-1)
+
+
+def chain_to_c(sur, gx: np.ndarray, x: np.ndarray, c: np.ndarray) -> np.ndarray:
+    """``d/dc`` from a head gradient ``d/dx``: ``(G, M or 2M)`` -> ``(G, M)``.
+
+    Under §13.11's inhibition the head reads the same ``c_m`` through two
+    channels, so the two blocks are *summed*. The secretion term is negative,
+    which is the only route by which ``dmu/dc`` can be negative at all.
+    """
+    out = np.asarray(gx, dtype=np.float64) * dx_dc(sur, x, c)
+    if getattr(sur, "_ceq_vec", None) is None:
+        return out
+    m = len(np.asarray(sur.km))
+    return out[..., :m] + out[..., m:]
+
+
 class Surrogate:
     """Both frozen heads, evaluated together on the shared metabolite index."""
+
+    # §13.11 stage 4': the per-exchange `c^eq` (nan where uninhibited), or None for
+    # a plain-FBA checkpoint. A class default so a duck-typed stub -- the tests
+    # build several, bypassing __init__ -- is plain FBA without declaring it.
+    _ceq_vec = None
 
     def __init__(
         self,
@@ -88,16 +135,26 @@ class Surrogate:
         vheads, vmeta = T.load(vdirs[0])
         # §13.2 needs mu alone, so Head B is optional; `mu_and_z` then refuses.
         bheads, bmeta = (None, {}) if behaviour_dir is None else B.load(Path(behaviour_dir))
-        for k in ("index_hash", "genome_ids", "exchanges"):
+        # §13.11 stage 4': under inhibition Head A's input is [u | theta], so its
+        # `exchanges`/`mask`/`x_scale` are 2M wide while Head B stays M. Every
+        # comparison and every M-shaped derived object uses the metabolite half.
+        n_met = int(vmeta.get("n_metabolites") or len(vmeta["exchanges"]))
+        self.ceq = vmeta.get("ceq")
+        for k in ("index_hash", "genome_ids"):
             if bheads is not None and vmeta[k] != bmeta[k]:
                 raise ValueError(f"the two heads disagree on {k} (P13)")
+        if bheads is not None and list(vmeta["exchanges"])[:n_met] != list(bmeta["exchanges"]):
+            raise ValueError("the two heads disagree on exchanges (P13)")
         # x_scale is read off the labels, so two checkpoints trained on different
         # label roots compose into a silently wrong medium coordinate.
-        if bheads is not None and not np.allclose(vmeta["x_scale"], bmeta["x_scale"]):
+        if bheads is not None and not np.allclose(
+            np.asarray(vmeta["x_scale"])[:, :n_met], bmeta["x_scale"]
+        ):
             raise ValueError("the two heads were trained on different x_scale (P14)")
 
         self.genome_ids = list(vmeta["genome_ids"])
-        self.exchanges = list(vmeta["exchanges"])
+        self.head_exchanges = list(vmeta["exchanges"])  # 2M under inhibition
+        self.exchanges = self.head_exchanges[:n_met]
         self.index_hash = vmeta["index_hash"]
         self.mod = T._ARCH[vmeta.get("arch", {}).get("arch", "icnn")]
         self._B = B
@@ -118,7 +175,8 @@ class Surrogate:
                     None if cal is None else np.asarray(cal, dtype=np.float64),
                 )
             )
-        self.mask = np.array(vmeta["mask"], dtype=bool)
+        self.head_mask = np.array(vmeta["mask"], dtype=bool)  # (G, 2M) under inhibition
+        self.mask = self.head_mask[:, :n_met]  # (G, M): what the organism exchanges
         # §13.10: a per-organism rate scale. The LP sees §3.3's bound only as
         # `Vmax_m * u_m`, so scaling an organism's Vmax is *exactly* scaling its
         # own saturation coordinate -- no relabelling, no retraining. 1.0 is the
@@ -147,6 +205,14 @@ class Surrogate:
             np.load(ref)["x"].astype(np.float32) if ref is not None and ref.exists() else None
         )
         self.km = _km_vector(self.exchanges)
+        # (M,) with nan where the exchange is uninhibited (the buffered species,
+        # and everything if the labels were plain FBA). Built once here for the
+        # same reason `_eb_operators` is: `_head_in` runs inside every Newton step.
+        self._ceq_vec = (
+            None
+            if self.ceq is None
+            else np.array([self.ceq.get(e, np.nan) for e in self.exchanges], dtype=np.float64)
+        )
         self._E = _element_matrix(self.exchanges)  # (4, M), the §8.6g(2) bound
         # Per-organism `(E_k, w_k, Q_k)` for `_element_balance`. Built here, from the
         # same values this constructor just set, rather than lazily on first call:
@@ -161,14 +227,58 @@ class Surrogate:
             else [self.genome_ids.index(g) for g in organisms]
         )
 
+    @property
+    def n_metabolites(self) -> int:
+        """M. Half the *head's* input width under §13.11's inhibition, all of it otherwise."""
+        return len(self.exchanges)
+
     def _u(self, c: np.ndarray) -> np.ndarray:
         """Saturation, per organism: ``lam_i c/(Km+c)``, i.e. §13.10's rate scale."""
         return self.lam[:, None] * (c / (self.km + c))[None, :]  # (G, M)
 
+    def _clamp_z(self, z: np.ndarray, u: np.ndarray, c: np.ndarray) -> np.ndarray:
+        """Project ``z`` onto the LP's own exchange bounds. ``z``/``u`` are ``(G, B, M)``.
+
+        **Uptake**, §3.3, always on: ``z_m >= -Vmax_m * u_m``. The LP that made the
+        labels could not violate it and Head B can -- at the worst M5 community it
+        predicted ``EX_glyc3p_e`` uptake of -329 against a physical floor of -14, on
+        28 of one member's 213 exchanges at once. Vmax is 1000 on every exchange of
+        every roster GEM, so this is a constant, not a fit.
+
+        **Secretion**, §13.11 stage 4', only under inhibition: ``z_m <= Vmax_m *
+        theta_m``. It is the same shape of correction on the side that currently
+        has no bound at all, which is where 48-69% of Head B's error sits. Both are
+        projections onto a convex set the true ``z`` is already inside, so neither
+        can increase the right-hand side's error -- and unlike a uniform shrink
+        (which satisfies the same inequalities and is *not* a projection) the
+        clipped coordinates are the only ones that move.
+        """
+        z = np.maximum(z, -self._B.VMAX * u)
+        if self._ceq_vec is not None:
+            z = np.minimum(z, self._B.VMAX * np.broadcast_to(self._theta(c), z.shape))
+        return z
+
+    def _theta(self, c: np.ndarray) -> np.ndarray:
+        """§13.11's inhibition channel at medium ``c``: ``max(0, 1 - c/c^eq)``, ``(B, M)``."""
+        from cfs.surrogate.data import theta as _t
+
+        return _t(np.atleast_2d(np.asarray(c, dtype=np.float64)), self._ceq_vec)
+
+    def _head_in(self, u: np.ndarray, c: np.ndarray) -> np.ndarray:
+        """Saturation ``(G, B, M)`` + medium ``(B, M)`` -> Head A's input, ``(G, B, M or 2M)``.
+
+        The single place the head's input coordinate is built, so the batch paths
+        and the one-medium path cannot drift apart -- which under inhibition would
+        be a silently half-fed head rather than a shape error, because Head B's
+        input is deliberately the ``u`` half alone.
+        """
+        if self._ceq_vec is not None:
+            u = np.concatenate([u, np.broadcast_to(self._theta(c), u.shape)], axis=-1)
+        return (u / (u + self.x_scale[:, None, :])).astype(np.float32)
+
     def _x(self, c: np.ndarray):
-        """Concentration -> the heads' input, per organism: ``u/(u + x_scale)``."""
-        u = self._u(c)  # (G, M)
-        return (u / (u + self.x_scale))[:, None, :].astype(np.float32)  # (G, 1, M)
+        """Concentration -> Head A's input, per organism: ``u/(u + x_scale)``."""
+        return self._head_in(self._u(c)[:, None, :], np.atleast_2d(c))  # (G, 1, M or 2M)
 
     def _mu(self, x) -> np.ndarray:
         """Calibrated ``mu`` per organism at one medium; min over the seed stack."""
@@ -200,7 +310,7 @@ class Surrogate:
         """
         C = np.asarray(C, dtype=np.float64)
         u = self.lam[:, None, None] * (C / (self.km + C))[None]  # (G, B, M)
-        x = (u / (u + self.x_scale[:, None, :])).astype(np.float32)
+        x = self._head_in(u, C)
         return self._mu_batch_x(self._jnp.asarray(x))
 
     def mu_and_z_batch(self, C: np.ndarray, alpha: np.ndarray):
@@ -217,7 +327,8 @@ class Surrogate:
             raise ValueError("this Surrogate was built without a behaviour checkpoint")
         jnp, G, B = self._jnp, len(self.genome_ids), len(C)
         u = self.lam[:, None, None] * (C / (self.km + C))[None]  # (G, B, M)
-        x = (u / (u + self.x_scale[:, None, :])).astype(np.float32)  # (G,B,M)
+        x = self._head_in(u, C)  # (G, B, M or 2M) -- Head A's input
+        xb = x[:, :, : self.n_metabolites]  # Head B takes the u half alone
         xj = jnp.asarray(x)
         a = jnp.asarray(np.broadcast_to(np.asarray(alpha)[:, None], (G, B)), dtype=jnp.float32)
         mu = self._mu_batch_x(xj)
@@ -228,8 +339,10 @@ class Surrogate:
             else jnp.asarray(np.maximum(mu, np.asarray(self.mu_floor).reshape(-1, 1)),
                              dtype=jnp.float32)
         )
-        z = np.asarray(self._B.flux(self._bheads, xj, a, jnp.asarray(self.z_scale), zmu))
-        z = np.maximum(z, -self._B.VMAX * u) * self.mask[:, None, :]
+        z = np.asarray(
+            self._B.flux(self._bheads, jnp.asarray(xb), a, jnp.asarray(self.z_scale), zmu)
+        )
+        z = self._clamp_z(z, u, C) * self.mask[:, None, :]
         # The projection is a per-state active-set solve, so it stays a loop -- but
         # it is now a small share of the cost rather than 27% of it.
         out = np.empty_like(z)
@@ -251,16 +364,10 @@ class Surrogate:
             if self.mu_floor is None
             else jnp.asarray(np.maximum(mu, self.mu_floor)[:, None], dtype=jnp.float32)
         )
-        z = np.asarray(self._B.flux(self._bheads, x, a, jnp.asarray(self.z_scale), zmu))[:, 0]
-        # §3.3's uptake bound, which the LP that made the labels could not violate
-        # and Head B can: `z_m >= -Vmax_m * u_m`. Vmax is 1000 on every exchange of
-        # every roster GEM (`solve.set_medium_bounds`'s fallback is the same 1000),
-        # so this is a constant, not a fit. It is a projection onto a convex set the
-        # true `z` is already inside, so it cannot increase the error -- and it is
-        # exactly where the composition went wrong: at the worst M5 community the
-        # head predicted `EX_glyc3p_e` uptake of -329 against a physical floor of
-        # -14, on 28 of one member's 213 exchanges at once.
-        z = np.maximum(z, -self._B.VMAX * self._u(c)) * self.mask
+        xb = x[:, :, : self.n_metabolites]  # Head B takes the u half alone
+        z = np.asarray(self._B.flux(self._bheads, xb, a, jnp.asarray(self.z_scale), zmu))[:, 0]
+        z = self._clamp_z(z[:, None, :], self._u(c)[:, None, :], np.atleast_2d(c))[:, 0]
+        z = z * self.mask
         return mu, self._element_balance(z)
 
     def reach(self, c: np.ndarray) -> np.ndarray | None:
@@ -277,7 +384,7 @@ class Surrogate:
         """
         if self.ref_x is None:
             return None
-        x = self._x(c)[:, 0]  # (G, M)
+        x = self._x(c)[:, 0][:, : self.n_metabolites]  # (G, M)
         d = np.empty(len(self.members))
         for k, i in enumerate(self.members):
             m = self.mask[i]
@@ -299,7 +406,8 @@ class Surrogate:
             if self.mu_floor is None
             else jnp.asarray(np.maximum(mu, self.mu_floor)[:, None], dtype=jnp.float32)
         )
-        z = np.asarray(self._B.flux(self._bheads, x, a, jnp.asarray(self.z_scale), zmu))[:, 0]
+        xb = x[:, :, : self.n_metabolites]  # Head B takes the u half alone
+        z = np.asarray(self._B.flux(self._bheads, xb, a, jnp.asarray(self.z_scale), zmu))[:, 0]
         return np.maximum(z, -self._B.VMAX * self._u(c)) * self.mask
 
     def _element_balance(self, z: np.ndarray) -> np.ndarray:
@@ -484,7 +592,10 @@ def rhs_hybrid(sur: Surrogate, models: list, eps: float, depth: float):
             # `load_*_dataset(..., x_scale=...)`.
             state["media"].append(c.copy())
             for i in np.flatnonzero(fire):
-                sol = solve(models[i], conc, 1.0, eps, km_cfg)
+                # `sur.ceq`, not None: the fallback substitutes the *same* model
+                # the head approximates, or it introduces a discontinuity of its
+                # own on top of the one this docstring warns about.
+                sol = solve(models[i], conc, 1.0, eps, km_cfg, sur.ceq)
                 if sol.status != "optimal":
                     continue  # P2: keep the surrogate's row rather than zeroing it
                 mu[i] = sol.mu_max
@@ -503,8 +614,15 @@ def rhs_truth(
     X: np.ndarray,
     eps: float,
     duals: dict | None = None,
+    ceq: dict[str, float] | None = None,
 ):
     """``(dc/dt, mu)`` from one FBA + elastic-net solve per organism at medium ``c``.
+
+    ``ceq`` turns on §13.11's thermodynamic product inhibition. **It must match the
+    model the surrogate was trained under**: an inhibited head scored against a
+    plain-FBA truth reads as a broken head -- measured, `mu_rel_median` 9e-07 ->
+    0.59 on the same 2-member community -- when the two are simply different
+    models.
 
     Pass ``duals`` to also collect each member's exchange shadow prices from the
     *same* solve -- they are ``d(mu_max)/d(uptake bound)`` and cost nothing extra,
@@ -519,7 +637,7 @@ def rhs_truth(
     mu = np.zeros(len(models))
     dc = np.zeros(len(exchanges))
     for i, model in enumerate(models):
-        sol = solve(model, conc, 1.0, eps, km_cfg)
+        sol = solve(model, conc, 1.0, eps, km_cfg, ceq)
         if sol.status != "optimal":
             LOGGER.debug("organism %d non-optimal (%s) — treated as no growth (P2)", i, sol.status)
             continue
@@ -730,7 +848,10 @@ def compare(
     fallback_depth: float = 0.0,
 ) -> dict:
     """Integrate both, and score the surrogate rhs along the *true* trajectory."""
-    true = integrate(lambda c, X: rhs_truth(models, sur.exchanges, c, X, eps), c0, x0, dt, steps)
+    ceq = sur.ceq  # the truth runs the model the head was trained under, or neither
+    true = integrate(
+        lambda c, X: rhs_truth(models, sur.exchanges, c, X, eps, ceq=ceq), c0, x0, dt, steps
+    )
     fb_state = None
     if fallback_depth > 0:
         hybrid, fb_state = rhs_hybrid(sur, models, eps, fallback_depth)
@@ -774,7 +895,7 @@ def compare(
     # The composition is free to drift somewhere the labels never went, and a
     # community that grows impossibly fast reads as a discovery. This is the check
     # that catches it, and it costs one solve per organism.
-    _, mu_lp_end = rhs_truth(models, sur.exchanges, surr.c[-1], surr.x[-1], eps)
+    _, mu_lp_end = rhs_truth(models, sur.exchanges, surr.c[-1], surr.x[-1], eps, ceq=ceq)
     _, mu_s_end = rhs_surrogate(sur, surr.c[-1], surr.x[-1])
 
     x_log = np.abs(np.log(surr.x) - np.log(true.x))
@@ -863,7 +984,7 @@ def _cross_feeding(sur: Surrogate, models: list, true: Trajectory, eps: float) -
     col = {ex: j for j, ex in enumerate(sur.exchanges)}
     zt = np.zeros((len(models), len(sur.exchanges)))
     for i, model in enumerate(models):
-        sol = solve(model, conc, 1.0, eps, km_cfg)
+        sol = solve(model, conc, 1.0, eps, km_cfg, sur.ceq)
         for ex, v in sol.z.items():
             zt[i, col[ex]] = v
     _, zs = sur.mu_and_z(c, np.ones(len(sur.genome_ids), dtype=np.float32))
@@ -937,7 +1058,7 @@ def run(
         # instead: total biomass such that the pool runs out after `doublings`
         # doublings of the fastest member. `dc/dt` is linear in X, so one probe
         # solve at unit biomass fixes it.
-        dc1, mu0 = rhs_truth(models, sur.exchanges, c0, np.full(len(gids), 1.0), eps)
+        dc1, mu0 = rhs_truth(models, sur.exchanges, c0, np.full(len(gids), 1.0), eps, ceq=sur.ceq)
         if mu0.max() <= 0:
             LOGGER.warning("community %s cannot grow on its medium -- skipped", gids)
             continue

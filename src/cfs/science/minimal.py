@@ -38,6 +38,8 @@ from pathlib import Path
 
 import numpy as np
 
+from cfs.compose.dfba import chain_to_c
+
 from cfs.science.growth import mu_true
 
 LOGGER = logging.getLogger("cfs.science.minimal")
@@ -71,15 +73,13 @@ def mu_and_grads(
     mu, g = sur.mod.batched_value_and_grad(sur._vheads, jnp.asarray(x))
     xa = np.asarray(x[:, 0], dtype=np.float64)
     ga = np.asarray(g[:, 0], dtype=np.float64)
-    dxdu = (1.0 - xa) ** 2 / np.asarray(sur.x_scale, dtype=np.float64)
-    dudc = sur.km / (sur.km + c) ** 2
     scale = np.asarray(sur.mu_scale, dtype=np.float64)[:, None]
     raw = np.asarray(mu, dtype=np.float64)[:, :1]
     cal = np.asarray(sur.value_cal, dtype=np.float64)
     dcal = cal[:, 2:3] + (cal[:, 0:1] / cal[:, 1:2]) * np.exp(-raw / cal[:, 1:2])
     k = np.asarray(members)
     v = np.maximum(calibrate.apply(raw, cal)[:, 0] * scale[:, 0], 0.0)
-    mu_k, g_k = v[k], (ga * dxdu * dudc * scale * dcal)[k]
+    mu_k, g_k = v[k], (chain_to_c(sur, ga, xa, c) * scale * dcal)[k]
     for i, per_member in enumerate(cuts or ()):
         for mu_j, g_j, c_j in per_member:
             vj = mu_j + float(g_j @ (c - c_j))

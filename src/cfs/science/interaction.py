@@ -369,7 +369,7 @@ def trust_box(
     """
     lo, hi = None, None
     for k in range(len(sur.genome_ids)):
-        x0 = np.asarray(sur._x(c0)[k, 0], dtype=np.float64)
+        x0 = np.asarray(sur._x(c0)[k, 0], dtype=np.float64)[: sur.n_metabolites]
         f = 10.0 ** min(float(decades), 300.0)
         a = _c_of_x(sur, k, x0 / f)
         b = _c_of_x(sur, k, np.clip(x0 * f, 0.0, 1.0 - 1e-9))

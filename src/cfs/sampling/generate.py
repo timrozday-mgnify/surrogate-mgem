@@ -32,6 +32,9 @@ from cfs.sampling.design import SamplingConfig, band_scales, sample_media
 # two different media into one unit).
 _ROUND_STRIDE = 1_000_000
 
+# §13.11 stage 4': the label root records the `c^eq` it was solved with.
+_INHIBITION_FILE = "inhibition.json"
+
 LOGGER = logging.getLogger("cfs.generate")
 
 
@@ -71,6 +74,7 @@ def generate_organism(
     roster_median: dict[str, float] | None = None,
     round_idx: int = 0,
     media: list[dict] | None = None,
+    ceq: dict[str, float] | None = None,
 ) -> OrganismShards:
     """Generate all label shards for one organism (plan §4.5).
 
@@ -87,6 +91,15 @@ def generate_organism(
     run got measurably wrong (:func:`~cfs.sampling.design.topup_weights`).
     ``round_idx`` > 0 writes a top-up shard alongside the base run's rather than
     over it (§4.6).
+
+    ``ceq`` turns on §13.11's thermodynamic product inhibition in the ground truth
+    (stage 4'): secretion of a metabolite stops as its external concentration
+    reaches ``c^eq``. It changes no column of the label schema -- ``theta`` is a
+    function of the ``medium`` already stored and its dual is the same ``shadow``
+    column read on the other side -- but it makes a *different label root*, so it
+    is recorded in an ``inhibition.json`` sidecar beside the shards and
+    :func:`cfs.surrogate.data.load_ceq` reads it back. ``None`` is plain FBA, bit
+    for bit.
 
     ``media`` bypasses the whole design: label exactly these media instead of
     sampling them. That is how the media §8.1 actually visits get labelled — the
@@ -159,7 +172,7 @@ def generate_organism(
                 index_hash,
                 mid0 + mid,
                 medium,
-                solve(model, medium, alpha, eps, km_cfg),
+                solve(model, medium, alpha, eps, km_cfg, ceq),
                 ex_order,
             )
             for mid, medium in enumerate(media_e)
@@ -182,6 +195,7 @@ def generate_roster(
     focus_weights: dict[str, dict[str, float]] | None = None,
     round_idx: int = 0,
     media: list[dict] | None = None,
+    ceq: dict[str, float] | None = None,
 ) -> list[OrganismShards]:
     """Run :func:`generate_organism` for every roster model (serial; see module doc).
 
@@ -227,6 +241,13 @@ def generate_roster(
                 roster_median=roster_median,
                 round_idx=round_idx,
                 media=media,
+                ceq=ceq,
             )
         )
+    if ceq is not None:
+        # The root's own record of which model made it. Read by
+        # `cfs.surrogate.data.load_ceq`, which is what gives Head A its second
+        # input channel -- so a root and a checkpoint cannot silently disagree
+        # about whether inhibition was on.
+        (Path(outdir) / _INHIBITION_FILE).write_text(json.dumps({"ceq": ceq}, indent=2))
     return shards

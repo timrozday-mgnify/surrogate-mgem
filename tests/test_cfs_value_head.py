@@ -417,9 +417,11 @@ def test_organism_arrays_signs_and_scatter(tmp_path):
 
     km_cfg = {"classes": {"sugars": 0.01}, "default": 0.01, "keywords": {"sugars": ["glc"]}}
     col = {"EX_o2_e": 0, "EX_glc__D_e": 1, "EX_other_e": 2}
+    # [:9] -- §13.11's inhibition channel appends (theta, dmu/dtheta, theta mask),
+    # all None unless the label root carries an `inhibition.json`.
     x, mu, g, gvalid, mask, ihash, mid, z, alphas = _organism_arrays(
         tmp_path, "g0", 1e-3, col, km_cfg, 3
-    )
+    )[:9]
     # Head B's targets are opt-in: without `with_z` the alpha grid is not even read.
     assert z is None and alphas is None
     assert mid.tolist() == [0, 1]

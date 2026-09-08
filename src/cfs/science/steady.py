@@ -40,6 +40,8 @@ from pathlib import Path
 
 import numpy as np
 
+from cfs.compose.dfba import chain_to_c
+
 LOGGER = logging.getLogger("cfs.science.steady")
 
 # `log(X/X_ref)` is clipped here: 30 decades below the largest live member is
@@ -549,10 +551,10 @@ def _head_mu_rows(sur, c, heads=None):
     raw = np.asarray(mu, dtype=np.float64)[:, 0]  # uncalibrated, unscaled
     gx = np.asarray(g, dtype=np.float64)[:, 0]  # d(raw)/dx
     xk = np.asarray(x, dtype=np.float64)[:, 0]
-    dxdu = (1.0 - xk) ** 2 / sur.x_scale
-    dudc = sur.lam[:, None] * (sur.km / (sur.km + c) ** 2)[None]  # §13.10's rate scale
     dcal = calibrate.deriv(raw[:, None], sur.value_cal)[:, 0]
-    rows = gx * dxdu * dudc * (sur.mu_scale * dcal)[:, None]
+    # `chain_to_c` carries §13.10's rate scale and, under §13.11's inhibition,
+    # the second (secretion) input block folded back onto the same `c`.
+    rows = chain_to_c(sur, gx, xk, c) * (sur.mu_scale * dcal)[:, None]
     return rows[sur.members]
 
 
@@ -570,6 +572,11 @@ def _lp_mu_rows(duals, models, exchanges, eps, km, c, n_g):
     the network -- positive for a waste product like CO2, which would claim that
     more nutrient lowers growth. Clamping at zero also drops the solver dust that
     makes up half the "non-zero" duals. Do not simplify this to a plain ``-pi``.
+
+    ponytail: no §13.11 secretion term. `rhs_truth` does not take `ceq`, so an
+    inhibited LP is unreachable from here; add `+ pi * Vmax / c^eq` (where the
+    secretion bound binds and `c < c^eq`) at the same time as threading `ceq`
+    into `rhs_truth`, or the hybrid Jacobian is silently missing a sign.
 
     The duals ride along on the residual's own solve, so this is free. It is
     re-solved only if the cache is not at ``c`` -- a stale Jacobian row here would

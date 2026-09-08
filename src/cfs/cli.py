@@ -108,6 +108,24 @@ def build_parser() -> argparse.ArgumentParser:
         "Use with --round N. This is how the media the §8.1 composition actually "
         "visits get labelled (`make_traj_pool.py`).",
     )
+    gen.add_argument(
+        "--inhibition",
+        type=Path,
+        help="JSON {exchange: c^eq mM, ...} plus an optional \"default\" — §13.11's "
+        "thermodynamic product inhibition in the ground truth (stage 4'). Secretion "
+        "of a metabolite stops as its external concentration reaches c^eq, which "
+        "makes `mu` fall in that concentration and gives Head A a second input "
+        "channel. The default reaches every unbuffered exchange because a partial "
+        "layer is exploited (P30). Off = plain FBA, bit for bit — and this makes a "
+        "*different label root*, recorded in inhibition.json beside the shards.",
+    )
+    gen.add_argument(
+        "--buffered",
+        default="EX_h_e,EX_h2o_e",
+        help="Comma-separated exchanges the --inhibition default skips: a solvent "
+        "and a pH controller. Any finite c^eq puts their secretion bound at zero, "
+        "which is an infeasible model rather than inhibition.",
+    )
     gen.add_argument("--seed", type=int, default=0)
 
     tu = sub.add_parser(
@@ -1391,6 +1409,16 @@ def main(argv: list[str] | None = None) -> int:
             media = [dict(zip(ex, (float(v) for v in row), strict=True)) for row in npz["media"]]
         scales = json.loads(args.scales.read_text()) if args.scales else None
         focus = json.loads(args.focus_weights.read_text()) if args.focus_weights else None
+        ceq = None
+        if args.inhibition is not None:
+            from cfs.groundtruth.index import load_index
+            from cfs.science.interaction import ceq_map, keep_mask
+
+            ex_all = load_index(args.index).index
+            buffered = tuple(b for b in args.buffered.split(",") if b)
+            ceq = ceq_map(
+                json.loads(args.inhibition.read_text()), ex_all, keep_mask(ex_all, buffered)
+            )
         shards = generate_roster(
             roster,
             args.index,
@@ -1400,6 +1428,7 @@ def main(argv: list[str] | None = None) -> int:
             focus_weights=focus,
             round_idx=args.round_idx,
             media=media,
+            ceq=ceq,
         )
         print(
             json.dumps(

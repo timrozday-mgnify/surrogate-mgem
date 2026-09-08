@@ -42,6 +42,33 @@ LOGGER = logging.getLogger("cfs.surrogate.data")
 # in the `<id>.exchanges.json` sidecar if a future roster breaks the assumption.
 _VMAX_DEFAULT = 1000.0
 _DUAL_TOL = 1e-9  # below this a dual is solver dust, not a sensitivity
+_BOUND_TOL = 1e-6  # a flux this close to its bound is *at* it (same tol as solve._FLUX_EPS)
+# §13.11 stage 4': the label root records the c^eq it was solved with. Absent =
+# plain FBA, and then nothing below fires and every array keeps its old width.
+INHIBITION_FILE = "inhibition.json"
+
+
+def load_ceq(labels_dir: Path | str) -> dict[str, float] | None:
+    """The ``c^eq`` map a label root was generated with, or ``None`` for plain FBA."""
+    path = Path(labels_dir) / INHIBITION_FILE
+    if not path.is_file():
+        return None
+    return {k: float(v) for k, v in json.loads(path.read_text())["ceq"].items()}
+
+
+def theta(c: np.ndarray, ceq: np.ndarray) -> np.ndarray:
+    """§13.11's inhibition factor ``max(0, 1 - c/c^eq)``; ``nan`` c^eq -> 1 (uninhibited).
+
+    This is Head A's *second* input channel, and it has to be a channel rather
+    than a transform of ``c``: ``mu_max`` is concave and non-decreasing in the LP's
+    bound vector, the secretion bound ``Vmax * theta`` is affine in ``theta``, so
+    ``mu`` is concave and non-decreasing in ``(u, theta)`` jointly -- which is the
+    coordinate the head is built for. In ``c`` it is neither (the ``max(0, .)``
+    clip is a convex kink at ``c = c^eq``), so a head fed ``c`` directly would be
+    the [[concavity-imposed-in-the-wrong-coordinate]] mistake a third time.
+    """
+    out = np.clip(1.0 - c / np.where(np.isfinite(ceq), ceq, np.inf), 0.0, None)
+    return np.where(np.isfinite(ceq), out, 1.0)
 
 
 @dataclass
@@ -63,6 +90,11 @@ class ValueDataset:
     x_scale: np.ndarray  # (G, M) per-metabolite saturation constant s; x is already x/(x+s)
     index_hash: str
     rounds_present: list[int]  # §4.6 top-up rounds in the training set; val is always round 0
+    # M, the number of *metabolites*. Equals ``len(exchanges)`` under plain FBA and
+    # half of it once §13.11's inhibition channel is appended (§13.11 stage 4').
+    n_metabolites: int = 0
+    # §13.11 stage 4': the c^eq map the labels were solved with, or None (plain FBA).
+    ceq: dict[str, float] | None = None
 
 
 @dataclass
@@ -86,6 +118,9 @@ class BehaviourDataset:
     x_scale: np.ndarray  # (G, M) the Head A kink scale, so the heads compose
     index_hash: str
     rounds_present: list[int]
+    n_metabolites: int = 0
+    # §13.11 stage 4': the c^eq map the labels were solved with, or None (plain FBA).
+    ceq: dict[str, float] | None = None
 
 
 # Head B divides its target by the medium's `mu_max`; below this fraction of the
@@ -116,6 +151,7 @@ def _organism_arrays(
     km_cfg: dict,
     n_shared: int,
     with_z: bool = False,
+    ceq: dict[str, float] | None = None,
 ):
     """Read one organism's primary-eps shard into shared-index arrays.
 
@@ -179,6 +215,52 @@ def _organism_arrays(
     mask[pos] = True
     mid = df["medium_id"].to_numpy(dtype=np.int64)
 
+    # §13.11 stage 4': the inhibition channel. It needs **no new label column** --
+    # `theta` is a function of the medium the row already stores, and its dual is
+    # the *same* `shadow` column read on the other side.
+    #
+    # `shadow` is the metabolite's mass-balance dual, so it is `d(mu)/d(secretion
+    # upper bound)` exactly where that bound binds. Verified against central
+    # differences on 20 binding (medium, exchange) cases: ratio 1.0000 on every
+    # one, while cobra's `reduced_costs` came out at exactly 2x -- the convention
+    # scaling `solve.solve` already warns about, and the reason this reads the
+    # metabolite dual and not the reaction one.
+    #
+    # The clamp mirrors the uptake side's and is needed for the same reason: 34 of
+    # 54 nonzero duals at a binding secretion bound gave a finite difference of
+    # exactly 0 (LP degeneracy -- the bound is active but not *strictly*), so a
+    # dual is only a sensitivity where the flux actually sits on the bound and the
+    # sign is the one an enlarged feasible set can produce.
+    th = gth = mask_th = None
+    if ceq is not None:
+        ceq_vec = np.array([ceq.get(ex, np.nan) for ex in ex_order])
+        ub = vmax * theta(c, ceq_vec)  # (N, M_i) secretion capacity
+        zq = np.stack(df["z"].to_numpy())
+        th = np.zeros((n, n_shared), dtype=np.float32)
+        gth = np.zeros((n, n_shared), dtype=np.float32)
+        th[:, pos] = theta(c, ceq_vec)
+        # Three conditions, and the third is the one that costs a run to find.
+        # At `theta = 0` the bound is `ub = 0`, so *every* metabolite the organism
+        # simply does not produce sits at `z = 0 = ub` and reads as binding, while
+        # its `shadow` is positive for the ordinary reason a nutrient's is: it has
+        # value in the network. That selects 7.7% of entries on AAXE02, 99.9% of
+        # them at `theta = 0`, and seeding a max-affine head from those tangents
+        # takes held-out value R2 from 1.000 to **-0.014** -- the planes rise
+        # steeply in a direction the truth is flat in, so the min over them
+        # over-predicts everywhere `theta > 0`.
+        #
+        # Requiring the organism to secrete the metabolite *somewhere* in the shard
+        # is a free capability test (24 of 181 exchanges on AAXE02) and it is the
+        # right one: a bound on a flux the network never carries cannot be a
+        # sensitivity. Same shape of correction as the uptake side's sign clamp,
+        # and for the same reason -- a dual is only a derivative where it binds.
+        secretes = (zq > _BOUND_TOL).any(axis=0)
+        binds = (zq >= ub - _BOUND_TOL) & np.isfinite(ceq_vec) & secretes
+        gth[:, pos] = np.where(binds & (pi > _DUAL_TOL), pi * vmax, 0.0)
+        gth[~gvalid] = 0.0
+        mask_th = np.zeros(n_shared, dtype=bool)
+        mask_th[pos] = np.isfinite(ceq_vec)
+
     z = alphas = None
     if with_z:
         # Keep the stored float64 values for the `==` selection; cast only on return.
@@ -200,6 +282,9 @@ def _organism_arrays(
         mid,
         z,
         None if alphas is None else alphas.astype(np.float32),
+        th,
+        gth,
+        mask_th,
     )
 
 
@@ -271,8 +356,9 @@ def _stack(
             raise ValueError(f"requested organisms have no shards: {missing}")
         gids = [g for g in gids if g in set(organisms)]
 
+    ceq = load_ceq(labels_dir)
     parts = [
-        _organism_arrays(labels_dir, g, eps, col, km_cfg, len(exchanges), with_z=with_z)
+        _organism_arrays(labels_dir, g, eps, col, km_cfg, len(exchanges), with_z=with_z, ceq=ceq)
         for g in gids
     ]
     hashes = {p[5] for p in parts} | {index_hash(index_path)}
@@ -290,6 +376,20 @@ def _stack(
     frozen_mask = frozen.mask[[frozen.genome_ids.index(g) for g in gids]]
     if not (mask == frozen_mask).all():
         raise ValueError("sidecar exchange lists disagree with the frozen index mask (P13)")
+
+    # §13.11 stage 4': widen 444 -> 888 by appending the inhibition channel. A
+    # max-affine plane is affine over the *whole* input vector, so a second block
+    # of metabolite coordinates is native to the head and `init_from_tangents`
+    # transfers for free -- the secretion duals come out of the same LP as the
+    # uptake ones, so a label tangent already carries components in both halves.
+    # Everything downstream is generic in the width; only `exchanges` needs the
+    # names, and those are prefixed so a diagnostic says which channel it means.
+    n_met = len(exchanges)
+    if ceq is not None:
+        exchanges = list(exchanges) + [f"theta:{e}" for e in exchanges]
+        x = np.concatenate([x, np.stack([p[9] for p in parts])], axis=-1)
+        g = np.concatenate([g, np.stack([p[10] for p in parts])], axis=-1)
+        mask = np.concatenate([mask, np.stack([p[11] for p in parts])], axis=-1)
 
     # Round-0 media are the base design; `_organism_arrays` sorts by `medium_id`
     # and round N is offset by N * _ROUND_STRIDE, so they are the leading block and
@@ -372,6 +472,8 @@ def _stack(
         "vi": vi,
         "index_hash": hashes.pop(),
         "rounds_present": present,
+        "n_metabolites": n_met,
+        "ceq": ceq,
     }
 
 
@@ -425,6 +527,8 @@ def load_value_dataset(
         x_scale=d["x_scale"],
         index_hash=d["index_hash"],
         rounds_present=d["rounds_present"],
+        n_metabolites=d["n_metabolites"],
+        ceq=d["ceq"],
     )
 
 
@@ -450,7 +554,13 @@ def load_behaviour_dataset(
         labels_dir, index_path, eps, val_frac, seed, organisms, with_z=True, x_scale_pin=x_scale
     )
     ti, vi, a = d["ti"], d["vi"], d["alphas"]
-    x, z = d["x"], d["z"]  # (G, N, M), (G, A, N, M)
+    n_met = d["n_metabolites"]
+    # Head B takes the uptake channel only. §13.11: it needs no architectural
+    # change -- what inhibition adds for it is the *inference* clamp
+    # `z <= Vmax * theta`, beside §3.3's existing `z >= -Vmax * u`. Slicing keeps
+    # its input, its output width and its `x_scale` bit-identical to a plain-FBA
+    # checkpoint, so the P14 composition check compares like with like.
+    x, z = d["x"][:, :, :n_met], d["z"]  # (G, N, M), (G, A, N, M)
     g, n_a, _, m = z.shape
 
     # Exchange flux is very nearly proportional to how fast the organism is
@@ -500,8 +610,8 @@ def load_behaviour_dataset(
     )
     return BehaviourDataset(
         genome_ids=d["gids"],
-        exchanges=d["exchanges"],
-        mask=d["mask"],
+        exchanges=list(d["exchanges"])[:n_met],
+        mask=d["mask"][:, :n_met],
         alphas=a,
         x_train=xt,
         a_train=at,
@@ -513,7 +623,9 @@ def load_behaviour_dataset(
         mu_val=mv,
         mu_floor=mu_floor.astype(np.float32),
         z_scale=z_scale.astype(np.float32),
-        x_scale=d["x_scale"],
+        x_scale=d["x_scale"][:, :n_met],
         index_hash=d["index_hash"],
         rounds_present=d["rounds_present"],
+        n_metabolites=n_met,
+        ceq=d["ceq"],
     )

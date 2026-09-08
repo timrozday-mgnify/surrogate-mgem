@@ -28,6 +28,8 @@ from pathlib import Path
 
 import numpy as np
 
+from cfs.compose.dfba import chain_to_c
+
 LOGGER = logging.getLogger("cfs.science.growth")
 
 
@@ -41,11 +43,12 @@ def mu_and_grad(sur, c: np.ndarray, k: int) -> tuple[float, np.ndarray]:
     jnp = sur._jnp
     x = sur._x(c)  # (G, 1, M)
     mu, g = sur.mod.batched_value_and_grad(sur._vheads, jnp.asarray(x))
-    xk = np.asarray(x[k, 0], dtype=np.float64)
-    gk = np.asarray(g[k, 0], dtype=np.float64)
-    dxdu = (1.0 - xk) ** 2 / sur.x_scale[k]
-    dudc = sur.km / (sur.km + c) ** 2
-    return float(mu[k, 0]) * float(sur.mu_scale[k]), gk * dxdu * dudc * float(sur.mu_scale[k])
+    # One chain rule for both input blocks: under §13.11's inhibition the head
+    # also has a `theta` channel, whose `dtheta/dc` is *negative*, and it is the
+    # only route by which `dmu/dc` can be negative at all.
+    gc = chain_to_c(sur, np.asarray(g, dtype=np.float64)[:, 0],
+                        np.asarray(x, dtype=np.float64)[:, 0], c)[k]
+    return float(mu[k, 0]) * float(sur.mu_scale[k]), gc * float(sur.mu_scale[k])
 
 
 def mu_reported(sur, c: np.ndarray, k: int) -> float:
@@ -106,7 +109,7 @@ def trust_box(sur, c0: np.ndarray, k: int, decades: float) -> tuple[np.ndarray, 
     this designs by reallocation and never by addition. Widen it, or seed the start
     medium, if adding one is the question.
     """
-    x0 = np.asarray(sur._x(c0)[k, 0], dtype=np.float64)
+    x0 = np.asarray(sur._x(c0)[k, 0], dtype=np.float64)[: sur.n_metabolites]
     # `x` lives in (0, 1), so past a few decades the upper face is saturated at 1
     # and only the lower one moves; 300 is well past that and keeps 10**d finite.
     f = 10.0 ** min(float(decades), 300.0)

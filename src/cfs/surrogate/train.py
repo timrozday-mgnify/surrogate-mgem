@@ -141,13 +141,22 @@ def _trial_points(ds, media_npz) -> np.ndarray | None:
         return None
     z = np.load(Path(media_npz), allow_pickle=True)
     ex = [str(e) for e in z["exchanges"]]
-    if ex != list(ds.exchanges):
+    n_met = ds.n_metabolites or len(ds.exchanges)
+    if ex != list(ds.exchanges)[:n_met]:
         raise ValueError("trial media and labels disagree on the metabolite index (P13)")
     from cfs.groundtruth.solve import km_for_exchange, load_km_defaults
 
     km_cfg = load_km_defaults()
     km = np.array([km_for_exchange(e, km_cfg) for e in ex])
     u = z["media"] / (km + z["media"])  # (P, M)
+    # §13.11 stage 4': under inhibition the head's input is [u | theta], so a
+    # trial point needs both halves. `theta` comes from the same medium
+    # (`data.theta`); the archive stores concentrations, not the coordinate.
+    if n_met < len(ds.exchanges):
+        from cfs.surrogate.data import theta as _theta
+
+        ceq = np.array([(ds.ceq or {}).get(e, np.nan) for e in ex])
+        u = np.concatenate([u, _theta(z["media"], ceq)], axis=-1)  # (P, 2M)
     # Same map the head reads: w = min(u / x_scale, W_CAP), per organism.
     return np.minimum(u[None] / ds.x_scale[:, None, :], groupmax.W_CAP)
 
@@ -763,6 +772,11 @@ def save(
                 "mu_scale": ds.mu_scale.tolist(),
                 "value_cal": (_identity_cal(len(ds.genome_ids)) if cal is None else cal).tolist(),
                 "x_scale": ds.x_scale.tolist(),
+                # §13.11 stage 4'. `exchanges` is 2M long under inhibition
+                # ([u | theta]); these two are what let a consumer split it and
+                # rebuild the theta channel from a medium.
+                "n_metabolites": ds.n_metabolites or len(ds.exchanges),
+                "ceq": ds.ceq,
                 "input_transform": getattr(
                     _ARCH.get(arch.get("arch", "icnn")),
                     "INPUT_TRANSFORM",
