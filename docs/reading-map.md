@@ -361,6 +361,91 @@ not the other way round.
 
 ---
 
+## Part 4d — Flux sampling: the wrong space for rows, the right idea for directions
+
+Added 2026-09-08, answering "could hit-and-run sampling of a bounded region make
+better training rows?". **Assessed, not adopted** — nothing in this part is in the
+plan, and no milestone depends on it.
+
+### The verdict, in three lines
+
+1. **Flux sampling does not make training rows.** A row is indexed by the
+   *medium*: `(c, alpha) -> (mu_max, shadow, z)`. ACHR/OptGP/CHRR/MMCS sample the
+   **flux polytope at a fixed medium**, so thousands of samples collapse to one
+   row. Wrong axis.
+2. **It fights D4.** M1 measured 68.9% of exchange-FVA observations degenerate and
+   the elastic net exists to make `z(c)` single-valued (§5.4). Sampling the optimal
+   face reintroduces exactly the multiplicity D4 removes, and Head B has no way to
+   represent a distribution over it.
+3. **Hit-and-run over the medium *box* is strictly worse than what is there.**
+   Sobol is low-discrepancy; a random walk is not. There is no gain to be had on a
+   box, and `sample_media`'s bulk should not be replaced.
+
+### Where the idea does bite: the design has no correlation structure
+
+`design.sample_media` draws **every coordinate independently** — Sobol in a box,
+plus `_perturb_bg`'s per-metabolite Bernoulli(`share`). A depleting medium is
+nothing but correlation structure. In batch, with no inflow,
+
+    c(t) = c0 + INT sum_i X_i z_i dt   in   c0 - cone{ achievable z_i }
+
+and that cone **is** the projection of the flux polytope onto the exchanges — the
+object flux sampling samples. So the instinct is right one level removed: do not
+sample fluxes as rows, sample the flux cone to get correlated **directions in
+medium space**, then walk down from a rich start. That constructs the co-depleted
+media the design provably cannot produce, which is §8.6d/§8.6f's open item, and it
+is why every coverage round so far was null — rounds 2-4 labelled *actual
+trajectories*, and `depl_reach.py` measured that a monoculture's depletion path
+does not reach a community's (NN 5.57 against 5.22 to the existing training set,
+i.e. no closer). A cone sampler covers the manifold generally instead of one path
+through it.
+
+**The cheap version needs no sampler and no LP.** There are already ~32 000
+labelled optimal `z` per organism spanning 4000 media. Random non-negative
+combinations of those, times random abundances and a random step, sample the
+*growth-optimal* part of that cone directly — which is the part a growing
+community actually travels. **Uniform sampling of the full polytope would be worse
+here, not better**: most of it is flux distributions no growing organism takes.
+~20 lines to write the npz, then `cfs generate --media pool.npz --round N`.
+
+### Run the free premise check first (P25)
+
+`depl_reach.py` and `nn_delta.py` already answer it with no solves: *does a
+cone-sampled pool reduce median NN distance in `x` from the benchmark's deep
+community states below the 5.22 the existing training set gives?* Round 3 failed
+that check only **after** paying for the labels.
+
+And set expectations from round 4, which **passed** it (3.87 against 6.28),
+improved `dc_rel` on 21/30 cells, and still did not move the endpoint — the sixth
+instance of [[rhs-accuracy-does-not-buy-the-endpoint]]. If this works it moves
+`dc_rel`, the 8-doubling gate and the chemostat regime (where §13.10's discrepancy
+floor is Head B's `mu_floor` at drawn-down media). It will probably **not** move
+the 4-doubling batch endpoint, which turns on which metabolite empties first and
+which no norm on `dc` sees.
+
+### One genuine use of real flux sampling — as a diagnostic
+
+Sample the optimal face at a medium and measure its **width** in exchange space.
+If it is wide, the elastic net is selecting a point on a thin ridge, so a small
+move in `c` can snap `z` between distant vertices and **`z(c)` is discontinuous** —
+a real and currently untested explanation for Head B's residual, and one that no
+amount of coverage would fix (the answer would be a smoothed or barycentric label,
+not more media). Testable prediction: Head B's error concentrates where the face is
+wide. Costs a few sampling runs and no relabel. This is the same object Part 3d's
+"an exact tangent is a selection from a set" note describes, measured rather than
+assumed.
+
+| Reference | Why it matters here |
+| --- | --- |
+| Kaufman & Smith, **ACHR**, 1998; Megchelenbrink et al., **OptGP**, PLoS ONE 2014; Haraldsdottir et al., **CHRR**, Bioinformatics 2017 | The standard chain. cobrapy ships ACHR/OptGP; both are slow enough that under-mixing is the norm rather than the exception. |
+| Theorell et al., **PolyRound** ([Semantic Scholar](https://www.semanticscholar.org/paper/PolyRound:-polytope-rounding-for-random-sampling-in-Theorell-Jadebeck/4d3473a9b0fb4fb7280184facb789dfbe21b24f3)) | Facet-redundancy removal and rounding — the preconditioning step that makes mixing tractable. |
+| Chalkis et al., **dingo**, [Bioinformatics Advances 2024](https://academic.oup.com/bioinformaticsadvances/article/4/1/vbae037/7633919) ([GitHub](https://github.com/GeomScale/dingo)) | MMCS and a rounded billiard walk, plus CDHR/Dikin/John/Vaidya/ball walks. **Use this, not cobrapy's ACHR**, if the diagnostic above is ever run. |
+
+**Caveat that applies to any of it:** published flux-sampling results are widely
+under-mixed. Report a convergence diagnostic or do not report the sample.
+
+---
+
 ## Part 5 — Open questions → what to read
 
 | Open question | Read | What it should tell you |
