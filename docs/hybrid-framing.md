@@ -370,6 +370,38 @@ measurement, only tightness is. Same LP size as a plain FBA, no QP, and it reuse
    0.78% -> 1.4%, with `mu_lower = 0` on **12%** of community points against 0%.
    The network needs secretions Head B under-predicts. Uptake-only is the default.
 
+**The claim above that this "would replace all three hand-rolled fallback
+triggers" is RETRACTED, on cost — 2026-09-08.** `mu_lower` is an LP, and it is the
+*same* LP that returns `mu_true` exactly. So anywhere the bracket is affordable the
+truth is affordable, and it cannot be a trigger for avoiding LPs, nor an error bar
+at states a posterior does not solve. The asymmetry is real but it is between the
+two halves, not between the bracket and the LP: **`mu_hat` is free and certified
+one-sided; the lower half costs a solve.**
+
+**The proxy that would have rescued it does not exist, measured on the same 98
+points (P25's gate, before building anything).** Two free scores against the
+certified width:
+
+| free score | pooled | held-out design media | community-regime |
+| --- | --- | --- | --- |
+| `reach` (§8.6g(1)) | +0.347 (p=5e-4) | +0.367 (p=0.0015) | **-0.054 (p=0.79)** |
+| Head B's used fraction of §3.3's uptake bound, at Head A's limiting metabolite | -0.122 (p=0.23) | **-0.587** (p=6e-08) | **+0.614** (p=9e-04) |
+
+`reach` works only on the design's own held-out set — the regime where the bracket
+is already narrow and nobody needs it — and carries **nothing** in the
+community regime, which is the plan's own proposed calibration set. The uptake
+fraction is strongly predictive in both and **flips sign between them** (more of
+the bound used should mean a tighter bound, which holds on design media and
+reverses in the community regime), so it cannot be one calibrated score. Neither
+clears P25.
+
+**What survives, and it is worth having.** (i) The free half: `mu_hat >= mu_true`
+at 109/109 off-distribution points, no LP, which is what underwrites §13.2's bundle
+and §13.3's cut loop. (ii) The width as a **diagnostic**, not a shortcut: 99.4% of
+it is the lower half, so one FBA per state grades *Head B* against the LP without
+labels, at any state — including the community-regime and design-optimum states no
+held-out set covers ([[held-out-cannot-see-a-design-change]]).
+
 ---
 
 ## 6. Recommendation

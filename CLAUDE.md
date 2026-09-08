@@ -2617,6 +2617,42 @@ it is unavailable in the surrogate-only setting §13.3 targets.
 abundance splits, which is the question the equilibrium cannot answer;
 (4) re-run the flag grid on one code version.
 
+### The two heads bracket the truth — and the bracket is not free — 2026-09-08
+
+`cfs.science.growth.mu_lower` is P20's missing half. The completion needs no
+separate feasibility solve: **restrict each exchange's uptake to Head B's
+prediction and hand the network back to the LP**, which completes the flux vector
+itself. Tightening a bound only shrinks the feasible set, so `mu_lower <= mu_true`
+**by construction** — validity is not a measurement, tightness is. Same LP size as
+a plain FBA, no QP; bounds tightened with `max`/`min` so a prediction beyond §3.3's
+MM bound cannot loosen anything. 98 (state, organism) points, `value_p4r2` +
+`behaviour_p4r2` (`20hm_bands/bracket.py`):
+
+| point set | n | `lo` valid | median width | lower half | upper half | p90 | `lo = 0` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| held-out design media | 72 | 1.000 | **0.069** | 0.069 | 0.00044 | 0.50 | 0.04 |
+| §4.3 community-regime draws | 26 | 1.000 | **0.0078** | 0.0077 | 4.0e-06 | 1.00 | 0.00 |
+
+1. **Tight where it is used** — 0.8% at community-regime media — and **99.4% of
+   the width is the lower half**, so it is an instrument for Head B, which is
+   where every remaining §8.6g residual sits.
+2. **Capping secretion too is worse and the ablation is cheap** (`--secretion`):
+   0.78% -> 1.4% and `mu_lower = 0` on **12%** of community points against 0%.
+   The network needs secretions Head B under-predicts. Uptake-only is the default.
+3. **It is NOT a free error bar, and `docs/hybrid-framing.md` §5's claim that it
+   replaces the three hand-rolled fallback triggers is retracted on cost.**
+   `mu_lower` is the *same* LP that returns `mu_true` exactly, so anywhere the
+   bracket is affordable the truth is. The asymmetry is between the halves:
+   **`mu_hat` is free and certified one-sided; the lower half costs a solve.**
+4. **Both free proxies for the width are refuted at P25's gate, measured on the
+   same 98 points before anything was built on them.** `reach` scores +0.367 on
+   held-out design media (where the bracket is already narrow) and **-0.054
+   (p=0.79) in the community regime** — the plan's own proposed calibration set.
+   Head B's used fraction of §3.3's uptake bound at Head A's limiting metabolite
+   is strongly predictive in *both* and **flips sign**: -0.587 (p=6e-08) on design
+   media, **+0.614** (p=9e-04) in the community regime. Neither is one calibrated
+   score. §13.6's error model stays open.
+
 ### The repaired head IS a valid upper bound off-distribution — 2026-09-06
 
 `20hm_bands/bound_gap.py`. `--gm-repair` restores the max-affine validity invariant
