@@ -334,3 +334,48 @@ def test_objective_spec_handover_truth_is_the_exchange_sum():
     assert got == pytest.approx(interaction.exchange(z, X).sum())
     with pytest.raises(ValueError):
         interaction.objective_spec("nope")
+
+
+def test_shared_secretion_is_the_disposal_pairing_not_the_handover_one():
+    """`S & S`, not `S & U`: raising it must cost *both*, or nobody is suppressed."""
+    ex = ["EX_a_e", "EX_b_e", "EX_c_e"]
+    gids = ["g1", "g2"]
+    S = {"g1": np.array([1, 1, 0], bool), "g2": np.array([0, 1, 1], bool)}
+    # best[g] = [top secretion, medium at top, box lo, box hi]
+    best = {
+        "g1": [np.array([5.0, 1.0, 0.0]), np.tile(np.arange(3.0), (3, 1)), None, None],
+        "g2": [np.array([0.0, 9.0, 4.0]), np.tile(np.arange(3.0), (3, 1)), None, None],
+    }
+    out = interaction.shared_secretion(gids, ex, S, best)
+    assert list(out) == ["EX_b_e"]  # the only one both secrete
+    assert out["EX_b_e"]["best_donor"] == "g2"  # 9.0 against 1.0
+    assert out["EX_b_e"]["secretors"] == ["g1", "g2"]
+
+
+def test_conditioning_media_place_the_product_at_its_own_threshold():
+    """One start per (contended product, level), on the donor's own medium."""
+    sur = _FakeSur()
+    sur.exchanges = ["EX_ac_e", "EX_h_e", "EX_x_e"]
+    keep = interaction.keep_mask(sur.exchanges)
+    shared = {"EX_ac_e": {"medium": np.array([1e-9, 0.5, 0.25]), "best_donor": "g"}}
+    C, targets = interaction.conditioning_media(
+        sur, ["g"], shared, {"EX_ac_e": 0.1, "EX_x_e": 0.1}, keep, levels=(0.5, 0.9)
+    )
+    assert C.shape == (2, 3)
+    assert [t["metabolite"] for t in targets] == ["EX_ac_e"] * 2
+    assert C[0][0] == pytest.approx(0.05) and C[1][0] == pytest.approx(0.09)
+    assert C[0][2] == 0.25  # the rest of the donor's medium is untouched
+    assert C[0][1] == pytest.approx(2e3)  # ...and the buffered species is pinned
+
+
+def test_the_conditioning_objective_has_no_surrogate_half():
+    """Measured, not assumed: 0 of 30 ordered pairs positive on the designed media.
+
+    Resupplementation only raises concentrations and Head A is monotone
+    non-decreasing, so a surrogate conditioning term is <= 0 everywhere. `run`
+    reads `hat is None` and skips the ascent rather than climbing away from the
+    thing being designed.
+    """
+    spec = interaction.objective_spec("conditioning")
+    assert spec.hat is None and spec.hat_batch is None
+    assert spec.truth is not None

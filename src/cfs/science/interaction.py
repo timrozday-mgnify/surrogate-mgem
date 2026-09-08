@@ -537,6 +537,21 @@ def candidate_links(
     the design never asked for. Measured that way first: 2-5 of 10-11 candidates
     realised, and 0 of 5 cells improved.
     """
+    return _pair_links(gids, exchanges, *observed(labels_dir, gids, exchanges, eps, rows))
+
+
+def observed(
+    labels_dir, gids: list[str], exchanges: list[str], eps: str = "0.001", rows: int = 3000
+):
+    """``(S, U, best)`` per genome from the label shards. **No LP.**
+
+    ``S[g]``/``U[g]`` are the metabolites ``g`` was observed to secrete / take up
+    at any labelled medium, and ``best[g]`` is
+    ``[top secretion, medium at top, box lo, box hi]``. Two pairings read this:
+    :func:`candidate_links` wants ``S[a] & U[b]`` (a handover), and
+    :func:`shared_secretion` wants ``S[a] & S[b]`` (contention for the same
+    disposal route).
+    """
     import pyarrow.parquet as pq
 
     col = {e: i for i, e in enumerate(exchanges)}
@@ -553,7 +568,7 @@ def candidate_links(
                 np.stack(tab.column("medium").to_numpy(zero_copy_only=False)),
             )
         S[g], U[g], best[g] = acc[0], acc[1], acc[2:]
-    return _pair_links(gids, exchanges, S, U, best)
+    return S, U, best
 
 
 def _local_index(labels_dir, g: str, col: dict[str, int]) -> np.ndarray:
@@ -831,6 +846,76 @@ def candidate_media(
     return np.array(C), targets
 
 
+# Straddle the threshold. Below it the donor's own increment has to carry `c_p`
+# across; at 0.99 the bound is already all but shut. Which one bites depends on
+# `dt * X_j * z_jp`, which is not knowable before the medium exists -- and
+# measured, the level barely matters (`EX_glyc_e` scored an identical 4093 at all
+# three on one cell), so the work is done by putting the product on the `c^eq`
+# scale at all, not by the fraction.
+_COND_LEVELS = (0.5, 0.9, 0.99)
+
+
+def shared_secretion(gids: list[str], exchanges: list[str], S: dict, best: dict) -> dict:
+    """Metabolites two or more members secrete, with the hardest secretor. **No LP.**
+
+    The handover pairing asks for ``S[a] & U[b]``; this asks for ``S[a] & S[b]``,
+    which is the structure §13.11's secretion bound turns into an interaction:
+    raising a product both members must excrete tightens
+    ``Vmax max(0, 1 - c/ceq)`` for *both*, so one member's overflow is a cost to
+    the other. Competition for **disposal** capacity rather than for a substrate,
+    and it is the only mechanism by which the conditioning term can be non-zero.
+    """
+    out: dict[str, dict] = {}
+    for m in range(len(exchanges)):
+        secretors = [g for g in gids if S[g][m]]
+        if len(secretors) < 2:
+            continue
+        donor = max(secretors, key=lambda g: best[g][0][m])
+        out[exchanges[m]] = {
+            "secretors": secretors,
+            "best_donor": donor,
+            "best_secretion": float(best[donor][0][m]),
+            "medium": np.asarray(best[donor][1][m], dtype=np.float64),
+        }
+    return out
+
+
+def conditioning_media(
+    sur, gids: list[str], shared: dict, ceq: dict[str, float], keep: np.ndarray,
+    levels: tuple[float, ...] = _COND_LEVELS,
+):
+    """Starts constructed to *have* product inhibition: ``(C, targets)``. **No LP.**
+
+    Conditioning is a needle at random media -- 1 to 2 of 40 draws across three
+    cells and two thresholds, median 0 -- and it cannot be searched for, since the
+    surrogate's version of the term is identically <= 0
+    (:func:`objective_spec`). But its precondition is closed form: a product two
+    members both secrete, standing at ``c^eq`` scale so the bound is tight. So
+    build the medium instead of looking for it -- the donor's own hardest-
+    secreting labelled medium, with that product placed at a fraction of its
+    equilibrium concentration.
+
+    Measured over the five 2-member cells at ``c^eq`` = 0.1 mM: **37 of 132
+    constructed media show conditioning (28%) against ~4% at random**, and per
+    cell 53% / 40% / 25% / 0% / 0%. The two zeros are real -- a community can
+    simply have no contended disposal route, and there the pairs are often not
+    even live because a member does not grow on the donor's background. Report
+    the per-cell rate; do not quote the pooled one as if it were uniform.
+    """
+    col = {e: i for i, e in enumerate(sur.exchanges)}
+    C, targets = [], []
+    for m in sorted(shared):
+        j = col.get(m)
+        if j is None or not keep[j] or ceq.get(m, 0.0) <= 0:
+            continue
+        for lv in levels:
+            c = buffer_medium(sur, shared[m]["medium"].copy(), keep)
+            c[j] = lv * ceq[m]
+            C.append(c)
+            targets.append({"metabolite": m, "variant": f"conditioning@{lv}"})
+    return (np.array(C) if C else np.empty((0, len(sur.exchanges)))), targets
+
+
 def distinguishing(c: np.ndarray, c_ref: np.ndarray, exchanges: list[str], top: int = 10):
     """What a designed medium changed, largest log-fold first — the readable half.
 
@@ -1094,14 +1179,19 @@ def spent_medium_assay(
     def rate(v, base):
         return float((v - base) / base / dt) if base > 0 and dt > 0 else None
 
+    Xa = np.asarray(X, dtype=np.float64)
+
     pairs = []
     for j in range(G):
         resup = np.maximum(spent[j], np.asarray(c, dtype=np.float64))
         for i in range(G):
             if i == j:
                 continue
+            # One solve each, reused by both readings of it: the absolute form
+            # below needs the same `mu` the relative rate is built from.
+            mu_resup = mu(models[i], resup)
             tot = rate(mu(models[i], spent[j]), fresh[i])
-            inh = rate(mu(models[i], resup), fresh[i])
+            inh = rate(mu_resup, fresh[i])
             pairs.append(
                 {
                     "donor": genome_ids[j],
@@ -1114,6 +1204,15 @@ def spent_medium_assay(
                     "depletion_per_h": (
                         None if tot is None or inh is None else tot - inh
                     ),
+                    # The conditioning half in absolute, biomass-weighted form:
+                    # positive is suppression, and unlike the relative rate it
+                    # does not saturate at a model constant as the medium is
+                    # starved (§13.5). This is what `--objective conditioning`
+                    # sums. Defined wherever `dt` is, including at a recipient
+                    # that does not grow on the fresh medium.
+                    "abs_conditioning_per_h": (
+                        float(Xa[i] * (fresh[i] - mu_resup) / dt) if dt > 0 else None
+                    ),
                 }
             )
     live = [p for p in pairs if p["conditioning_per_h"] is not None]
@@ -1121,6 +1220,15 @@ def spent_medium_assay(
         "dt": dt,
         "frac": frac,
         "pairs": pairs,
+        # What `--objective conditioning` maximises: the chemical half of the
+        # interference, with what the donor *ate* put back so only what it
+        # secreted is left. Under plain FBA this is 0 by construction -- raising
+        # a concentration cannot hurt an FBA -- so it is only a target when
+        # `--inhibition` gives secretion a bound to tighten.
+        "total_abs_conditioning_per_h": float(
+            sum(p["abs_conditioning_per_h"] for p in pairs
+                if p["abs_conditioning_per_h"] is not None)
+        ),
         "n_suppressed_by_conditioning": int(
             sum(p["conditioning_per_h"] < -1e-6 for p in live)
         ),
@@ -1149,6 +1257,14 @@ class Objective:
       component and product inhibition together; :func:`spent_medium_assay` is
       what separates them afterwards, and under `--inhibition` the conditioning
       half has a mechanism at all.
+    * ``conditioning`` -- the **chemical** half alone, from
+      :func:`spent_medium_assay`: each recipient's growth loss on the donor's
+      spent medium *with what the donor consumed put back*, so substrate
+      competition is controlled out. This is product inhibition and nothing else,
+      and it is identically 0 under plain FBA. It has **no surrogate half** --
+      see :func:`objective_spec` -- so it is a target and a ranking rather than
+      something to ascend, and `--seed-mode conditioning` is what constructs the
+      media for it.
     * ``interference-rel`` -- the same difference normalised by each member's own
       ``mu``. **Refuted as a design objective** (§13.5): a relative rate divides
       a quantity proportional to ``c`` by another proportional to ``c``, so in
@@ -1162,8 +1278,11 @@ class Objective:
     """
 
     name: str
-    hat: Callable[..., tuple[float, np.ndarray]]
-    hat_batch: Callable[..., tuple[np.ndarray, np.ndarray]]
+    #: ``None`` when the surrogate cannot represent the objective at all, in
+    #: which case there is nothing to propose with and the mode is
+    #: screen-and-verify over constructed starts rather than an ascent.
+    hat: Callable[..., tuple[float, np.ndarray]] | None
+    hat_batch: Callable[..., tuple[np.ndarray, np.ndarray]] | None
     truth: Callable[..., float]
 
 
@@ -1188,6 +1307,24 @@ def objective_spec(name: str, frac: float = _INTERFERE_FRAC) -> Objective:
             lambda models, exchanges, c, z, X, gids, keep=None, ceq=None: interference(
                 models, exchanges, c, z, X, gids, frac=frac, ceq=ceq, keep=keep
             )[key],
+        )
+    if name == "conditioning":
+        # **No surrogate half, and that is measured rather than assumed.** The
+        # conditioning term is `mu_i(max(spent_j, c)) - mu_i(c)`: resupplementing
+        # what the donor ate leaves a medium >= `c` in every coordinate, and Head
+        # A is monotone non-decreasing in every input channel by construction, so
+        # its version of this is <= 0 everywhere. Measured on the designed media
+        # of the five 2-member cells: 0 of 30 ordered pairs positive, 27 exactly
+        # 0. Product inhibition reaches only the true LP (§13.11 leaves the heads
+        # untouched), so there is no channel that could carry it -- an ascent
+        # here would climb away from any conditioning at all.
+        return Objective(
+            name, None, None,
+            lambda models, exchanges, c, z, X, gids, keep=None, ceq=None: (
+                (spent_medium_assay(
+                    models, exchanges, c, z, X, gids, frac=frac, ceq=ceq, keep=keep
+                ) or {}).get("total_abs_conditioning_per_h", 0.0)
+            ),
         )
     raise ValueError(f"unknown objective {name!r}")
 
@@ -1392,6 +1529,27 @@ def run(
              for d in range(draws)]
         )
         targets = None
+        if seed_mode == "conditioning":
+            # Constructed, not searched: the conditioning term has no surrogate
+            # half to ascend and a ~4% base rate at random draws, but its
+            # precondition -- a product two members both secrete, standing at
+            # `c^eq` scale -- is closed form. Appended to the draws for the same
+            # reason candidate seeding is: neither set contains the other.
+            if not ceq:
+                raise ValueError(
+                    "--seed-mode conditioning needs --inhibition: without a "
+                    "secretion bound to tighten, raising a product cannot hurt "
+                    "anyone and the conditioning term is identically 0."
+                )
+            _S, _U, _best = observed(Path(labels_dir), gids, sur.exchanges)
+            shared = shared_secretion(gids, sur.exchanges, _S, _best)
+            Cc, targets = conditioning_media(sur, gids, shared, ceq, keep)
+            LOGGER.info(
+                "community %d: %d contended disposal routes -> %d constructed starts",
+                n, len(shared), len(Cc),
+            )
+            targets = [{"metabolite": None, "variant": "draw"}] * len(C) + targets
+            C = np.concatenate([C, Cc]) if len(Cc) else C
         if seed_mode == "candidate":
             # **Appended, not substituted.** Measured over five 2-member cells:
             # the candidate media realise 24 of 52 reachable handovers and the
@@ -1466,13 +1624,18 @@ def run(
             )
             del Zt
             best = np.argsort(-obj_true_draws)[:starts]
-            obj_hat_draws = E if spec.name == "handover" else spec.hat_batch(sur, C, X, al, keep)[0]
+            obj_hat_draws = (
+                None if spec.hat_batch is None
+                else E if spec.name == "handover"
+                else spec.hat_batch(sur, C, X, al, keep)[0]
+            )
             if len(E_true_draws) > 2 and E_true_draws.std() > 0 and E.std() > 0:
                 from scipy.stats import spearmanr
 
                 rank_rho = float(spearmanr(E, E_true_draws).statistic)
             if (
-                len(obj_true_draws) > 2
+                obj_hat_draws is not None
+                and len(obj_true_draws) > 2
                 and obj_true_draws.std() > 0
                 and np.std(obj_hat_draws) > 0
             ):
@@ -1481,6 +1644,11 @@ def run(
                 obj_rho = float(spearmanr(obj_hat_draws, obj_true_draws).statistic)
         else:
             EX_true = E_true_draws = obj_true_draws = None
+            if spec.hat_batch is None:
+                raise ValueError(
+                    f"--objective {spec.name} has no surrogate half, so it cannot "
+                    "rank media without the LP screen. Drop --no-screen."
+                )
             best = np.argsort(-(E if spec.name == "handover"
                                 else spec.hat_batch(sur, C, X, al, keep)[0]))[:starts]
 
@@ -1536,7 +1704,17 @@ def run(
             lo, hi = trust_box(sur, c0, trust_decades, keep)
             cost = np.ones_like(c0)
             budget = budget_mult * float(cost @ c0)
-            if verify_steps:
+            if spec.hat is None:
+                # Nothing to propose with -- the surrogate cannot represent this
+                # objective at all (`objective_spec`), so the "design" is the
+                # screened start and the work was done by the seeding. Reported
+                # through the same path so every downstream key still exists.
+                zt0 = true_z(models, sur.exchanges, c0, ceq=ceq)
+                t0 = float(spec.truth(models, sur.exchanges, c0, zt0, X, gids, keep, ceq))
+                c_star = c0
+                extra = {"iterations": 0, "obj_true_start": t0, "obj_true": t0,
+                         "no_surrogate_half": True}
+            elif verify_steps:
                 c_star, extra = verified_ascent(
                     sur, models, c0, X, al, cost=cost, budget=budget,
                     decades=trust_decades, max_it=verify_steps, iters=iters, keep=keep,
@@ -1561,6 +1739,7 @@ def run(
                     "E_hat": E_star,
                     "obj_hat": (
                         E_star if spec.name == "handover"
+                        else None if spec.hat is None
                         else float(spec.hat(sur, c_star, X, al, keep)[0])
                     ),
                     "changed": distinguishing(c_star, c0, sur.exchanges),
@@ -1572,7 +1751,7 @@ def run(
         # Rank on the truth where we have it. Ranking multistarts by `E_hat` is
         # ranking them by how optimistic the head is at each -- the exact quantity
         # the search is exploiting.
-        key = "obj_true" if verify_steps else "obj_hat"
+        key = "obj_true" if (verify_steps or spec.hat is None) else "obj_hat"
         top = int(np.argmax([d[key] for d in designs]))
         c_best = saved[-len(designs) + top][3]
         c_draw = C[int(best[0])]
@@ -1757,7 +1936,21 @@ def run(
                 # V5, in this use case's terms: the designed medium must not be
                 # *worse* than the draw it started from under the true LP --
                 # measured on the objective that was actually designed.
-                "passed": bool((obj_gain >= 0).all()),
+                #
+                # **Relative, not `>= 0`.** An objective with no surrogate half
+                # (`--objective conditioning`) has no ascent, so the design *is*
+                # the top-ranked start and the two sides of this comparison are
+                # the same medium solved twice. Exact arithmetic gives 0 and the
+                # LP gives whatever it gives: measured at -1.2e-05 on 2.03e+05,
+                # a relative 6e-11, which failed the gate and exited 1. A
+                # "not worse" test between two solves of one medium needs a
+                # tolerance, and 1e-6 relative is far below any real regression.
+                "passed": bool(
+                    (obj_gain >= -1e-6 * np.maximum(
+                        np.abs([c["obj_true_designed"] for c in cells]),
+                        np.abs([c["obj_true_best_draw"] for c in cells]),
+                    )).all()
+                ),
             }
         )
     np.savez_compressed(

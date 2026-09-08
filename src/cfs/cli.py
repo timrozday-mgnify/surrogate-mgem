@@ -533,7 +533,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--communities", required=True, help="Semicolon-separated member lists, 'A,B;C,D,E'."
     )
     ix.add_argument(
-        "--objective", choices=("handover", "interference", "interference-rel"),
+        "--objective",
+        choices=("handover", "interference", "interference-rel", "conditioning"),
         default="handover",
         help="What the design maximises. 'handover': E = min(secretion, uptake), "
         "the mass passed between members — positive interaction, and >= 0 by "
@@ -548,6 +549,15 @@ def build_parser() -> argparse.ArgumentParser:
         "saturates at (4/19)Vmax/Km in the scarce regime, so its optimum is a "
         "model constant (2.105e6 on 10 of 10 runs) reached by starving a trace "
         "metal — kept only so the negative result can be re-derived. "
+        "'conditioning' is the chemical half alone — each recipient's growth "
+        "loss on the donor's spent medium with what the donor CONSUMED put "
+        "back, so substrate competition is controlled out. It is product "
+        "inhibition and nothing else, is identically 0 under plain FBA, and has "
+        "no surrogate half: Head A is monotone and resupplementation only "
+        "raises concentrations, so the head's version of it is <= 0 everywhere "
+        "(measured: 0 of 30 ordered pairs positive, 27 exactly 0). There is "
+        "therefore nothing to ascend, and the mode is screen-and-verify over "
+        "constructed starts — pair it with --seed-mode conditioning. "
         "The survey, the candidate enumeration and every E_* report key are "
         "unchanged either way; only the ascent, the LP screen's ranking and the "
         "acceptance test move, and the objective's own numbers are the obj_* "
@@ -605,13 +615,23 @@ def build_parser() -> argparse.ArgumentParser:
         "where the head is most optimistic, which is what the search exploits.",
     )
     ix.add_argument(
-        "--seed-mode", choices=("draws", "candidate"), default="candidate",
+        "--seed-mode", choices=("draws", "candidate", "conditioning"),
+        default="candidate",
         help="'draws': random §4.3 media, and whether one contains a handover is "
         "luck. 'candidate': enumerate the metabolites the labels say some member "
         "secretes and another takes up (no LP), then seed one start per one with "
         "that metabolite's uptake bound opened — so the multistart covers every "
         "reachable link by construction. Measured on the roster: 11-13 candidate "
-        "metabolites for a pair, 62 for all 21, against 444 exchanges.",
+        "metabolites for a pair, 62 for all 21, against 444 exchanges. "
+        "'conditioning': construct the media product inhibition needs instead of "
+        "searching for them — every metabolite two members both SECRETE (so "
+        "raising it tightens §13.11's secretion bound for both: contention for "
+        "disposal capacity, not for a substrate), placed at 0.5/0.9/0.99 of its "
+        "own c^eq on the donor's hardest-secreting labelled medium. No LP. "
+        "Needs --inhibition. Measured over five 2-member cells at c^eq 0.1 mM: "
+        "37 of 132 constructed media show conditioning (28%%) against ~4%% at "
+        "random draws, but per cell 53/40/25/0/0%% — two communities have no "
+        "contended disposal route at all, so quote the per-cell rate.",
     )
     ix.add_argument(
         "--inhibition", type=Path, default=None,

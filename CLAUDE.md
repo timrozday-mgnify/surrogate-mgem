@@ -3655,6 +3655,53 @@ against the relative form's 2.105e6 / <=476 / 0-13.3 / -3.0 to -7.2 on all five.
    with measuring nothing. **Read a construction-guaranteed gate together with the
    spread of what it gates.**
 
+**`--objective conditioning`: product inhibition alone, and it cannot be ascended
+— 2026-09-08.** The absolute interference objective is ~200x more sensitive to
+depletion than to conditioning, so isolating the chemical half needs
+`spent_medium_assay`'s conditioning term as the objective
+(`total_abs_conditioning_per_h`). **Two premise checks, both before building, both
+changed the design.** (i) *The surrogate has no version of it*: resupplementation
+(`max(spent, c)`) only raises concentrations and Head A is monotone
+non-decreasing by construction, so its conditioning term is `<= 0` everywhere —
+measured **0 of 30 ordered pairs positive, 27 exactly 0** (`cond_premise.py`, no
+solves). §13.11 puts `ceq` in the true LP only, so no channel carries it; an
+ascent would climb *away* from the target. Representability, not accuracy — the
+fix is §13.11's `theta` channel plus a relabel. (ii) *It is a needle*: **1-2 of 40
+random draws**, median 0, over three cells and two thresholds, so no proxy's rank
+correlation can be estimated and P25 blocks that route too.
+
+**So the media are constructed, not searched.** The precondition is closed form:
+a product **two or more members both secrete** — raising it tightens
+`Vmax max(0, 1-c/c^eq)` for both, i.e. contention for *disposal* capacity rather
+than for a substrate — standing at `c^eq` scale. `shared_secretion` is that
+pairing (`S & S`, against `candidate_links`' `S & U`), read off the labels with no
+solve; `conditioning_media` places each product at 0.5/0.9/0.99 of its own `c^eq`
+on the donor's hardest-secreting labelled medium. `--seed-mode conditioning`,
+which requires `--inhibition` and says so.
+
+| cell | screened | built in top 3 | best | winning start |
+| --- | --- | --- | --- | --- |
+| CR626927.1+GCA_000151225.1 | 53 | 0 | **0** | draw |
+| CP001726.1+CP001820.1 | 56 | 2 | 1.79e5 | draw |
+| AAXE02+ABCC02 | 74 | **3** | **2.03e5** | `EX_glyc_e` @0.99 `c^eq` |
+| CR626927.1+GCA_000007325.1 | 53 | 0 | **0** | draw |
+| CP040530.1+CP070062.1 | 62 | **3** | **2.57e5** | `EX_co2_e` @0.5 `c^eq` |
+
+Standalone the construction is 37/132 = **28% against ~4% at random**, per cell
+53/40/25/0/0%. **Three of five cells have designable product inhibition**; the two
+zeros are a result — no contended disposal route, the construction returns nothing
+rather than a spurious optimum, and on one not a single pair is live. Both contain
+`CR626927.1` (n=2, suggestive only). **Quote the per-cell rate.** The level barely
+matters (`EX_glyc_e` identical at all three), so the work is putting the product
+on the `c^eq` scale, not straddling the threshold.
+
+**A latent V5 defect this exposed, present for every objective.** With no ascent
+the design *is* the top-ranked start, so V5 compares one medium against itself
+solved twice: exact arithmetic gives 0, the LP gave **-1.2e-05 on 2.03e+05**
+(relative 6e-11), and `obj_gain >= 0` failed the gate and exited 1. Now relative
+at 1e-6. **A "not worse" gate whose two sides can be the same computation needs a
+tolerance** — the ascent's guarantee of strict improvement was hiding it.
+
 **A bug this caught, worth more than the arm.** `obj_true_designed` reused
 `cell["interference"]["total_suppression_per_h"]` to save `2G` FBAs, duplicating
 the key `Objective.truth` already picks. It went stale the moment a second
