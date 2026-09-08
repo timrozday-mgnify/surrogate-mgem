@@ -30,6 +30,7 @@
 > | M3b HPC sweep | **two runs. 2026-08-25** (350 tasks, 324 cpu-h) refuted its own "scale closes the gap": width/depth inert. **2026-08-27** (442/442 tasks, 21 cells x 21 organisms) is the source of the roster numbers below. The rows arm has now failed to run three times | `examples/hpc_run/`, `--stage sweep` |
 >
 > | M9-M14 Phase 7 applications | **spec written; M9, M10 and M11 done** — `cfs simulate` integrates a community forward, batch or chemostat (`--dilution`), surrogate only, no LP — and `--stiff` (BDF in `log X`) is what makes the chemostat *transient* trustworthy, landing on the independently-solved fixed point to 1.3e-10; `cfs maximise-growth` is §13.2's convex medium design, 19/20 V5 round-trips at the default trust region, median true gain +2.2%, median optimism 0.3%. `cfs minimal-medium` is §13.3's convex program; **V6 passes on 4/4 communities with `--lp-repair` (2026-09-06)** — the residual failure was not Head A's essentiality gap (that closed 2026-08-31) but a **synthetic-lethal set** the single-knockout pin cannot see, repaired by the true LP at +2 components in 370. The rest (steady state, interaction maximisation, the inverse-problem posterior) is specced in **§13** with a per-use-case accuracy table: most need less than M3's and M5's unmet gates | `src/cfs/compose/dfba.py` (`simulate`, `with_chemostat`), `src/cfs/science/growth.py` |
+> | M16 §13.11 product inhibition | **stages 1'-4' done** — the thermodynamic secretion bound `ub = Vmax max(0, 1-c/c^eq)` in the true LP (`cfs interactions --inhibition`), and now in the **surrogate**: Head A gains a per-metabolite `theta` channel (444 -> 888), Head B an inference clamp `z <= Vmax theta`, and `rhs_truth`/`rhs_hybrid` take `ceq` from the checkpoint so the ruler matches the model. The concentrated second label root stage 4' was written around is **refuted** — the existing design already spans `theta` on 26-36% of entries and `mu` moves on 50% of media. Open: the roster-scale relabel and a gate on it | `cfs generate --inhibition`, `src/cfs/surrogate/data.py`, `src/cfs/compose/dfba.py` |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
@@ -3712,6 +3713,123 @@ calls `spec.truth` like the best-draw column. Full write-up: design spec §13.5.
 Scripts (`20hm_bands/`): `stage3_binding.py` (no solves), `inhibition_sweep.sh`
 (resume-safe, one invocation per cell), `inhibition_report.py`,
 `inhibition_crosseval.py`, `ceq_*.json`.
+
+### Stage 4': the inhibited *surrogate* — a second input channel, no redesign — 2026-09-08
+
+Stage 4' was specced as "the concentrated, run-to-exhaustion **second** label
+root, then Stages 1-2 as originally written". **The first half is refuted before
+building**, so it collapses to a relabel of the existing design with `ceq` on —
+still a second root (`x_scale` moves, P14), not a new design. Two premise checks
+on the labels already on disk:
+
+| premise, on `labels_p4` at `c^eq` = 0.1 mM | value |
+| --- | --- |
+| entries with `theta` strictly inside (0, 1), 6 organisms, **no solves** | **0.26-0.36** |
+| true secretions the inhibited bound would cut | **0.71-0.89** |
+| `mu` relative drop, 40 solves on AAXE02: median / p90 / max | **0.025 / 0.752 / 0.900** |
+| media losing >1% growth / media killed | **50%** / **0** |
+
+Stage 0's "inert" was about *accumulation along a trajectory*; the **standing**
+concentration binds, which is the same distinction that unblocked stage 3'. The
+design's rich level is `10^log10_hi * Km ~ 0.1 mM` — i.e. exactly `c^eq` — so the
+background is pinned at `theta = 0` while the banded metabolites sweep the range.
+
+**A third measurement set the coordinate.** At interior `theta` the secretion
+bound binds on only **20 of 1807** (row, exchange) pairs; at `theta = 0`, on 3270
+of 3485. `Vmax = 1000` is ~100x physiological (M15), so 1% residual capacity is
+still 10 mmol/gDW/h. **The channel is a near-step at `theta -> 0`**, the same shape
+as `u`'s ramp ending at `u* ~ 1.4e-4`, handled by the same `_kink_scale` map
+(which returns 1.0 here — correct, `theta` is already O(1) and its structure is a
+step *at* 0, which a plane resolves directly). It is also why the channel is
+**necessary**: a head fed `u` alone cannot know secretion was switched off.
+
+**What was built.** `data.theta` / `load_ceq` and the second input block —
+`x`/`g`/`mask`/`x_scale` go 444 -> 888 and `exchanges` gains `theta:`-prefixed
+names, so every per-metabolite diagnostic says which channel it means.
+`cfs generate --inhibition <json> [--buffered ...]` (reusing
+`interaction.ceq_map`, so the default/buffered rules are stage 2''s) writes
+`inhibition.json` beside the shards. `n_metabolites` + `ceq` in the checkpoint;
+`_trial_points` builds both halves of a Level 1 trial point from the medium. In
+`dfba`: `_head_in` (the one place the head's input is built), `_clamp_z` (§3.3's
+uptake bound **and** §13.11's secretion bound `z <= Vmax * theta`) and
+`chain_to_c`, which `science/{growth,minimal,steady}.py` all now route through.
+**Head B keeps the `u` half alone** — §13.11 says it needs no architectural
+change, and taking that literally leaves its output width, `z_scale` and the P14
+check unchanged.
+
+**No new label column, because the labels already contain it.** `theta` is a
+function of the `medium` the row stores, and its dual is the **same `shadow`
+column** read on the other side. Verified against central differences of the true
+LP at 20 binding cases: `d(mu)/d(secretion ub)` = the metabolite shadow price at
+ratio **1.0000** on every one, while cobra's `reduced_costs` came out at exactly
+**2x** — the convention scaling `solve.solve` already warns about. **Use the
+metabolite dual on both sides, never the reaction one.**
+
+**The clamp that cost a run.** At `theta = 0` the bound is `ub = 0`, so **every
+metabolite the organism does not produce sits at `z = 0 = ub` and reads as
+binding** — with a positive `shadow` for the ordinary reason a nutrient has one.
+That selects **7.7%** of AAXE02's entries, **99.9% of them at `theta = 0`**, over
+157 of 181 exchanges the network never secretes:
+
+| AAXE02, frozen head (`--epochs 0 --gm-init labels --gm-repair`, T=1e-4) | cos | p05 | value R2 |
+| --- | --- | --- | --- |
+| plain FBA (control) | 0.9882 | 1.0000 | **1.0000** |
+| inhibition, sign + binding clamp only | 0.9137 | 0.5611 | **-0.0136** |
+| **+ capability test** | **0.9923** | **0.9600** | **0.9526** |
+
+The third condition is that the organism secretes that metabolite *somewhere* in
+the shard (24 of 181 on AAXE02) — free, and the right condition rather than a
+threshold: **a bound on a flux the network never carries cannot be a
+sensitivity.** 34 of 54 nonzero duals at a binding secretion bound also
+finite-difference to exactly 0 (LP degeneracy), the mirror of the uptake side's
+12% wrong-signed duals. Note the *gradient* cosine still read 0.91 while R2 was
+negative — **the value diagnostic is the one that saw it.** Regression test:
+`tests/test_cfs_inhibition.py`.
+
+**And the ground truth has to run the same model.** `rhs_truth` had no `ceq`
+(stage 1' put inhibition into §13.5's truth alone), so the first inhibited
+`cfs community` scored an inhibited head against a **plain-FBA** truth and it read
+as a broken head. Same checkpoints, same community, only the truth's model
+differing:
+
+| truth | log-X err | `mu_rel` median | `dc_rel` median | `dc` cosine |
+| --- | --- | --- | --- | --- |
+| plain FBA (mismatched) | 1.596 | **0.594** | 3.149 | 0.456 |
+| **inhibited (matched)** | **0.354** | **0.059** | **1.091** | **0.917** |
+
+`ceq` is now threaded into `rhs_truth`, `_cross_feeding` and `rhs_hybrid`, and all
+three take it from **`sur.ceq`** — the surrogate's own checkpoint — rather than a
+flag, so the two cannot be set differently. The LP fallback especially:
+substituting a *different model* mid-trajectory would add a discontinuity on top
+of the one §8.6g(4) already warns about.
+
+**Reference numbers**, 300 media x 2 organisms (AAXE02 + ABCC02), both arms
+identical except for `--inhibition`:
+
+| arm | Head A worst cos / R2 | community log-X | `mu_rel` med | `dc` cos |
+| --- | --- | --- | --- | --- |
+| plain FBA | 0.933 / 1.000 | 0.021 | 9.3e-07 | 0.879 |
+| inhibition, `c^eq` 0.1 mM | 0.914 / 0.915 | 0.354 | 0.059 | 0.917 |
+
+**Read these as "it composes", not as a gate.** 300 media is 1/13 of the laptop
+label set and 1/67 of D10, and the inhibited head fits a function with 444 extra
+coordinates whose structure is a step on the same budget — a 10x `mu_rel` gap
+against a control that is essentially exact is what a starved fit looks like. A
+gate statement needs the roster-scale relabel.
+
+**Not built, deliberately.** No secretion band in `sampling/design.py` — the
+premise check says the existing design already spans the channel, so a redesign
+would spend 21 organism-hours on a coverage problem that is not there. And no
+secretion term in `steady._lp_mu_rows`: `rhs_truth`'s `ceq` does not reach the
+hybrid Jacobian yet, and the code carries a `ponytail:` note saying what to add
+(`+ pi * Vmax / c^eq` where the bound binds and `c < c^eq`) when it does.
+
+**What is still open for M16.** The roster-scale inhibited relabel (21 organisms,
+~1 h each) and a gate statement on it; `--inhibition` for `cfs simulate` /
+`steady-state` / the two convex design programs, which get the `(u, theta)`
+*relaxation* rather than exact convexity in `c` (§13.11's corrected concavity
+note); and stage 3'b's per-metabolite `c^eq` from eQuilibrator, still deferred
+because the sweep answers the threshold question without it.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 

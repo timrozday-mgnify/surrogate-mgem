@@ -329,9 +329,25 @@ Read that first; this table is the bibliography for it.
 
 ## Part 4c — Product inhibition: thermodynamics, kinetics, and where the parameters are
 
-Added 2026-09-08, when M16 was rescheduled next and its stage 3' ran. The full
-design study, the form choice and the measurements are **plan §13.11**; this is the
+Added 2026-09-08, when M16 was rescheduled next and its stage 3' ran; extended the
+same day when **stage 4'** put inhibition into the surrogate. The full design
+study, the form choice and the measurements are **plan §13.11**; this is the
 bibliography and the one-line reason each source is or is not the base layer.
+
+**What stage 4' means for this part.** The literature below is about *where the
+numbers come from*, and none of it was needed to build the estimator: the head
+takes `theta = max(0, 1 - c/c^eq)` as a second per-metabolite input channel, and
+`mu_max` is concave and non-decreasing in `(u, theta)` jointly because the bound
+is affine in `theta` — the same lesson as `icnn-u`, a third time
+([[concavity-imposed-in-the-wrong-coordinate]]). So there is **no new
+architecture to look for**, and the open literature question is narrowed to
+stage 3'b: one `c^eq` per exchange. Two measurements bound how much that is worth
+— the secretion bound binds on only 20 of 1807 pairs at interior `theta` and on
+3270 of 3485 at `theta = 0`, so at `Vmax = 1000` the constraint is nearly binary
+and *which decade* `c^eq` sits in matters far more than its precise value. Read
+that against M15's finding that `Vmax` is ~100x physiological: **per-organism
+`Vmax` is the input that would make a per-metabolite `c^eq` worth acquiring**,
+not the other way round.
 
 | Reference | Why it matters here |
 | --- | --- |
