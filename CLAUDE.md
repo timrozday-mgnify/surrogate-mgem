@@ -2611,11 +2611,45 @@ version pins synthetic-lethal *pairs* as `--keep-essential` pins singles
 (`O(n^2)` LPs, ~1000 here, affordable for a design). And it needs the models, so
 it is unavailable in the surrogate-only setting §13.3 targets.
 
+### The M12 roster re-run: <1% against the LP, and the ties are neutral — 2026-09-08
+
+All ten §8.1 communities re-solved on one code version (`20hm_bands/m12_jobs.sh`,
+default flags, `--fd-check 20`), then `true_k.py` on the converged cells and
+`cfs simulate --stiff` on the tied ones at that cell's own feed and `D`. It needed
+a bug fix first: **`cfs steady-state` passed a `box` argument the parser never
+defines** — a stray edit from the M16 commit into the wrong branch — so every
+invocation had raised `AttributeError` since 2026-09-07 and nothing ran it in
+between. Third instance of [[shipped-in-the-spec-is-not-running]].
+
+**5 of 10 converge** (cells 1/4/7/8/9, up from 4), none invadable; same bimodal
+failure on the rest. `mu_LP(c*)` against `D`:
+
+| cell | n | `mu_LP(c*)` | `D` | rel err | `k_LP` | limiter |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 2 | 0.1524 | 0.15379 | **0.90%** | 1 | `EX_k_e` |
+| 4 | 2 | 2.446 | 2.44772 | **0.07%** | 1 | `EX_k_e` |
+| 7 | 3 | 1.066 | 1.06842 | **0.23%** | 1 | `EX_trp__L_e` |
+| 8 | 5 | 3.830 | 3.83164 | **0.04%** | 1 | `EX_k_e` |
+| 9 | 10 | 11.10 | 11.100 | **0.00%** | 1 | `EX_ca2_e` |
+
+1. **The fixed point is true to 0.0-0.9%** on five cells to n=10 (was three to
+   n=3) and it **improves with size** — the pool sum averaging per-organism
+   errors, as §8.1 measured. §13.7 reads the steady state as the most exposed use
+   case; the direct measurement disagrees, again.
+2. **`k_LP = 1`, top share 1.000, on all five** — competitive exclusion is not a
+   property of the small cells. The enumeration branch stays closed.
+
+**The tied cells as transients** (cell 1, R* gap 0.02-0.15%, margin ±1.64e-03),
+200 h ≈ **31 dilution turnovers**, same feed and `D`: from 1:1, 9:1 and 1:9
+inocula **both members survive in all three**, both at exactly `mu = D`, nobody
+washed out, and the final ratio is whatever was inoculated (9:1 -> 9.5:1,
+1:9 -> 8.6:1). That drift is `d mu` ~ 2.6e-04/h = **0.17% of `D`**, so displacing
+the ratio 100-fold takes **~2700 turnovers**. So the equilibrium's "one survivor"
+is **not observable**, and for these cells the transient is the correct
+instrument, not a weaker one. Cells 2, 7 and 10 running.
+
 **Next:** (1) `filter_jit` on the heads, a further 30% and bit-identical;
-(2) `mu_LP(c*)` on the remaining cells — the honest §13.4 accuracy number;
-(3) run the tied cells (1, 2, 7, 10) as transients from several initial
-abundance splits, which is the question the equilibrium cannot answer;
-(4) re-run the flag grid on one code version.
+(4) re-run the flag grid on one code version — (2) and (3) are done above.
 
 ### The two heads bracket the truth — and the bracket is not free — 2026-09-08
 
