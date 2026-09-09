@@ -259,11 +259,21 @@ def _organism_arrays(
         # The capability test is a shard-level OR while `binds` is per row, so a
         # metabolite the organism secretes *somewhere* but not here has `z = 0`
         # against `ub = 0` and reads as binding too, and finite differences of the
-        # true LP say those duals are half wrong: pooled over two organisms,
-        # 10 of 24 have ratio exactly 1.000 and 14 are exactly 0, with two rows
-        # identical in `(theta = 0, z = 0, pi = 10000)` differencing to 10000 and
-        # to 0 -- i.e. the label is not a function of the head's input there
-        # (`20hm_bands/fd_theta.py`, no new labels).
+        # true LP say those duals are unreliable there. Over **8 organisms**
+        # (`20hm_bands/fd_theta.py`, no new labels) essentially every selected
+        # entry is at `theta == 0` -- the design's rich level is `10**log10_hi *
+        # Km ~ c^eq`, so the channel is supervised almost entirely at the corner
+        # of its own domain -- and the dual falls into three groups: exact
+        # (ratio 1.000), degenerate (exactly 0), and a **partial** 0.16-0.54,
+        # which is the one-sided-kink signature a binary reading misses. Two
+        # DACTBY01 rows identical in `(theta = 0, z = 0, pi = 10000)` difference
+        # to 10000 and to 0, so the label is not a function of the head's input.
+        #
+        # **No measured quantity here predicts the held-out cosine.** Selection
+        # covers 2-58% of rows; GCA_000151225.1 scores 0.981 with 58% selected,
+        # median |pi| 839 and 16/16 degenerate, while CP048433.1 scores 0.688
+        # with median |pi| 0.009 -- so neither the degeneracy rate, the dual's
+        # magnitude nor the selection rate separates the failing organisms.
         #
         # Adding `& (ub > _BOUND_TOL)` to drop them makes the roster **much
         # worse**: median held-out value R2 0.979 -> **-7.6**, worst -60.2, median
