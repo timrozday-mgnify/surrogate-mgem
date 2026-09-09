@@ -4039,11 +4039,27 @@ installed planes **2.8485**. Ablation confirms — dropping `--gm-repair` gives
 the validity failure [[under-prediction-is-a-validity-failure]] exists to prevent.
 Mechanism: `repair_intercepts` lifts each plane above **every** training label, so
 a plane anchored at `mu ~ 1` must clear labels at `mu ~ 4.4` and is lifted out of
-its own regime — the repair is *global* where the cut is *local*. **Targeted fix,
-not built:** repair each plane over **its own territory**, which
-`rank_by_territory` already returns. It weakens the guarantee to "above every
-label in its territory", so measure the under-rate and the composition, not this
-organism's cosine.
+its own regime — the repair is *global* where the cut is *local*. **The logged "median drop" is what hid it**: 0.0005 on this
+organism, same as everyone; its **mean is 0.59**, 299 of 1000 planes move >0.1,
+max 2.86. `repair_intercepts` now logs median/mean/max.
+
+**`--gm-repair-local` built and REFUTED** (2026-09-09): repair each plane over its
+own territory, global rule for empty ones, test in `test_cfs_value_head.py`.
+
+| 21 organisms | worst cos | med cos | worst R2 | med R2 | med under |
+| --- | --- | --- | --- | --- | --- |
+| global (shipped) | 0.8955 | **0.9859** | 0.3177 | **0.9997** | **0.0000** |
+| no repair | **0.9604** | 0.9859 | 0.4798 | 0.9996 | 0.9700 |
+| territory | 0.3612 | 0.7764 | **-3.4482** | **-0.6650** | 0.0000 |
+
+It does what it was built for — `CP000139.1` **0.895 -> 0.964** — and wrecks the
+roster. **Structural, not an implementation bug:** training-row validity is
+restored by the *uniform* lift, so a locally repaired plane that dips below the
+truth off its territory is paid for by raising **every** plane. The lift goes
+**0.00047 -> 1.49 median / 2.54 max** (3000x) and that is the whole regression.
+A global correction cannot preserve a local repair. Default off, negative result
+on file. `CP000139.1` stays open — its unrepaired R2 of 0.48 says the repair was
+never its whole story.
 
 **Also open:** Head B's 0.791; and re-reading stage 3''s §13.5 conclusions, all
 taken at `c^eq` = 0.1 mM.

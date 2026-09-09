@@ -7122,16 +7122,48 @@ the truth on 97% of rows, which is the max-affine validity failure
 measured as costing the composition. `CP000139.1`'s value R2 is also still only
 0.48 unrepaired, so the repair is not the entire story for that organism.
 
-**The mechanism, and the targeted fix.** `repair_intercepts` raises each plane's
-intercept to the tightest value keeping it above **every** training label. A plane
-anchored in the `mu ~ 1` band therefore has to clear labels at `mu ~ 4.4`, so a
-cut that was tight where it was meant to bind is lifted out of its own regime.
-The repair is *global* while the cut is *local*. The natural fix is to repair each
-plane over **its own territory** — the trial points where it is the active minimum
-— which `rank_by_territory` already computes and returns, so it is a few lines and
-no new machinery. **Not built.** It weakens the validity guarantee from "above
-every training label" to "above every label in its territory", so it needs the
-under-rate and the composition measured, not just this organism's cosine.
+**The mechanism.** `repair_intercepts` raises each plane's intercept to the
+tightest value keeping it above **every** training label. A plane anchored in the
+`mu ~ 1` band therefore has to clear labels at `mu ~ 4.4`, so a cut that was tight
+where it was meant to bind is lifted out of its own regime. The repair is *global*
+while the cut is *local*.
+
+**Sharpened, and a diagnostic fixed.** The log reported only the median intercept
+drop, which for `CP000139.1` is **0.0005** — indistinguishable from every other
+organism, and the reason this went unseen. Its **mean is 0.59**, with **299 of
+1000 planes moved by >0.1** and one by **2.86**. `repair_intercepts` now logs
+median / mean / max. (Reconstruction verified exact for this head: `out_z` = 1,
+`softplus(out_x)` <= 1.4e-11, `out_b` = 0, and the hand-computed hard min 2.8447
+matches the head's own 2.8445.)
+
+##### `--gm-repair-local`: the territory repair, built and REFUTED
+
+2026-09-09. `repair_intercepts(..., local=True)` constrains each plane by the
+rows where it is currently the active minimum, falling back to the global rule
+for a plane with empty territory. Regression test in `tests/test_cfs_value_head.py`.
+
+| 21 organisms | worst cos | med cos | worst R2 | med R2 | med under-rate |
+| --- | --- | --- | --- | --- | --- |
+| global (shipped) | 0.8955 | **0.9859** | 0.3177 | **0.9997** | **0.0000** |
+| no repair | **0.9604** | 0.9859 | 0.4798 | 0.9996 | 0.9700 |
+| **territory** | 0.3612 | 0.7764 | **-3.4482** | **-0.6650** | 0.0000 |
+
+**It does exactly what it was built for and is a roster disaster.**
+`CP000139.1` goes 0.895 -> **0.964** on cosine; the median organism goes 0.9859
+-> 0.7764 and median value R2 0.9997 -> **-0.665**.
+
+**The reason kills the idea, not the implementation.** Training-row validity is
+restored by the *uniform* smoothing lift, so a locally repaired plane sitting
+under the truth off its own territory is paid for by raising **every** plane. The
+lift goes **0.00047 -> 1.49 median / 2.54 max**, a factor of 3000, in `mu_scale`
+units — and that lift is the whole regression. A global correction cannot
+preserve a local repair; making the lift local too would leave nothing enforcing
+validity between territories.
+
+Kept in the tree, default off, with the negative result on file — the discipline
+`--w-prox`, `--w-mm` and `--gm-temp-final` are kept under. **`CP000139.1` is
+still open**, and its unrepaired R2 of 0.48 says the repair was never its whole
+story anyway.
 
 **Not built, deliberately.** `sampling/design.py` gains no secretion band —
 premise 1 says the existing design already spans the channel, so a redesign would

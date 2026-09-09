@@ -800,3 +800,60 @@ def test_repair_slack_is_proportional_to_the_evaluation_temperature():
 
     hot, cold = slack(1e-2), slack(1e-4)
     assert cold < hot / 5.0, (hot, cold)
+
+
+def test_territory_repair_does_not_lift_a_plane_out_of_its_own_band():
+    """`--gm-repair-local`: a plane is constrained by the rows it binds at.
+
+    The global rule lifts every plane above *every* training label, so a cut
+    anchored where `mu` is small must clear the largest label in the set and is
+    pushed out of the regime it was tight in. On CP000139.1 that took the
+    `mu ~ 1` band from a true 0.98 to a predicted 2.85 -- 22.5% of its held-out
+    rows, and all of its 0.895 cosine / 0.318 value R2 -- while every other band
+    stayed exact to 1e-4.
+
+    Two planes, two well-separated bands, one row each: the low plane is exact at
+    its own row under `local=True` and lifted under the global rule. Training-row
+    validity must hold either way, since the uniform smoothing lift absorbs the
+    residual.
+    """
+    import jax.numpy as jnp
+    import numpy as np
+
+    from cfs.surrogate import groupmax
+
+    m = 2
+    # Row 0 sits low in a coordinate the low plane is tight on; row 1 sits high.
+    x = np.array([[[0.2, 0.0], [0.0, 0.8]]], dtype=np.float32)  # (1, 2, m)
+    mu = np.array([[1.0, 6.0]], dtype=np.float32)
+    g = np.array([[[2.0, 0.0], [0.0, 4.0]]], dtype=np.float32)
+    ds = type(
+        "DS",
+        (),
+        {
+            "x_train": x,
+            "mu_train": mu,
+            "mu_scale": np.array([1.0], dtype=np.float32),
+            "g_train": g,
+            "gvalid_train": np.ones((1, 2), dtype=bool),
+            "mask": np.ones((1, m), dtype=bool),
+            "genome_ids": ["g0"],
+        },
+    )()
+    heads = groupmax.stack_heads(
+        jax.random.PRNGKey(0), 1, m, np.ones((1, m), dtype=bool), 1, 1, group=2, temp=1e-4
+    )
+    heads = groupmax.init_from_tangents(heads, ds, select="active-set")
+    w = jnp.asarray(groupmax.to_diag(jnp.asarray(x[0])))
+
+    glob = groupmax.repair_intercepts(heads, ds, local=False)
+    loc = groupmax.repair_intercepts(heads, ds, local=True)
+    v_glob = np.asarray(jax.vmap(groupmax.organism(glob, 0).on_w)(w))
+    v_loc = np.asarray(jax.vmap(groupmax.organism(loc, 0).on_w)(w))
+
+    # Validity on the training rows survives both (the uniform lift guarantees it).
+    assert np.all(v_glob >= mu[0] - 1e-4)
+    assert np.all(v_loc >= mu[0] - 1e-4)
+    # ...and the territory rule is no looser anywhere, strictly tighter somewhere.
+    assert np.all(v_loc <= v_glob + 1e-5)
+    assert float(np.max(v_glob - mu[0])) >= float(np.max(v_loc - mu[0]))

@@ -223,6 +223,19 @@ def build_parser() -> argparse.ArgumentParser:
         "family. Exact only at --width 1 --depth 1; closed form, no refit.",
     )
     tv.add_argument(
+        "--gm-repair-local",
+        action="store_true",
+        help="With --gm-repair: repair each plane over *its own territory* (the "
+        "training rows where it is the active minimum) instead of over every row. "
+        "The global rule lifts a plane above labels it never binds at -- on "
+        "CP000139.1 that took its mu ~ 1 band from a true 0.98 to 2.85 on 180 of "
+        "800 held-out rows, and was the whole of its 0.895 cosine / 0.318 value "
+        "R2 while every other band stayed exact to 1e-4. Training-row validity is "
+        "unchanged (the uniform smoothing lift absorbs the residual); the "
+        "guarantee off them is weaker, so read value_under_rate and the "
+        "composition, not one organism's cosine.",
+    )
+    tv.add_argument(
         "--gm-eval-temp",
         type=float,
         default=None,
@@ -1038,6 +1051,7 @@ def main(argv: list[str] | None = None) -> int:
             gm_reanchor=args.gm_reanchor,
             gm_select=args.gm_select,
             gm_repair=args.gm_repair,
+            gm_repair_local=args.gm_repair_local,
             gm_eval_temp=args.gm_eval_temp,
             gm_trial_media=args.gm_trial_media,
             gm_temp_final=args.gm_temp_final,

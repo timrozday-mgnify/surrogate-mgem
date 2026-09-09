@@ -843,6 +843,7 @@ def run(
     gm_trial_media=None,
     gm_temp_final: float | None = None,
     gm_repair: bool = False,
+    gm_repair_local: bool = False,
     gm_eval_temp: float | None = None,
     seed: int = 0,
     organisms: list[str] | None = None,
@@ -911,7 +912,7 @@ def run(
         heads = groupmax.with_temp(heads, gm_eval_temp)
     # Before the calibration is fit, so the fit sees the head it will ship with.
     if gm_repair:
-        heads = groupmax.repair_intercepts(heads, ds)
+        heads = groupmax.repair_intercepts(heads, ds, local=gm_repair_local)
     mu_tr = _over_media(lambda xx: _ARCH[arch].batched_value(heads, xx), jnp.asarray(ds.x_train))
     # The calibration is a 1-D post-hoc fit and the identity is a valid value for it,
     # so it must never be able to discard a finished training run -- which it did
@@ -960,6 +961,7 @@ def run(
         meta["gm_reanchor"] = gm_reanchor
         meta["gm_select"] = gm_select
         meta["gm_repair"] = gm_repair
+        meta["gm_repair_local"] = gm_repair_local
         meta["gm_trial_media"] = str(gm_trial_media) if gm_trial_media else None
         if gm_temp_final:
             meta["gm_temp_final"] = gm_temp_final

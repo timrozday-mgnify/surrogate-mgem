@@ -546,7 +546,7 @@ def reanchor(heads: GroupMaxHead, ds, frac: float = 0.1, seed: int = 0) -> tuple
     return heads, slots
 
 
-def repair_intercepts(heads: GroupMaxHead, ds) -> GroupMaxHead:
+def repair_intercepts(heads: GroupMaxHead, ds, local: bool = False) -> GroupMaxHead:
     """Restore the outer-approximation invariant: no plane below any training label.
 
     A min of *supporting* hyperplanes of a concave function is an upper bound
@@ -570,6 +570,29 @@ def repair_intercepts(heads: GroupMaxHead, ds) -> GroupMaxHead:
     really is a min of affine functions; wider or deeper it is a non-negative sum
     of group-wise minima and no per-plane intercept has this meaning. Other shapes
     are returned untouched.
+
+    ``local=True`` repairs each plane over **its own territory** — the training
+    rows where it is currently the active minimum — instead of over every row.
+    The global rule lifts a plane above labels it was never meant to bind at: on
+    `CP000139.1` a plane anchored in the `mu ~ 1` band has to clear labels at
+    `mu ~ 4.4`, which took that band from a true 0.98 to a predicted 2.85 (+1.87)
+    while every other band stayed exact to 1e-4 — 22.5% of its held-out rows, and
+    the whole of its 0.895 cosine / 0.318 value R2. The repair is global where
+    the cut is local.
+
+    **Measured and REFUTED, 2026-09-09; default off, kept for the negative
+    result.** It does what it was built for — `CP000139.1` cosine 0.895 -> 0.964 —
+    and is a roster disaster: median grad cosine **0.9859 -> 0.7764**, median
+    value R2 **0.9997 -> -0.665**, worst R2 -3.45.
+
+    The reason is structural and kills the idea rather than the implementation.
+    Training-row validity is restored by the *uniform* lift below, so a locally
+    repaired plane that sits under the truth off its own territory is paid for by
+    raising **every** plane: the lift goes from **0.00047** (global rule, where it
+    only ever compensates the softmin gap) to **1.49 median / 2.54 max** — 3000x,
+    in `mu_scale` units. A global correction cannot preserve a local repair.
+    Rescuing it would need the lift to be local too, and then nothing enforces
+    validity between territories.
     """
     if len(heads.wx) != 1 or heads.out_z.shape[1] != 1:
         LOGGER.warning("repair_intercepts: head is not width=1 depth=1 — skipped")
@@ -589,8 +612,22 @@ def repair_intercepts(heads: GroupMaxHead, ds) -> GroupMaxHead:
         )  # (K, M)
         # `min_r` is over rows *jointly* with `mu_r`, so the label cannot be split
         # out of the matmul: (K, N) is the whole point.
-        slack = np.asarray(jnp.asarray(s) @ jnp.asarray(y).T) - float(head.out_b) - mu[None, :]
-        new = slack.min(axis=1) / c
+        pre = np.asarray(jnp.asarray(s) @ jnp.asarray(y).T) - float(head.out_b)  # (K, N)
+        slack = pre - mu[None, :]
+        if local:
+            # Each plane is constrained only by the rows it actually binds at. A
+            # plane that is nowhere the active minimum has no territory and keeps
+            # the global rule, which is the conservative choice: it is exactly the
+            # plane that could start binding once its neighbours move.
+            owner = pre.argmin(axis=0)  # (N,) the active plane at each row
+            own = np.full_like(slack, np.inf)
+            rows = np.arange(len(mu))
+            own[owner, rows] = slack[owner, rows]
+            new = own.min(axis=1) / c
+            empty = ~np.isfinite(new)
+            new[empty] = slack.min(axis=1)[empty] / c
+        else:
+            new = slack.min(axis=1) / c
 
         # The head is the *smoothed* min, which sits below the hard one by up to
         # `c*T*ln(K)` -- so per-plane validity is necessary and not sufficient, and
@@ -605,11 +642,19 @@ def repair_intercepts(heads: GroupMaxHead, ds) -> GroupMaxHead:
         if v > 0:
             new = new - v / c
         LOGGER.info(
-            "%s: repaired %d of %d planes, median drop %.3g, smoothing lift %.3g",
+            # The median hides this: on CP000139.1 the global repair's median drop
+            # is 0.0005 and its *mean* is 0.59, with 299 of 1000 planes moved by
+            # >0.1 and one by 2.86 -- which is the whole of that organism's
+            # +1.87 band error. Report the tail.
+            "%s: repaired %d of %d planes (%s), drop median %.3g / mean %.3g / "
+            "max %.3g, smoothing lift %.3g",
             ds.genome_ids[i],
             int((new < b0[i] - 1e-9).sum()),
             b0[i].size,
+            "territory" if local else "global",
             float(np.median(b0[i] - new)),
+            float(np.mean(b0[i] - new)),
+            float(np.max(b0[i] - new)),
             max(v, 0.0) / c,
         )
         b0[i] = new
