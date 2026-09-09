@@ -6733,6 +6733,109 @@ coordinates whose structure is a step, on the same budget, so a 10x gap in
 `mu_rel` against a control that is essentially exact is what a starved fit looks
 like. The roster-scale relabel is what a gate statement needs.
 
+##### The roster-scale relabel ran, and the channel is supervised at a corner
+
+2026-09-09. `labels_i1` — the `labels_p4` design with `--inhibition ceq_0.1.json`,
+21 organisms, 63/63 base shards + 63/63 round-1, 100% optimal, one `index_hash`.
+Head A frozen level-1 + `--gm-repair --gm-eval-temp 1e-4`, Head B at 600/1e-3,
+three medium draws on the same 10 communities against the **matched** inhibited
+truth. It composes; the gate is not met, and the failure is bimodal:
+
+| | worst | median | plain-FBA control, same head config |
+| --- | --- | --- | --- |
+| held-out grad cosine | **0.067** | 0.948 | 0.952 / 0.981 |
+| held-out value R2 | 0.697 | 0.979 | — |
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 |
+| --- | --- | --- | --- | --- | --- |
+| inhibited | 0.077 | 0.074 | 0.150 | 1.284 | 0.923 |
+| plain FBA | 0.007 | 0.007 | 0.009 | 0.060 | 0.175 |
+
+13 of 21 organisms sit at 0.95-0.99, i.e. where the AAXE02 pilot said they would.
+Part of the composition gap is the benchmark getting harder rather than the head
+getting worse: `max mu_true_initial` at n=2 is **19.3** inhibited against **60.4**
+under FBA, which puts members into the measured `mu0/mu_scale < 2` regime.
+
+**Five checks, in the order they were run. The first two are retractions.**
+
+**(1) The theta duals at `theta = 0` are unreliable — and dropping them is much
+worse.** `20hm_bands/fd_theta.py` central-differences the true LP against the
+stored `shadow` for the entries `data._organism_arrays` selects, at media from
+the shard itself (no new labels). The capability test is a *shard-level* OR while
+`binds` is per row, so a metabolite the organism secretes somewhere but not here
+has `z = 0` against `ub = 0` and reads as binding. Over 8 organisms the dual
+falls into **three** groups, not two: exact (ratio 1.000), degenerate (exactly 0),
+and a **partial 0.16-0.54** — a one-sided-kink signature a binary reading misses.
+Two DACTBY01 rows identical in `(theta = 0, z = 0, pi = 10000)` difference to
+10000 and to 0, so the label is not a function of the head's input there.
+
+Adding `& (ub > _BOUND_TOL)` to drop them is **refuted**: median held-out value R2
+0.979 -> **-7.6**, worst -60.2, median cosine 0.948 -> 0.610, low-`mu` bias 0.0003
+-> 0.054. `theta = 0` is the design's modal value, so those tangents carry nearly
+all the channel's supervision; without a slope in `theta` the seeded planes are
+flat in a direction the truth rises in, they violate the max-affine upper bound,
+and `--gm-repair`'s uniform lift then has to raise everything.
+
+**(2) No property of those duals predicts the cosine.** Selection covers **2-58%**
+of rows. `GCA_000151225.1` scores **0.981** with 58% selected, median `|pi|` 839
+and **16/16 degenerate**; `CP048433.1` scores **0.688** at median `|pi|` 0.009.
+Degeneracy rate, dual magnitude and selection rate all fail as separators, and the
+n=2 reading that degeneracy explains the tail is retracted.
+
+**(3) The error is in the theta half, on all 21 organisms.**
+`20hm_bands/theta_split.py` splits the 888-vector cosine into its two blocks over
+the gate's own held-out media, no solves:
+
+    Spearman(grad_cosine, cos_theta) = +0.978  (p = 2e-14)
+    Spearman(grad_cosine, cos_u)     = +0.781
+    Spearman(grad_cosine, target theta share) = -0.649
+
+`GCA_000209935.1` reads `cos_u` **0.856** against `cos_theta` **0.025**. The theta
+half carries **29-97%** of the target gradient norm — median ~90% on the failing
+organisms — so it is now most of what the gate measures, and the head allocates
+between the halves correctly (predicted share matches target to 0.3 pt on 20 of
+21). It gets the direction wrong *within* theta.
+
+**(4) Interior theta duals are exact.** Re-run restricted to `theta > 0`:
+`GCA_000007325.1` gives **16/16 at ratio 1.000, none degenerate** — and on the
+other seven organisms **no interior binding rows exist at all**. So the dual is
+not broken; it is exact wherever the bound genuinely binds, which is consistent
+with stage 4's original 20-case validation.
+
+**(5) Why: `theta` is linear in `c` and the design samples `c` logarithmically.**
+The bound `ub = Vmax * theta` binds only where `theta <= z/Vmax`, and measured
+secretion is `z/Vmax` = **0.016-0.25**, so the binding window is
+`theta in (0.02, 0.5)`. The design's coverage of it, over 6 organisms:
+
+| `theta` | 0 | (0, 0.02) | **(0.02, 0.5)** | (0.5, 0.99) | >= 0.99 |
+| --- | --- | --- | --- | --- | --- |
+| share of entries | **60.1%** | 0.0% | **0.6%** | 24.1% | 15.1% |
+
+A two-point distribution: 60% pinned at the degenerate corner, 39% slack, **0.6%
+in the only regime where the constraint is active and the dual is a real
+derivative**. `theta in (0.02, 0.5)` is `c in (0.5, 0.98) c^eq` — half a decade
+linearly, a sliver logarithmically — and the design's rich level sits exactly at
+`c^eq`.
+
+**This re-reads stage 4's own third measurement.** "The bound binds on 20 of 1807
+pairs at interior theta and on 3270 of 3485 at `theta = 0`" was read as *the
+channel is a near-step, so `_kink_scale` handles it*. The same two numbers say
+*the supervision is 99% degenerate corner*. A distributional fact about where a
+constraint is active is not the same as a shape fact about the function.
+
+**The fix that follows: sample `theta`, not `c`.** A stratum drawing
+`c = c^eq (1 - theta)` with `theta` spread over (0.02, 0.5) puts the bound where
+it is active but not pinned. It needs no change to the head, the clamp or `Vmax`,
+and it is a relabel (`x_scale` moves, so P14 rebuilds both heads). The structural
+alternative is a **physiological `Vmax`** — at `z/Vmax ~ 1` the bound would bind
+across the sampled range — which is M15's already-recorded missing input and
+rescales every growth rate on file.
+
+**Two things this does not explain.** The per-organism spread: nothing measured
+separates `GCA_000151225.1` (0.981, 94.9% theta share, 16/16 degenerate) from
+`CP048433.1` (0.688). And whether the 0.6% of rows already in the window are fit
+well — the pre-check that should precede the relabel.
+
 **Not built, deliberately.** `sampling/design.py` gains no secretion band —
 premise 1 says the existing design already spans the channel, so a redesign would
 be spending 21 organism-hours on a coverage problem that is not there.

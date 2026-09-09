@@ -3817,19 +3817,92 @@ coordinates whose structure is a step on the same budget — a 10x `mu_rel` gap
 against a control that is essentially exact is what a starved fit looks like. A
 gate statement needs the roster-scale relabel.
 
-**Not built, deliberately.** No secretion band in `sampling/design.py` — the
-premise check says the existing design already spans the channel, so a redesign
-would spend 21 organism-hours on a coverage problem that is not there. And no
+**Not built, deliberately** — ~~no secretion band in `sampling/design.py`, since
+the premise check says the existing design already spans the channel~~
+**RETRACTED 2026-09-09, see the next section: the design spans `theta` but not
+the window where the secretion bound is *active*, which gets 0.6% of entries.**
+And no
 secretion term in `steady._lp_mu_rows`: `rhs_truth`'s `ceq` does not reach the
 hybrid Jacobian yet, and the code carries a `ponytail:` note saying what to add
 (`+ pi * Vmax / c^eq` where the bound binds and `c < c^eq`) when it does.
 
-**What is still open for M16.** The roster-scale inhibited relabel (21 organisms,
-~1 h each) and a gate statement on it; `--inhibition` for `cfs simulate` /
+**What is still open for M16.** `--inhibition` for `cfs simulate` /
 `steady-state` / the two convex design programs, which get the `(u, theta)`
 *relaxation* rather than exact convexity in `c` (§13.11's corrected concavity
 note); and stage 3'b's per-metabolite `c^eq` from eQuilibrator, still deferred
 because the sweep answers the threshold question without it.
+
+### The inhibited relabel ran: the theta channel is supervised at a corner — 2026-09-09
+
+`labels_i1` = the `labels_p4` design with `--inhibition ceq_0.1.json`. 21
+organisms, 63/63 base + 63/63 round-1, 100% optimal, one `index_hash`, ~4.5 h.
+Frozen level-1 Head A + repair at `--gm-eval-temp 1e-4`, Head B 600/1e-3, 3
+medium draws on the same 10 communities against the **matched** inhibited truth.
+
+| | worst | median | plain-FBA control, same head config |
+| --- | --- | --- | --- |
+| held-out grad cosine | **0.067** | 0.948 | 0.952 / 0.981 |
+| held-out value R2 | 0.697 | 0.979 | — |
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 |
+| --- | --- | --- | --- | --- | --- |
+| inhibited | 0.077 | 0.074 | 0.150 | 1.284 | 0.923 |
+| plain FBA | 0.007 | 0.007 | 0.009 | 0.060 | 0.175 |
+
+13 of 21 organisms are at 0.95-0.99. Part of the composition gap is the benchmark,
+not the head: `max mu_true_initial` at n=2 is **19.3** inhibited against **60.4**
+under FBA, i.e. inhibition pushes members into the `mu0/mu_scale < 2` regime.
+
+**Five checks, full detail in design spec §13.11. The first two are retractions.**
+
+1. **The `theta = 0` duals are half wrong, and dropping them is much worse.**
+   `fd_theta.py` (no new labels) finite-differences the true LP against the stored
+   `shadow`. `binds` is per row while the capability test is a shard-level OR, so
+   a metabolite secreted *somewhere* but not here has `z = 0 = ub` and reads as
+   binding. Over 8 organisms the dual is **exact / degenerate / partial
+   (0.16-0.54)** — three groups, the third a one-sided-kink signature. Two
+   DACTBY01 rows identical in `(theta = 0, z = 0, pi = 10000)` difference to 10000
+   and to 0. Adding `& (ub > _BOUND_TOL)` is **refuted**: median value R2 0.979 ->
+   **-7.6**, worst -60.2, cosine 0.948 -> 0.610. Those tangents are load-bearing.
+2. **Nothing about them predicts the cosine.** `GCA_000151225.1` scores **0.981**
+   with 58% of rows selected, median `|pi|` 839 and 16/16 degenerate;
+   `CP048433.1` scores **0.688** at median `|pi|` 0.009. Degeneracy rate, dual
+   magnitude and selection rate all fail as separators.
+3. **The error is in the theta half, on all 21** (`theta_split.py`, no solves):
+   Spearman(cosine, `cos_theta`) = **+0.978**, against +0.781 for `cos_u`.
+   `GCA_000209935.1` is `cos_u` **0.856** / `cos_theta` **0.025**. The theta half
+   carries **29-97%** of the target gradient norm (median ~90% on the failing
+   organisms), and the head allocates between halves correctly — it gets the
+   direction wrong *within* theta.
+4. **Interior theta duals are exact**: `theta > 0` gives **16/16 at ratio 1.000,
+   0 degenerate** on `GCA_000007325.1`, and on the other 7 organisms **no
+   interior binding rows exist at all**.
+5. **Why: `theta = 1 - c/c^eq` is linear in `c`; the design samples `c`
+   logarithmically.** The bound binds only where `theta <= z/Vmax`, and measured
+   `z/Vmax` is **0.016-0.25**, so the window is `theta in (0.02, 0.5)`:
+
+   | `theta` | 0 | (0, 0.02) | **(0.02, 0.5)** | (0.5, 0.99) | >= 0.99 |
+   | --- | --- | --- | --- | --- | --- |
+   | share of entries | **60.1%** | 0.0% | **0.6%** | 24.1% | 15.1% |
+
+   60% pinned at the degenerate corner, 39% slack, **0.6%** where the constraint
+   is active and the dual is a real derivative. This **re-reads stage 4's own
+   third measurement** — "binds on 20 of 1807 pairs at interior theta, 3270 of
+   3485 at `theta = 0`" was read as *a near-step, handled by `_kink_scale`*; the
+   same numbers say *the supervision is 99% degenerate corner*. A fact about
+   where a constraint is **active** is not a fact about the function's **shape**.
+
+**The fix: sample `theta`, not `c`** — a stratum at `c = c^eq (1 - theta)` with
+`theta` over (0.02, 0.5). No change to the head, the clamp or `Vmax`; it is a
+relabel (P14 rebuilds both heads). The structural alternative is a physiological
+`Vmax` (then `z/Vmax ~ 1` and the bound binds across the sampled range) — M15's
+already-recorded missing input, which rescales every growth rate on file.
+
+**Unexplained:** the per-organism spread (see check 2). **Pre-check before the
+relabel:** are the 0.6% of rows already in the window fit well?
+
+Scripts (`20hm_bands/`, none solve more than ~16 LPs): `fd_theta.py`
+(`--interior`), `fd_batch.sh`, `fd_interior.sh`, `theta_split.py`, `then_i1.sh`.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
