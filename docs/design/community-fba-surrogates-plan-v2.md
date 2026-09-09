@@ -6857,6 +6857,51 @@ two failures have selection rates of **2.2% and 2.3%** against 25-58% for the
 rest, i.e. few theta tangents each carrying a very large dual (`pi` 1495 and
 10000); whether that sparsity is the mechanism is untested.
 
+##### The sparsity lead is refuted, and a label-side predictor appears
+
+2026-09-09, `20hm_bands/plane_theta.py`, no solves.
+
+1. **The lead is refuted, and it was an artefact of metabolite choice.** The
+   2.2%/2.3% figures were per *metabolite*, for whichever one led that organism's
+   error. Globally the share of nonzero theta entries is **0.21-1.86% on every
+   organism** and correlates with the gate at **+0.162 (p = 0.48)**.
+2. **The planes are theta-*saturated*, not theta-starved** — the opposite of the
+   hypothesis. On the failing organisms the median plane has **100%** of its slope
+   norm in the theta block and 93-98% of the 1000 planes are >50% theta.
+3. **Not a scale imbalance either.** The theta/u median-magnitude ratio spans
+   6e-5 to 5e4 and correlates **-0.252 (p = 0.27)**.
+4. **The best predictor found is a property of the labels, not of the fit:
+   the share of held-out rows whose gradient is *pure uptake* — a `u`-only row
+   with no theta entry at all. Spearman +0.711 (p = 0.0003)**, and it separates
+   the roster cleanly:
+
+   | | `%` rows u-only |
+   | --- | --- |
+   | the seven organisms below cosine 0.9 | **1.4-5.9** |
+   | the nine above 0.95 | **36.8-64.1** |
+
+   It composes with the FD result into one mechanism: on the failing organisms
+   nearly every row's target is contaminated by degenerate-corner theta entries,
+   while the healthy ones keep a third to two-thirds of their rows clean.
+
+**Two exceptions remain, and they are not cheap cosines.** `GCA_000151225.1`
+(2.9% u-only, cosine 0.981) and `GCA_000007325.1` (5.9%, 0.948) were checked for
+the obvious artefact — a single dominant target entry making cosine free — and
+they are genuine fits: `grad_top1_share` 0.796 / 0.648 and `grad_cosine_p05`
+0.974 / 0.829, in line with the healthy group. `grad_top1_share` itself
+correlates +0.829 with the gate but is a co-symptom of fit quality, not an
+explanatory variable.
+
+**What this changes about the fix.** The motivation moves from "sample the
+binding window" to "stop the degenerate corner writing a theta entry into nearly
+every row's tangent" — which the same design change achieves from the other side:
+a rich level *below* `c^eq` leaves `theta` slack rather than pinned, so those rows
+carry no theta entry and become `u`-only. That is a different target from the
+`theta in (0.02, 0.5)` stratum first proposed, and it now has a +0.711 predictor
+behind it rather than an 11-row comparison. **Not yet acted on** — two hypotheses
+about this tail have already been refuted, and the two exceptions above are
+unexplained.
+
 **Not built, deliberately.** `sampling/design.py` gains no secretion band —
 premise 1 says the existing design already spans the channel, so a redesign would
 be spending 21 organism-hours on a coverage problem that is not there.

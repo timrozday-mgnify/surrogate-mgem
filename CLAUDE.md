@@ -3911,6 +3911,24 @@ here: the design change is cheap to reason about and the evidence for it is 11
 rows). **Still unexplained:** the per-organism spread (check 2), now localised to
 `theta == 0` rows specifically.
 
+**6. The sparsity lead is refuted; a label-side predictor appears**
+(`plane_theta.py`, no solves). The 2.2%/2.3% selection rates were per
+*metabolite*, an artefact of which one led the error — globally the nonzero-theta
+share is **0.21-1.86% on every organism** (Spearman +0.162, p=0.48). The planes
+are theta-**saturated**, not starved: median plane 100% theta norm, 93-98% of
+planes >50% theta. Scale imbalance is out too (ratio spans 6e-5 to 5e4, -0.252,
+p=0.27). What does predict the gate is **the share of held-out rows whose
+gradient is pure uptake — no theta entry at all: Spearman +0.711 (p=0.0003)**,
+and it separates the roster: **1.4-5.9%** on the seven organisms below 0.9,
+**36.8-64.1%** on the nine above 0.95. With the FD result that is one mechanism —
+on the failing organisms nearly every row's target is contaminated by
+degenerate-corner theta entries. Two exceptions (`GCA_000151225.1` 2.9% at 0.981,
+`GCA_000007325.1` 5.9% at 0.948) are genuine fits, not cheap cosines
+(`top1_share` 0.796/0.648, p05 0.974/0.829). **This re-aims the fix**: not
+"sample the binding window" but "stop the corner writing a theta entry into every
+row" — a rich level *below* `c^eq` leaves theta slack, so those rows become
+`u`-only. Not acted on: two hypotheses on this tail are already refuted.
+
 Scripts (`20hm_bands/`, none solve more than ~16 LPs): `fd_theta.py`
 (`--interior`), `fd_batch.sh`, `fd_interior.sh`, `theta_split.py`, `then_i1.sh`.
 
