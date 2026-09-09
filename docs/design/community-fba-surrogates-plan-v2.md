@@ -6902,6 +6902,74 @@ behind it rather than an 11-row comparison. **Not yet acted on** — two hypothe
 about this tail have already been refuted, and the two exceptions above are
 unexplained.
 
+
+##### The pre-check: `c^eq` = 0.1 mM was killing most of the roster
+
+2026-09-09. Same design, same frozen head, matched controls (`labels_i1_base` is
+a symlink farm holding only these two organisms' **base** shards, so both arms
+train on the same media count with no round-1 asymmetry). Only `c^eq` differs.
+
+| | cosine | value R2 | `%` rows u-only |
+| --- | --- | --- | --- |
+| `DACTBY01`, `c^eq` 0.1 | 0.167 | 0.800 | 4.0 |
+| `DACTBY01`, **`c^eq` 1.0** | **0.990** | **0.9989** | **64.0** |
+| `GCA_000209935.1`, `c^eq` 0.1 | 0.065 | 0.9815 | 2.8 |
+| `GCA_000209935.1`, **`c^eq` 1.0** | **0.970** | **0.9997** | **67.6** |
+
+The predictor and the gate move together, which is the outcome that says the
+corner entries are causal rather than a co-symptom. The two worst organisms on
+the roster clear the plain-FBA control's roster-worst (0.952).
+
+**But the cause is not subtle, and it is not about duals at all.** At `c^eq` =
+0.1 mM these organisms do not grow: median `mu_max` over the design is **0.000**,
+and only **8-9%** of media grow at all. `gvalid = (mu > 0) & optimal`, so a dead
+row is dropped from the Sobolev term outright — the head was fitting ~360 usable
+rows instead of ~4000. Roster-wide, from `labels_i1` alone and with no new
+labels:
+
+| `%` of the design's media that grow | organisms | cosine |
+| --- | --- | --- |
+| 99.5-99.7 | 8 | **0.952-0.986** |
+| 4.6-42.1 (median `mu` = 0.000) | 13 | 0.067-0.981 |
+
+    Spearman(grad_cosine, % rows growing) = +0.640  (p = 0.0018)
+    Spearman(grad_cosine, median mu)      = +0.705  (p = 0.00036)
+
+**So the 0.067 is label starvation.** Every earlier reading of this tail — the
+degenerate duals, the plane composition, the theta share, the `u`-only share —
+was a downstream shadow of 13 of 21 organisms having almost no live rows.
+
+**And the fix costs nothing in mechanism; it gains.** Raising `c^eq` makes
+inhibition *more* genuinely active, not less, because a dead organism secretes
+nothing and so can only "bind" at the degenerate corner:
+
+| per organism, `eps=1e-3` | `c^eq` 0.1 | `c^eq` 1.0 |
+| --- | --- | --- |
+| `theta == 0` entries | 62-64% | **1.8-1.9%** |
+| binding at the corner | 62-64% | 1.1-1.9% |
+| binding in the **interior** | 0.010-0.012% | **0.357-0.398%** (33x) |
+| rows secreting at their cap | 69-72 | **2456-2484** (34x) |
+| median `mu_max` | 0.000 | **3.7-5.3** |
+
+**This refutes stage 4's premise 2 by generalisation, not by measurement.** That
+check ("median relative `mu` drop 0.025, p90 0.752, **no medium killed**") was run
+on **AAXE02** — which is one of the eight organisms at 99.6% growing, i.e. the
+immune group. Fourth instance in this project of a frontier measured on one or
+three organisms failing to survive the roster, and the cheapest to have avoided:
+the growth rate of the *labels* is free to check on all 21.
+
+**Recommendation: regenerate the inhibited root at `c^eq` = 1.0 mM.** It sits
+squarely inside Bennett et al.'s measured 0.1-10 mM intracellular range — as
+defensible a choice as 0.1 — and it is a plain relabel with no code change.
+**Caveat: every stage 3' conclusion was measured at `c^eq` = 0.1 mM** on media
+§13.5 *designed*, which is a different question from whether the design's own
+media grow; those numbers are not invalidated, but the roster-level lethality
+above is a reason to re-read them at 1.0 as well.
+
+**Still unexplained:** `GCA_000151225.1` (8.2% growing, cosine **0.981**) and
+`GCA_000007325.1` (14.3%, 0.948) fit well *despite* starvation. Two organisms
+that beat the correlation, in both directions of every check run so far.
+
 **Not built, deliberately.** `sampling/design.py` gains no secretion band —
 premise 1 says the existing design already spans the channel, so a redesign would
 be spending 21 organism-hours on a coverage problem that is not there.

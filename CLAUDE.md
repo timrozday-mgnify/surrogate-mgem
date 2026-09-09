@@ -3932,6 +3932,41 @@ row" — a rich level *below* `c^eq` leaves theta slack, so those rows become
 Scripts (`20hm_bands/`, none solve more than ~16 LPs): `fd_theta.py`
 (`--interior`), `fd_batch.sh`, `fd_interior.sh`, `theta_split.py`, `then_i1.sh`.
 
+### The inhibited tail was label starvation: `c^eq` 0.1 mM kills 13 of 21 — 2026-09-09
+
+Pre-check on the two worst organisms, matched controls, only `c^eq` differing
+(`labels_i1_base` = base shards only, same media count):
+
+| | cosine | value R2 | `%` rows u-only |
+| --- | --- | --- | --- |
+| `DACTBY01` @ 0.1 -> **1.0 mM** | 0.167 -> **0.990** | 0.800 -> **0.9989** | 4.0 -> **64.0** |
+| `GCA_000209935.1` @ 0.1 -> **1.0 mM** | 0.065 -> **0.970** | 0.982 -> **0.9997** | 2.8 -> **67.6** |
+
+**The cause is that at `c^eq` = 0.1 mM these organisms do not grow** — median
+`mu_max` over the whole design is **0.000**, only 8-9% of media grow, and
+`gvalid = (mu > 0) & optimal` drops a dead row from the Sobolev term, so the head
+was fitting ~360 usable rows instead of ~4000. Roster-wide from `labels_i1`, no
+new labels: **8 organisms at 99.5-99.7% growing score 0.952-0.986**; the other
+**13 sit at 4.6-42.1% with median `mu` = 0.000**. Spearman(cosine, % growing)
+**+0.640** (p=0.0018), (cosine, median `mu`) **+0.705** (p=0.00036).
+
+So the 0.067 is **label starvation**, and every earlier reading of this tail —
+degenerate duals, plane composition, theta share, `u`-only share — was its
+shadow. **Raising `c^eq` gains mechanism rather than trading it away**: interior
+(non-corner) binding **0.012% -> 0.398%** and rows secreting at their cap
+**72 -> 2484**, because a dead organism secretes nothing and can only bind at the
+degenerate corner.
+
+**This refutes stage 4's premise 2 by generalisation.** "No medium killed" was
+measured on **AAXE02** — one of the eight immune organisms. Fourth time a
+one-or-three-organism frontier has failed the roster here, and the cheapest to
+have caught: the labels' own growth rate is free to check on all 21.
+
+**Do: regenerate the inhibited root at `c^eq` = 1.0 mM** (inside Bennett et al.'s
+0.1-10 mM range, plain relabel, no code change). **Caveat:** every stage 3'
+number was taken at 0.1 mM. **Still unexplained:** `GCA_000151225.1` (8.2%
+growing, 0.981) and `GCA_000007325.1` (14.3%, 0.948) fit well despite starvation.
+
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
 After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3
