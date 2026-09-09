@@ -254,6 +254,30 @@ def _organism_arrays(
         # right one: a bound on a flux the network never carries cannot be a
         # sensitivity. Same shape of correction as the uptake side's sign clamp,
         # and for the same reason -- a dual is only a derivative where it binds.
+        #
+        # **Dropping the `theta == 0` rows is measured and REFUTED** (2026-09-09).
+        # The capability test is a shard-level OR while `binds` is per row, so a
+        # metabolite the organism secretes *somewhere* but not here has `z = 0`
+        # against `ub = 0` and reads as binding too, and finite differences of the
+        # true LP say those duals are half wrong: pooled over two organisms,
+        # 10 of 24 have ratio exactly 1.000 and 14 are exactly 0, with two rows
+        # identical in `(theta = 0, z = 0, pi = 10000)` differencing to 10000 and
+        # to 0 -- i.e. the label is not a function of the head's input there
+        # (`20hm_bands/fd_theta.py`, no new labels).
+        #
+        # Adding `& (ub > _BOUND_TOL)` to drop them makes the roster **much
+        # worse**: median held-out value R2 0.979 -> **-7.6**, worst -60.2, median
+        # cosine 0.948 -> 0.610, low-`mu` bias 0.0003 -> 0.054 on AAXE02. The
+        # design's rich level is `10**log10_hi * Km ~ c^eq`, so `theta = 0` is the
+        # *modal* value and those tangents carry nearly all the channel's
+        # supervision; without a slope in `theta` the seeded planes are flat in a
+        # direction the truth rises in, they violate the max-affine upper bound,
+        # and `--gm-repair`'s uniform lift then has to raise everything.
+        #
+        # So the 0.067 worst cosine is a **label design** problem, not a clamp
+        # one: the fix is to move the design's rich level below `c^eq` so `theta`
+        # is strictly positive and the derivative stops being one-sided at the
+        # corner of its own domain. That is a relabel, not a condition here.
         secretes = (zq > _BOUND_TOL).any(axis=0)
         binds = (zq >= ub - _BOUND_TOL) & np.isfinite(ceq_vec) & secretes
         gth[:, pos] = np.where(binds & (pi > _DUAL_TOL), pi * vmax, 0.0)
