@@ -352,6 +352,7 @@ def train_value_heads(
     gm_init: str | None = None,
     gm_reanchor: int = 0,
     gm_select: str = "active-set",
+    gm_valid_cuts: bool = False,
     gm_trial_media=None,
     gm_temp_final: float | None = None,
     seed: int = 0,
@@ -395,6 +396,7 @@ def train_value_heads(
             ds,
             seed=seed,
             select=gm_select,
+            only_valid=gm_valid_cuts,
             trial_points=_trial_points(ds, gm_trial_media),
         )
     # The stability centre for `w_prox`: the seeded slopes, in slope space rather
@@ -840,6 +842,7 @@ def run(
     gm_init: str | None = None,
     gm_reanchor: int = 0,
     gm_select: str = "active-set",
+    gm_valid_cuts: bool = False,
     gm_trial_media=None,
     gm_temp_final: float | None = None,
     gm_repair: bool = False,
@@ -892,6 +895,7 @@ def run(
         gm_init=gm_init,
         gm_reanchor=gm_reanchor,
         gm_select=gm_select,
+        gm_valid_cuts=gm_valid_cuts,
         gm_trial_media=gm_trial_media,
         gm_temp_final=gm_temp_final,
         seed=seed,
@@ -960,6 +964,7 @@ def run(
         meta["gm_init"] = gm_init or "random"
         meta["gm_reanchor"] = gm_reanchor
         meta["gm_select"] = gm_select
+        meta["gm_valid_cuts"] = gm_valid_cuts
         meta["gm_repair"] = gm_repair
         meta["gm_repair_local"] = gm_repair_local
         meta["gm_trial_media"] = str(gm_trial_media) if gm_trial_media else None

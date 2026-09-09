@@ -204,6 +204,17 @@ def build_parser() -> argparse.ArgumentParser:
         "Seeding fixes initialisation; this fixes planes that go dead during it.",
     )
     tv.add_argument(
+        "--gm-valid-cuts",
+        action="store_true",
+        help="groupmax-u only: select only tangents that are genuine outer "
+        "approximations over the training rows (SDDP's 'never add an invalid cut'). "
+        "34% of CP000139.1's on `labels_i3` are not, by up to 2.85 mu_scale. "
+        "MEASURED AND REFUTED (M17): it removes `--gm-repair`'s per-plane lift "
+        "entirely and moves the band by 0.0001, while costing the roster worst "
+        "cosine 0.8955 -> 0.8234 -- the invalid planes are the only reason the "
+        "head is tight at high mu. Default off; see `groupmax.valid_cuts`.",
+    )
+    tv.add_argument(
         "--gm-select",
         choices=["active-set", "level1"],
         default="active-set",
@@ -1050,6 +1061,7 @@ def main(argv: list[str] | None = None) -> int:
             gm_init=args.gm_init,
             gm_reanchor=args.gm_reanchor,
             gm_select=args.gm_select,
+        gm_valid_cuts=args.gm_valid_cuts,
             gm_repair=args.gm_repair,
             gm_repair_local=args.gm_repair_local,
             gm_eval_temp=args.gm_eval_temp,

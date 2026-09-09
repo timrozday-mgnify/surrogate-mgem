@@ -857,3 +857,40 @@ def test_territory_repair_does_not_lift_a_plane_out_of_its_own_band():
     # ...and the territory rule is no looser anywhere, strictly tighter somewhere.
     assert np.all(v_loc <= v_glob + 1e-5)
     assert float(np.max(v_glob - mu[0])) >= float(np.max(v_loc - mu[0]))
+
+
+def test_only_valid_cuts_stops_the_repair_lifting_the_model():
+    """A one-sided dual makes a tangent that repair *lifts*, ruining its own region.
+
+    M17: at a kink the stored dual is a one-sided subgradient, so its tangent
+    falls below the target away from its anchor. ``repair_intercepts`` restores
+    validity by raising that plane -- correct globally, and it destroys the fit
+    wherever that plane was the right binding cut. On ``labels_i3`` that is 34% of
+    ``CP000139.1``'s tangents and it takes its mid-`mu` band from a true 0.98 to
+    2.85. Selecting only genuine outer approximations is the fix, and it is free.
+    """
+    from cfs.surrogate import groupmax
+    from cfs.surrogate.picnn_u import to_diag
+
+    ds = _min_affine_dataset(K=5, n=600, M=4)
+    M = ds.x_train.shape[-1]
+    # Corrupt the *lowest* row: a shallow slope there falls below the target
+    # everywhere above it, which is what a one-sided dual at a kink does.
+    bad = int(ds.x_train[0].sum(-1).argmin())
+    ds.g_train[0, bad] *= 0.2
+
+    x = ds.x_train[0]
+    g_w = ds.g_train[0] * (1.0 - x) ** 2 / ds.mu_scale[0]
+    w = np.asarray(to_diag(jnp.asarray(x)))
+    ok = groupmax.valid_cuts(g_w, w, ds.mu_train[0], ds.mask[0], ds.gvalid_train[0])
+    assert not ok[bad] and ok.mean() > 0.98  # that row is rejected, near-nothing else
+
+    def err(only_valid):
+        heads = groupmax.stack_heads(
+            jax.random.PRNGKey(0), 1, M, ds.mask, width=1, depth=1, group=64, temp=1e-4
+        )
+        h = groupmax.init_from_tangents(heads, ds, only_valid=only_valid)
+        v = np.asarray(groupmax.batched_value(groupmax.repair_intercepts(h, ds), ds.x_val))
+        return float(np.max(np.abs(v[0] - ds.mu_val[0])))
+
+    assert err(True) < 0.1 * err(False), (err(True), err(False))

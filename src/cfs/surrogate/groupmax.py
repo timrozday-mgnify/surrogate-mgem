@@ -340,6 +340,70 @@ def rank_by_territory(
     return order, territory
 
 
+def valid_cuts(g_w, w, mu, mask, valid, tol: float = 1e-6) -> np.ndarray:
+    """Which label tangents are genuine outer approximations over the training rows.
+
+    A supporting hyperplane of a concave function is >= that function everywhere,
+    so a tangent that reads *below* a labelled row is proof its dual is not a
+    supergradient. That happens here for a measured reason: at a kink the stored
+    dual is one-sided (§13.11 finite-differenced `theta = 0` duals at 0.16-0.54 of
+    the true derivative), and a too-shallow slope falls away from its own anchor.
+    On `labels_i3` **34% of CP000139.1's 3981 usable tangents are invalid**, by up
+    to 2.85 `mu_scale` units.
+
+    They are not harmless, because :func:`repair_intercepts` restores validity by
+    *lifting* the offending plane -- which is correct globally and ruins it in its
+    own territory. That is the whole of M17: the seeded head's hard min in that
+    organism's mid-`mu` band is exact (0.9845 against a true 0.9845) and the
+    repaired one reads **2.85**, with 239 planes lifted and 87% of the total lift
+    forced by **five** rows.
+
+    **Dropping them is SDDP's own rule (never add an invalid cut), it is free
+    (2628 valid cuts against a budget of 1000) -- and it is REFUTED, 2026-09-09.**
+    ``--gm-valid-cuts`` does exactly what it was built to do: the repair's
+    per-plane lift vanishes (drop uniform 0.000489-0.000494, i.e. the smoothing
+    alone, against a mean of 0.59 before). The band moves by **0.0001**, this
+    organism goes cosine 0.895 -> **0.847** and value R2 0.318 -> **0.229**, and
+    the roster worst 0.8955 -> **0.8234**.
+
+    The reason is that no subset of these tangents is right everywhere, and it is
+    one measurement (`20hm_bands/m17_bands.py`, median relative error per `mu/max`
+    band on CP000139.1):
+
+    ======================  ===============  ===============
+    cut model over          `mu/max` <= 0.25   `mu/max` 0.5-0.75
+    ======================  ===============  ===============
+    all 3981 tangents       -0.0000          **-0.6707**
+    the 2628 valid ones     **+0.1527**      +0.0000
+    ======================  ===============  ===============
+
+    So the invalid planes are *load-bearing*: they are the only reason the head is
+    tight at high `mu`, and lifting them is the only reason it is tight there
+    after selection. E1's "the labels are sufficient" verdict for this organism
+    was taken in the mid-`mu` band alone -- **read the cut model over every band.**
+
+    Neither the violation rate nor its size predicts the gate over the roster
+    (Spearman +0.18 / -0.24 against cosine, p >= 0.29): DACTBY01 violates by 1.71
+    and scores 0.9896 / R2 0.9992. Ninth refuted proxy.
+
+    Kept, default off, for the negative result and because the mask itself is the
+    cheapest statement of how far the labels are from concave.
+
+    Returns a bool mask over rows, ``valid`` AND outer-approximating.
+    """
+    ok = np.flatnonzero(valid)
+    out = np.zeros(len(w), dtype=bool)
+    if ok.size == 0:
+        return out
+    a = (g_w * mask)[ok]
+    c = mu[ok] - np.einsum("km,km->k", a, w[ok])
+    step = max(1, int(2e7 // max(len(w), 1)))
+    for lo in range(0, len(ok), step):
+        blk = np.asarray(jnp.asarray(a[lo : lo + step]) @ jnp.asarray(w).T)
+        out[ok[lo : lo + step]] = (blk + c[lo : lo + step, None] - mu[None, :]).min(1) >= -tol
+    return out
+
+
 def _softplus_inv_np(a: np.ndarray) -> np.ndarray:
     """``softplus^-1``, stable: ``expm1`` overflows at ``a ~ 88`` in float32 and the
     head is then seeded with inf weights and NaN curvature. Real label tangents
@@ -364,6 +428,7 @@ def init_from_tangents(
     seed: int = 0,
     select: str = "active-set",
     trial_points: np.ndarray | None = None,
+    only_valid: bool = False,
 ) -> GroupMaxHead:
     """Seed the first layer's units with real supporting hyperplanes of ``mu_max``.
 
@@ -415,20 +480,27 @@ def init_from_tangents(
         g_w = ds.g_train[i] * (1.0 - x) ** 2 / ds.mu_scale[i]
         w = np.asarray(to_diag(jnp.asarray(x)))
         mu = ds.mu_train[i] / ds.mu_scale[i]
+        gv = ds.gvalid_train[i]
+        if only_valid:
+            gv = valid_cuts(g_w, w, mu, ds.mask[i], gv)
+            LOGGER.info(
+                "%s: %d of %d usable tangents are valid outer approximations",
+                ds.genome_ids[i], int(gv.sum()), int(ds.gvalid_train[i].sum()),
+            )
         if select == "level1":
             pts = w if trial_points is None else np.asarray(trial_points[i])
-            idx, territory = rank_by_territory(g_w, w, mu, ds.mask[i], pts, ds.gvalid_train[i])
+            idx, territory = rank_by_territory(g_w, w, mu, ds.mask[i], pts, gv)
             LOGGER.info(
                 "%s: level1 keeps %d cuts with a non-empty territory of %d usable, "
                 "over %d trial points; budget %d",
                 ds.genome_ids[i],
                 int((territory > 0).sum()),
-                int(ds.gvalid_train[i].sum()),
+                int(gv.sum()),
                 len(pts),
                 n_slots,
             )
         else:
-            idx = rank_by_active_set(g_w, ds.gvalid_train[i])
+            idx = rank_by_active_set(g_w, gv)
         if idx.size == 0:
             continue
         if idx.size < n_slots:  # too few usable rows: cycle, then jitter the rest

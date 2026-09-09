@@ -31,7 +31,7 @@
 >
 > | M9-M14 Phase 7 applications | **spec written; M9, M10 and M11 done** — `cfs simulate` integrates a community forward, batch or chemostat (`--dilution`), surrogate only, no LP — and `--stiff` (BDF in `log X`) is what makes the chemostat *transient* trustworthy, landing on the independently-solved fixed point to 1.3e-10; `cfs maximise-growth` is §13.2's convex medium design, 19/20 V5 round-trips at the default trust region, median true gain +2.2%, median optimism 0.3%. `cfs minimal-medium` is §13.3's convex program; **V6 passes on 4/4 communities with `--lp-repair` (2026-09-06)** — the residual failure was not Head A's essentiality gap (that closed 2026-08-31) but a **synthetic-lethal set** the single-knockout pin cannot see, repaired by the true LP at +2 components in 370. The rest (steady state, interaction maximisation, the inverse-problem posterior) is specced in **§13** with a per-use-case accuracy table: most need less than M3's and M5's unmet gates | `src/cfs/compose/dfba.py` (`simulate`, `with_chemostat`), `src/cfs/science/growth.py` |
 > | M16 §13.11 product inhibition | **stages 1'-4' done and the roster relabel is run.** The thermodynamic secretion bound `ub = Vmax max(0, 1-c/c^eq)` in the true LP (`cfs interactions --inhibition`) and in the **surrogate**: Head A gains a per-metabolite `theta` channel (444 -> 888), Head B an inference clamp `z <= Vmax theta`, and `rhs_truth`/`rhs_hybrid` take `ceq` from the checkpoint so the ruler matches the model. At **`c^eq` = 1.0 mM** (`labels_i3`; 0.1 mM starved 13 of 21 organisms) it lands: worst grad cosine **0.896**, median **0.986**, median value R2 **0.9997**, 20/21 >= 0.95, 7/21 clearing M3's gate, and a composition that **beats the plain-FBA control** (overall log-X **0.011** vs 0.013, `mu_rel` **0.0001** vs 0.0020). **The gate is not stated, and is blocked on M17** | `cfs generate --inhibition`, `src/cfs/surrogate/data.py`, `src/cfs/compose/dfba.py` |
-> | **M17 `CP000139.1` — REQUIRED, next** | **The only thing between M16 and a gate statement.** One organism at grad cosine **0.895** / value R2 **0.318** where the roster median is 0.986 / 0.9997. A single band — true `mu` in [0.80, 1.30), 180 of 800 held-out rows, predicted **2.85 against a true 0.98**, 89% `EX_o2_e`-limited — with every other band exact to 1e-4. Coverage, labels, cut selection and plane installation are each excluded by measurement; the cause is `repair_intercepts`. **Two fixes already refuted**: no repair (roster `value_under_rate` 0.000 -> 0.970) and `--gm-repair-local` (roster median R2 -> **-0.665**). Read the design spec's M17 row before proposing a third | `src/cfs/surrogate/groupmax.py` |
+> | **M17 `CP000139.1` — REQUIRED, next** | **The only thing between M16 and a gate statement.** One organism at grad cosine **0.895** / value R2 **0.318** where the roster median is 0.986 / 0.9997. A single band — true `mu` in [0.80, 1.30), 180 of 800 held-out rows, predicted **2.85 against a true 0.98**, 89% `EX_o2_e`-limited — with every other band exact to 1e-4. Coverage, labels, cut selection and plane installation are each excluded by measurement; the cause is `repair_intercepts`. **Two fixes already refuted**: no repair (roster `value_under_rate` 0.000 -> 0.970) and `--gm-repair-local` (roster median R2 -> **-0.665**). Read the design spec's M17 row before proposing a third | `src/cfs/surrogate/groupmax.py` **Progressed 2026-09-09 and the stated cause is retracted in its load-bearing half.** `--gm-valid-cuts` (`groupmax.valid_cuts`) selects only tangents that are genuine outer approximations over the training rows -- 26-44% of every organism's fail, by up to 2.85 `mu_scale` here -- and it removes `repair_intercepts`' per-plane lift *entirely* (drop uniform 0.000489-0.000494 against a mean of 0.59) while moving the band by **0.0001**, at a cost of cosine 0.895 -> 0.847, R2 0.318 -> 0.229 and roster worst 0.8955 -> **0.8234**. The reason is that **no subset of these tangents is right everywhere**: the parameter-free cut model over all 3981 reads -0.0000 at `mu/max` <= 0.25 and **-0.6707** at 0.50-0.75, and over the 2628 valid ones **+0.1527** and +0.0000 -- so the invalid planes are load-bearing and lifting them is the only reason the head is tight at high `mu`. **E1's verdict for this organism was taken in the mid-`mu` band alone; read the cut model over every band.** Directions (a) and (b) are answered (the slopes *are* the label tangents; the seeded head's hard min in the band is exact at 0.9845) and (c) is now visibly a trade between the two ends. Since `mu_max` is jointly concave in the LP's RHS, an invalid tangent is a **wrong dual** -- §13.11 measured `theta = 0` duals at 0.16-0.54 of the true derivative -- so the live direction is label-side, not head-side. Ninth refuted proxy: neither the violation rate nor its size predicts the gate (Spearman +0.18 / -0.24, p >= 0.29; DACTBY01 violates by 1.71 at cosine 0.9896). |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
@@ -4078,6 +4078,66 @@ so removing the lift is not sufficient and the gate must be re-read on cosine
 
 **Also open:** Head B's 0.791; and re-reading stage 3''s §13.5 conclusions, all
 taken at `c^eq` = 0.1 mM.
+
+### M17: the tangent set cannot be tight at both ends — 2026-09-09
+
+The M17 row's cause ("`repair_intercepts`' per-plane lift") is **half right and
+the half that matters is wrong**. `--gm-valid-cuts` (new, default off,
+`groupmax.valid_cuts`) selects only tangents that are genuine outer
+approximations over the training rows — SDDP's "never add an invalid cut". On
+`labels_i3`, **26-44% of every organism's tangents fail that test**, by up to
+2.85 `mu_scale` on `CP000139.1` and 1.71 on `DACTBY01`; 2227-3628 valid ones
+remain against a budget of K=1000, so the filter is free.
+
+It does exactly what it was built for and loses:
+
+| | repair drop, `CP000139.1` | band rel err | this organism | roster worst |
+| --- | --- | --- | --- | --- |
+| `value_i3` (shipped) | median 0.0005 / **mean 0.59** / max 2.86 | +0.1528 | 0.8955 / R2 0.318 | 0.8955 |
+| `+ --gm-valid-cuts` | **uniform 0.000489-0.000494** (the smoothing alone) | **+0.1527** | 0.8470 / R2 **0.229** | **0.8234** |
+
+**The per-plane lift is gone and the band does not move — by 0.0001.** One
+measurement says why (`20hm_bands/m17_bands.py`, median relative error of the
+parameter-free cut model per `mu/max` band on `CP000139.1`, no solves):
+
+| cut model over | `mu/max` <= 0.25 | 0.25-0.50 | 0.50-0.75 |
+| --- | --- | --- | --- |
+| all 3981 tangents | **-0.0000** | -0.1235 | **-0.6707** |
+| the 2628 valid ones | **+0.1527** | +0.3779 | **+0.0000** |
+
+1. **No subset of these tangents is right everywhere**, so this is not selection,
+   not the repair and not the head. The invalid planes are **load-bearing**: they
+   are the only reason anything is tight at high `mu`, and lifting them (which is
+   what the repair does) is the only reason the *selected* head is tight there.
+   The +0.15 mid-`mu` error is what that costs, in either arm.
+2. **E1's "the labels are sufficient" verdict for this organism was taken in the
+   mid-`mu` band alone.** The same cut model reads **-0.67** at high `mu`. Read
+   the cut model over **every** band, or the check says whatever the band says.
+3. **The defect is in the duals.** `mu_max` is the LP's value function in its RHS,
+   so it is jointly concave in `(Vmax u, Vmax theta)` and every label tangent is a
+   valid upper bound *by construction* — an invalid one is a wrong dual. §13.11
+   already finite-differenced `theta = 0` duals at **0.16-0.54** of the true
+   derivative, and the capability test deliberately zeroes others. Neither half of
+   the slope vector is separately to blame: `u`-only is 45-56% valid and
+   `theta`-only 5-11%, against 66-75% for both, so the halves partially cancel and
+   the violation is joint.
+4. **Ninth refuted proxy: neither the violation rate nor its size predicts the
+   gate.** Spearman over the 21 organisms is **+0.18** (max violation vs cosine,
+   p=0.44) and -0.24 (valid fraction vs cosine, p=0.29) — `DACTBY01` violates by
+   1.71 and scores cosine **0.9896** / R2 0.9992. So "which organism is
+   `CP000139.1`" is still open; what is closed is that the head, the selection and
+   the repair are each doing the best available thing with these labels.
+
+**What this leaves.** Direction (c) of the M17 row — a capped per-plane lift — is
+now visibly a trade between the two ends rather than a fix, and (a)/(b) are
+answered (the slopes *are* the label tangents; the seeded head's hard min in the
+band is 0.9845 against a true 0.9845, exact). The live direction is the duals:
+re-derive the `theta = 0` tangents so they are supergradients, which is a label-side
+change, not a head-side one. Scripts (`20hm_bands/`, none solve):
+`m17_valid.py` (the roster validity table), `m17_bands.py` (the per-band cut
+model), `m17_force.py` (which training rows force the lift — **25 rows, top 5
+carry 87.3%**), `m17_which_half.py`, `m17_rebuild.py` (rebuilds the frozen head
+from scratch and reproduces the checkpoint bit for bit).
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
