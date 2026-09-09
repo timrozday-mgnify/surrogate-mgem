@@ -4118,6 +4118,23 @@ docstring's original table ("300 costs <= 0.001 against uncapped") was right *on
 those labels*; the inhibited root doubles the input width and puts `EX_o2_e`'s
 band above the cap.
 
+**And it buys the composition's tail, not its bulk.** 3 medium draws x the same
+10 communities, matched inhibited truth, only Head A differing (Head B's input is
+`x`, so `behaviour_i3` is unchanged and P14 passes):
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `value_i3` (cap 300) | 0.011 | 0.011 | 0.002 | 0.277 | 0.127 | 0.011 | 0.696 |
+| **`value_i3_cap`** | 0.011 | 0.011 | 0.002 | **0.105** | **0.017** | 0.011 | **0.306** |
+
+Paired per draw, which is the only way to read this file's community numbers:
+n=10 draw 200 **0.6961 -> 0.1048**, n=21 draw 100 **0.1269 -> 0.0170**, n=21
+draw 200 0.3760 -> 0.3057; every other draw moves by <= 0.001. Over all 30 cells
+it is 10 better / 20 worse with the median going 0.0110 -> 0.0114 — the losses
+are noise and the gains are the two cells that carried the error, which is what a
+one-organism fix should look like: `CP000139.1` is in the large communities and
+in few of the small ones. `mu_rel_median` is 1e-4 to 2.5e-4 in both arms.
+
 **Three things this retracts, all from earlier the same day.**
 
 1. **"The labels are insufficient" / "the duals are wrong" is wrong.** The 25
