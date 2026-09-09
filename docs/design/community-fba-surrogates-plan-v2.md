@@ -7070,6 +7070,69 @@ failure, and already visible pre-relabel as the only organism whose predicted
 theta share missed its target; Head B's 0.791; and re-reading stage 3''s §13.5
 conclusions, all measured at `c^eq` = 0.1 mM.
 
+
+##### `CP000139.1`: the repair's per-plane lift is the last organism's failure
+
+2026-09-09. The one organism left after the `c^eq` fix (cosine 0.895, value R2
+**0.318** where every other is >= 0.9967, and not starved). Traced with no solves.
+
+**1. It is a single band, not a spread.** Held-out rows binned by true `mu`:
+
+| true `mu` | n | median true | median predicted | median err | top limiter |
+| --- | --- | --- | --- | --- | --- |
+| [0.00, 0.80) | 511 | — | — | **+0.0001** | `EX_acnam_e` / `EX_cobalt2_e` |
+| **[0.80, 1.30)** | **180** | 0.9845 | **2.8498** | **+1.8654** | **`EX_o2_e` 89%** |
+| [1.30, 2.00) | 8 | 1.5081 | 2.0007 | +0.3124 | `EX_o2_e` |
+| [2.00, 5.00) | 101 | 3.04 | 3.04 | +0.0000 | `theta:EX_co2_e` |
+
+22.5% of held-out rows over-predicted 3x; everything else exact to 1e-4. `EX_o2_e`
+leading is consistent with the n=1 titration, where O2 was already the worst
+limiter because only ~3 planes are active there.
+
+**2. Not coverage.** 741 training rows (18.5%) sit in the band — more than most
+bands get.
+
+**3. E1: the labels are sufficient.** The parameter-free cutting-plane model over
+its own 3981 usable tangents gives **0.9845 at the failing rows, err -0.0000, 93%
+within 1%**, where the shipped head reads 2.8469.
+
+**4. Cut selection is not it either.** The min over the **top 1000 by territory**
+— the head's own budget — is also exact (-0.0000), and so is the min over the top
+40. Switching the trial set from community media to the training rows lifts the
+roster median 0.9859 -> 0.9908 and `n >= 0.99` from 7 to 11, but moves this
+organism by **0.000**.
+
+**5. Plane installation is exact**: 100% of the 2927 nonzero intended slopes are
+reproduced within 1%, and no intended-zero entry is installed above 1e-6.
+
+**6. The intercepts are the whole difference.** Same 1000 planes, same slopes:
+
+    cut model over the kept 1000        0.9845   (= truth)
+    hard min over the installed planes  2.8485
+    shipped head (smoothed + repaired)  2.8482
+
+`_tangent_planes` returns `b_j = -c_j`; only `repair_intercepts` changes them
+after that. Confirmed by ablation — dropping `--gm-repair` takes `CP000139.1`
+**0.895 -> 0.970** and the roster worst **0.8955 -> 0.9604**.
+
+**But the ablation is not the fix, and this is a genuine trade.** Without the
+repair the median `value_under_rate` goes **0.000 -> 0.970**: the head reads below
+the truth on 97% of rows, which is the max-affine validity failure
+[[under-prediction-is-a-validity-failure]] exists to prevent, and which §8.6c
+measured as costing the composition. `CP000139.1`'s value R2 is also still only
+0.48 unrepaired, so the repair is not the entire story for that organism.
+
+**The mechanism, and the targeted fix.** `repair_intercepts` raises each plane's
+intercept to the tightest value keeping it above **every** training label. A plane
+anchored in the `mu ~ 1` band therefore has to clear labels at `mu ~ 4.4`, so a
+cut that was tight where it was meant to bind is lifted out of its own regime.
+The repair is *global* while the cut is *local*. The natural fix is to repair each
+plane over **its own territory** — the trial points where it is the active minimum
+— which `rank_by_territory` already computes and returns, so it is a few lines and
+no new machinery. **Not built.** It weakens the validity guarantee from "above
+every training label" to "above every label in its territory", so it needs the
+under-rate and the composition measured, not just this organism's cosine.
+
 **Not built, deliberately.** `sampling/design.py` gains no secretion band —
 premise 1 says the existing design already spans the channel, so a redesign would
 be spending 21 organism-hours on a coverage problem that is not there.

@@ -4021,9 +4021,32 @@ Quote paired draws.
 and gives it only the inference clamp, so the secretion regime is not in its
 input. Untested whether adding the `theta` block helps.
 
-**Open:** `CP000139.1` (0.895, value R2 **0.318**, not starved — a different
-failure, one organism); Head B's 0.791; and re-reading stage 3''s §13.5
-conclusions, all taken at `c^eq` = 0.1 mM.
+**`CP000139.1` traced (2026-09-09, no solves): it is `--gm-repair`'s per-plane
+lift.** The failure is **one band** — true `mu` in [0.80, 1.30), 180 of 800
+held-out rows, predicted 2.85 against a true 0.98 (**+1.87**), **89% `EX_o2_e`-
+limited** — with every other band exact to 1e-4. Not coverage (741 training rows,
+18.5%, sit in it). **E1 says the labels are sufficient**: the cutting-plane model
+over its own 3981 tangents is **exact there (-0.0000, 93% within 1%)**. **Cut
+selection is not it** either — the min over the head's own top-1000-by-territory
+is also exact, and switching the trial set moves this organism by 0.000 (while
+lifting the roster median 0.9859 -> 0.9908 and `n>=0.99` 7 -> 11). **Plane
+installation is exact** (100% of 2927 nonzero slopes within 1%). What differs is
+the **intercepts**: same 1000 planes, cut model **0.9845**, hard min over the
+installed planes **2.8485**. Ablation confirms — dropping `--gm-repair` gives
+`CP000139.1` **0.895 -> 0.970** and roster worst **0.8955 -> 0.9604**.
+
+**The ablation is not the fix**: median `value_under_rate` goes **0.000 -> 0.970**,
+the validity failure [[under-prediction-is-a-validity-failure]] exists to prevent.
+Mechanism: `repair_intercepts` lifts each plane above **every** training label, so
+a plane anchored at `mu ~ 1` must clear labels at `mu ~ 4.4` and is lifted out of
+its own regime — the repair is *global* where the cut is *local*. **Targeted fix,
+not built:** repair each plane over **its own territory**, which
+`rank_by_territory` already returns. It weakens the guarantee to "above every
+label in its territory", so measure the under-rate and the composition, not this
+organism's cosine.
+
+**Also open:** Head B's 0.791; and re-reading stage 3''s §13.5 conclusions, all
+taken at `c^eq` = 0.1 mM.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
