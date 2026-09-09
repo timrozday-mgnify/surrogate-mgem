@@ -3967,6 +3967,38 @@ have caught: the labels' own growth rate is free to check on all 21.
 number was taken at 0.1 mM. **Still unexplained:** `GCA_000151225.1` (8.2%
 growing, 0.981) and `GCA_000007325.1` (14.3%, 0.948) fit well despite starvation.
 
+### ...and at `c^eq` = 1.0 mM the inhibited head beats the plain-FBA control — 2026-09-09
+
+`value_i3_base` (`labels_i3` base shards, round 1 still generating; symlink farm
+so the glob cannot read half-written round-1 files). Only `c^eq` differs from
+`value_i1`.
+
+| held out, 21 organisms | `c^eq` 0.1 | **`c^eq` 1.0** | plain-FBA control |
+| --- | --- | --- | --- |
+| worst grad cosine | 0.067 | **0.896** | 0.952 |
+| median grad cosine | 0.948 | **0.986** | 0.981 |
+| median value R2 | 0.979 | **0.9997** | — |
+| median p05 | 0.748 | **0.943** | — |
+
+**20/21 organisms >= 0.95, 7/21 clear M3's 0.99 gate**, and the inhibited median
+**beats** the plain-FBA control — inhibition is not intrinsically harder to
+learn. `GCA_000209935.1` **+0.903**, `DACTBY01` **+0.785**, four more +0.21 to
++0.36; three healthy organisms drift -0.007 to -0.011, inside the 0.015 seed sd.
+
+**The confound's disappearance is the confirmation.** Every organism now grows on
+**99.5-99.8%** of media (was 4.6-42.1% on thirteen), so
+Spearman(cosine, % growing) goes **+0.640 -> -0.163 (p=0.48)** — the predictor
+stops predicting because its variable stops varying.
+
+**One organism left, and it is a different failure**: `CP000139.1` at cosine
+0.896 with **value R2 0.312** (every other organism >= 0.9967) and p05 0.000,
+**not starved** (99.8% growing, median `mu` 4.56). It was already the one
+organism whose predicted theta share (91.9%) missed its target (74.8%) in
+`theta_split`, so it predates the relabel. One organism, not a tail.
+
+**Caveat:** base-only. Round 1 adds training rows and never held-out ones, so it
+flatters the `c^eq` 0.1 arm, which had it. Composition gate follows.
+
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
 After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3

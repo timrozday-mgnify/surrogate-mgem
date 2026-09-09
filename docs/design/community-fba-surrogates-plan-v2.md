@@ -6970,6 +6970,53 @@ above is a reason to re-read them at 1.0 as well.
 `GCA_000007325.1` (14.3%, 0.948) fit well *despite* starvation. Two organisms
 that beat the correlation, in both directions of every check run so far.
 
+
+##### `c^eq` = 1.0 mM at roster scale: the tail closes, and the confound with it
+
+2026-09-09, `value_i3_base` — `labels_i3` **base shards only** (the round-1 pass
+was still generating; a symlink farm pins the training set, since
+`load_value_dataset` globs every parquet in a shard dir and would otherwise read
+half-written round-1 files). Same design, same frozen level-1 head, only `c^eq`
+differs from `value_i1`.
+
+| held out, 21 organisms | `c^eq` 0.1 | **`c^eq` 1.0** | plain-FBA control |
+| --- | --- | --- | --- |
+| worst grad cosine | 0.067 | **0.896** | 0.952 |
+| median grad cosine | 0.948 | **0.986** | 0.981 |
+| median value R2 | 0.979 | **0.9997** | — |
+| median grad cosine p05 | 0.748 | **0.943** | — |
+
+**20 of 21 organisms are >= 0.95 and 7 clear M3's 0.99 gate outright**, and the
+inhibited median now **beats** the plain-FBA control (0.986 against 0.981) —
+i.e. inhibition is not intrinsically harder to learn. The two organisms the
+pre-check moved reproduce it at roster scale: `GCA_000209935.1` **+0.903**
+(0.067 -> 0.970) and `DACTBY01` **+0.785** (0.205 -> 0.990). Four more move
++0.21 to +0.36. Three healthy organisms drift -0.007 to -0.011, which is inside
+the seed noise this file records for `groupmax-u` (sd 0.015).
+
+**The confound is gone, and its disappearance is the confirmation.** Every
+organism now grows on **99.5-99.8%** of the design's media (was 4.6-42.1% on
+thirteen of them), so the starvation predictor stops predicting:
+
+    Spearman(grad_cosine, % rows growing) = -0.163  (p = 0.48)     [was +0.640]
+
+A predictor that collapses because its variable no longer varies is what a
+resolved confound looks like, and it is the cleanest available evidence that
+starvation — not the duals, the planes, the theta share or the `u`-only share —
+was the cause.
+
+**One organism is left, and it is a different failure.** `CP000139.1`: cosine
+0.896, **value R2 0.312** against >= 0.9967 on every other organism, `p05` 0.000,
+and it is **not starved** (99.8% growing, median `mu` 4.56). It is also the one
+organism whose predicted theta share (91.9%) did not match its target (74.8%) in
+the `theta_split` check, so the misallocation was visible before the relabel and
+is unrelated to `c^eq`. That is the new open question, and it is one organism
+rather than a tail.
+
+**Caveat:** base-only, so this is not the full comparison — round 1 adds training
+rows and never held-out ones, so if anything it flatters the `c^eq` 0.1 arm,
+which had it. The composition gate follows once the round completes.
+
 **Not built, deliberately.** `sampling/design.py` gains no secretion band —
 premise 1 says the existing design already spans the channel, so a redesign would
 be spending 21 organism-hours on a coverage problem that is not there.
