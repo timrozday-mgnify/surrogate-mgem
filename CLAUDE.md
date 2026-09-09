@@ -16,7 +16,7 @@
 > The existing **`src/surrogate_mgem/`** package (PyTorch + MICOM growth
 > surrogate, documented below) is **legacy/reference** — kept, not deleted.
 >
-> ### Progress — M0–M2 and §4 done on the real roster; M3 at 0.958 of a 0.99 gate
+> ### Progress — M0–M2 and §4 done on the real roster; M3 at 0.952 (plain FBA) / 0.959 (inhibited) of a 0.99 gate
 >
 > | Milestone | State | Code |
 > | --- | --- | --- |
@@ -24,13 +24,13 @@
 > | M1 degeneracy → D4 | **done, V1 complete** — **68.9%** of 371k exchange-FVA observations degenerate roster-wide (59.7–82.8% per genome; 88% at α=0.7 vs 50% at α=1.0) ⇒ **D4 = elastic net** | `src/cfs/validate/degeneracy.py` |
 > | M2 solve interface | **done, §3.4 gate verified on a real GEM** — MM uptake bounds (§3.3), FBA for `mu_max` + duals, then the **Clarabel** elastic-net QP for `z` | `src/cfs/groundtruth/solve.py` |
 > | §4 sampling + bulk labels | **done, generated** — active subspace, stratified-Sobol design, parquet driver | `src/cfs/sampling/`, `--stage labels` |
-> | M3 Head A (value) | **gate not met on cosine — worst 0.952 against 0.99 — but Head A is no longer what §8.1 is waiting on.** Causes found and fixed in order: concavity imposed in the wrong coordinate (`x`, not `u`), random init collapsing the max-affine head, planes dying during training, and finally the repair's uniform softmin lift (§8.6c). Best head is **frozen** label tangents — `--epochs 0 --gm-init labels --gm-select level1 --gm-repair --gm-eval-temp 1e-4` — worst cosine 0.952, median 0.981, median R² 0.9999, low-`mu` bias **+0.0004**, and `mu_rel_median <= 0.0005` on all 30 §8.1 cells | `src/cfs/surrogate/{picnn_u,deepset_u,groupmax}.py` |
+> | M3 Head A (value) | **gate not met on cosine — worst 0.952 against 0.99 — but Head A is no longer what §8.1 is waiting on.** Causes found and fixed in order: concavity imposed in the wrong coordinate (`x`, not `u`), random init collapsing the max-affine head, planes dying during training, and finally the repair's uniform softmin lift (§8.6c). Best head is **frozen** label tangents — `--epochs 0 --gm-init labels --gm-select level1 --gm-repair --gm-eval-temp 1e-4` — worst cosine 0.952, median 0.981, median R² 0.9999, low-`mu` bias **+0.0004**, and `mu_rel_median <= 0.0005` on all 30 §8.1 cells | `src/cfs/surrogate/{picnn_u,deepset_u,groupmax}.py` **Unmoved by `W_CAP` 300 -> 1e5 (M17): 0.9522 -> 0.9519 on plain-FBA labels, value R2 identical — that raise is worth 0.8955 -> 0.9593 on the *inhibited* root and nothing here, which is why the clip went unseen.** |
 > | M4 Head B (behaviour) | **done, and now the M5 bottleneck.** `z_i(c, alpha)` masked MLP predicting **specific** flux `z / mu_max`; on `labels_p4`, worst held-out R2 **0.931** / median 0.963, worst flux cosine 0.985. Held-out is not the binding number: per-member flux cosine falls to **0.74-0.96** at community media, tracking NN distance to its own training media | `src/cfs/surrogate/behaviour.py` |
 > | M5 dFBA composition | **gate met at n=2/3/5 and n=21; n=10 and one cell of 30 are open.** Median log-X over 3 medium draws x 10 communities, frozen Head A at `--gm-eval-temp 1e-4`: **0.003 / 0.004 / 0.000 / 0.025 / 0.009** at sizes 2/3/5/10/21, overall 0.004, max 0.318. Head A contributes essentially nothing now (`mu_rel_median <= 5e-4` everywhere); the residual is **Head B's coverage of community-regime media**, whose NN-distance proxy predicts `dc_rel` at Spearman +0.673 over the cells on disk. §8.6c/§8.6d | `src/cfs/compose/dfba.py`, `src/cfs/surrogate/{behaviour,calibrate}.py` |
 > | M3b HPC sweep | **two runs. 2026-08-25** (350 tasks, 324 cpu-h) refuted its own "scale closes the gap": width/depth inert. **2026-08-27** (442/442 tasks, 21 cells x 21 organisms) is the source of the roster numbers below. The rows arm has now failed to run three times | `examples/hpc_run/`, `--stage sweep` |
 >
 > | M9-M14 Phase 7 applications | **spec written; M9, M10 and M11 done** — `cfs simulate` integrates a community forward, batch or chemostat (`--dilution`), surrogate only, no LP — and `--stiff` (BDF in `log X`) is what makes the chemostat *transient* trustworthy, landing on the independently-solved fixed point to 1.3e-10; `cfs maximise-growth` is §13.2's convex medium design, 19/20 V5 round-trips at the default trust region, median true gain +2.2%, median optimism 0.3%. `cfs minimal-medium` is §13.3's convex program; **V6 passes on 4/4 communities with `--lp-repair` (2026-09-06)** — the residual failure was not Head A's essentiality gap (that closed 2026-08-31) but a **synthetic-lethal set** the single-knockout pin cannot see, repaired by the true LP at +2 components in 370. The rest (steady state, interaction maximisation, the inverse-problem posterior) is specced in **§13** with a per-use-case accuracy table: most need less than M3's and M5's unmet gates | `src/cfs/compose/dfba.py` (`simulate`, `with_chemostat`), `src/cfs/science/growth.py` |
-> | M16 §13.11 product inhibition | **stages 1'-4' done and the roster relabel is run.** The thermodynamic secretion bound `ub = Vmax max(0, 1-c/c^eq)` in the true LP (`cfs interactions --inhibition`) and in the **surrogate**: Head A gains a per-metabolite `theta` channel (444 -> 888), Head B an inference clamp `z <= Vmax theta`, and `rhs_truth`/`rhs_hybrid` take `ceq` from the checkpoint so the ruler matches the model. At **`c^eq` = 1.0 mM** (`labels_i3`; 0.1 mM starved 13 of 21 organisms) it lands: worst grad cosine **0.896**, median **0.986**, median value R2 **0.9997**, 20/21 >= 0.95, 7/21 clearing M3's gate, and a composition that **beats the plain-FBA control** (overall log-X **0.011** vs 0.013, `mu_rel` **0.0001** vs 0.0020). **The gate is not stated, and is blocked on M17** | `cfs generate --inhibition`, `src/cfs/surrogate/data.py`, `src/cfs/compose/dfba.py` |
+> | M16 §13.11 product inhibition | **stages 1'-4' done and the roster relabel is run.** The thermodynamic secretion bound `ub = Vmax max(0, 1-c/c^eq)` in the true LP (`cfs interactions --inhibition`) and in the **surrogate**: Head A gains a per-metabolite `theta` channel (444 -> 888), Head B an inference clamp `z <= Vmax theta`, and `rhs_truth`/`rhs_hybrid` take `ceq` from the checkpoint so the ruler matches the model. At **`c^eq` = 1.0 mM** (`labels_i3`; 0.1 mM starved 13 of 21 organisms) it lands: worst grad cosine **0.896**, median **0.986**, median value R2 **0.9997**, 20/21 >= 0.95, 7/21 clearing M3's gate, and a composition that **beats the plain-FBA control** (overall log-X **0.011** vs 0.013, `mu_rel` **0.0001** vs 0.0020). **M17 closed 2026-09-09 (`W_CAP` 300 -> 1e5), so the gate can now be stated: worst grad cosine 0.9593, worst value R2 0.9967, 8 of 21 clearing M3's 0.99, under-rate 0.000, and composition overall log-X 0.011 against the plain-FBA control's 0.013 — M3's own 0.99 worst-organism gate is still unmet** | `cfs generate --inhibition`, `src/cfs/surrogate/data.py`, `src/cfs/compose/dfba.py` |
 > | **M17 `CP000139.1`** | **CLOSED 2026-09-09, and it was `W_CAP`.** `to_diag` clipped `w = min(u/s, 300)`, and clipping is many-to-one: two media above the cap share a `w` and differ in `mu`, so a label tangent taken at one is not a valid upper bound at the other. 239 407 of this organism's entries clipped, 34% of its tangents were invalid, and `--gm-repair` lifted 239 planes to fix that -- the +1.87 band error. The knee is at **1e5** (cut model over its own tangents: -0.67 at `mu/max` 0.5-0.75 at cap 300, -0.49 at 1e4, **+0.0000 at 1e5**, identical to 1e12). `W_CAP` is now 1e5; the init scale keeps its measured 150. Roster worst cosine **0.8955 -> 0.9593**, worst value R2 **0.3177 -> 0.9967**, `n >= 0.99` 7 -> 8, under-rate still 0.000; this organism 0.8955 -> **0.9950** / R2 **0.9994**, clearing M3's gate. The plain-FBA control is unchanged (0.9522 -> 0.9519), which is why it went unseen. Retracts, same day: the labels and duals are fine (the 25 forcing rows re-solve to machine precision; `reduced_costs` reproduce the edited dual at x0.5), and `--gm-valid-cuts` is refuted as a fix and kept as the diagnostic. **Rule: a clip in the input map is a modelling assumption. `min(w, cap)` preserves concavity and destroys injectivity, and an upper-bound invariant needs the second.** | Closed Composition (3 draws x the same 10 communities, matched inhibited truth): the tail, not the bulk -- n=10 **0.277 -> 0.105**, n=21 **0.127 -> 0.017**, max **0.696 -> 0.306**, sizes 2/3/5 and the overall median unchanged; paired, n=10 draw 200 is 0.6961 -> 0.1048 and n=21 draw 100 is 0.1269 -> 0.0170 while every other draw moves <= 0.001. |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
@@ -4062,19 +4062,15 @@ A global correction cannot preserve a local repair. Default off, negative result
 on file. `CP000139.1` stays open — its unrepaired R2 of 0.48 says the repair was
 never its whole story.
 
-**`CP000139.1` is now M17 and it is required, not optional** — see the milestone
-table and design spec §13.11 / the M17 row. M3's gate is the worst organism by
-construction, so **M16 stays unstated until this closes**, even though 20 of 21
-organisms are at >= 0.95 and the composition already beats the plain-FBA control.
-Live directions, cheapest first: (a) confirm the band's plane *slopes* are still
-the label tangents (this head is `--epochs 0`, so they should be), which narrows
-it to the intercept LP's feasible set; (b) count the band's cuts — O2 was already
-the worst limiter in the n=1 titration because only ~3 planes are active there, so
-test whether it simply has too few to survive any intercept raise; (c) a **capped**
-per-plane lift, keeping global validity but bounding how far one plane may move —
-a one-line change to the closed form. **Its R2 is still 0.48 with the repair off**,
-so removing the lift is not sufficient and the gate must be re-read on cosine
-*and* value R2.
+**`CP000139.1` was M17, and it closed the same day — the cause was `W_CAP`, not
+the repair.** See "M17 is closed, and it was `W_CAP`" below. Its unrepaired R2 of
+0.48 was the same clip: two media above `w = 300` share an input and differ in
+`mu`, so its label tangents were not upper bounds and `--gm-repair` had to lift
+239 planes to make them one. At `W_CAP = 1e5` it reads grad cosine **0.9950** /
+value R2 **0.9994** with the repair on and the under-rate still 0.000, and the
+roster worst goes **0.8955 -> 0.9593** / R2 **0.3177 -> 0.9967**. Directions (a)
+and (b) above were both answered on the way and neither was it: the installed
+slopes *are* the label tangents, and the band's cut count never mattered.
 
 **Also open:** Head B's 0.791; and re-reading stage 3''s §13.5 conclusions, all
 taken at `c^eq` = 0.1 mM.
