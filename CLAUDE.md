@@ -3898,8 +3898,18 @@ relabel (P14 rebuilds both heads). The structural alternative is a physiological
 `Vmax` (then `z/Vmax ~ 1` and the bound binds across the sampled range) — M15's
 already-recorded missing input, which rescales every growth rate on file.
 
-**Unexplained:** the per-organism spread (see check 2). **Pre-check before the
-relabel:** are the 0.6% of rows already in the window fit well?
+**The pre-check does NOT support that fix** (`theta_window.py`, no solves).
+Binning held-out rows by the `theta` of their own leading theta-limiter:
+**99.4%** sit at `theta == 0` (median `cos_theta` **0.934**) and only **11 rows**
+land in the window, at **0.934** — indistinguishable. n=11 is too small to be
+decisive, but there is no evidence the window is the easy regime, and the
+per-organism spread is decided entirely at the corner: at `theta == 0`,
+`GCA_000151225.1` scores **0.996** and `GCA_000209935.1` **0.005**. Whatever
+separates them is not which `theta` band the rows are in. **Do not spend the
+relabel on this yet** ([[held-out-cannot-see-a-design-change]] cuts the other way
+here: the design change is cheap to reason about and the evidence for it is 11
+rows). **Still unexplained:** the per-organism spread (check 2), now localised to
+`theta == 0` rows specifically.
 
 Scripts (`20hm_bands/`, none solve more than ~16 LPs): `fd_theta.py`
 (`--interior`), `fd_batch.sh`, `fd_interior.sh`, `theta_split.py`, `then_i1.sh`.

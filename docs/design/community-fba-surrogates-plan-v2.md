@@ -6831,10 +6831,31 @@ alternative is a **physiological `Vmax`** — at `z/Vmax ~ 1` the bound would bi
 across the sampled range — which is M15's already-recorded missing input and
 rescales every growth rate on file.
 
-**Two things this does not explain.** The per-organism spread: nothing measured
-separates `GCA_000151225.1` (0.981, 94.9% theta share, 16/16 degenerate) from
-`CP048433.1` (0.688). And whether the 0.6% of rows already in the window are fit
-well — the pre-check that should precede the relabel.
+**The pre-check ran and does not support the fix.** `20hm_bands/theta_window.py`
+(no solves) bins held-out rows by the `theta` of their own leading theta-limiter:
+
+| bin | rows | share | median `cos_theta` |
+| --- | --- | --- | --- |
+| `theta == 0` | 8555 | **99.4%** | 0.9338 |
+| (0, 0.02) | 0 | 0.0% | — |
+| **(0.02, 0.5)** | **11** | 0.1% | **0.9342** |
+| (0.5, 0.99) | 17 | 0.2% | 0.8407 |
+| >= 0.99 | 27 | 0.3% | 0.9363 |
+
+The window rows are fit **no better** than the corner rows. n=11 is far too small
+to be decisive either way, but it is the only direct evidence available and it
+does not say the window is the easy regime — so the 4.5 h relabel is not yet
+justified. What the table does show is that **the per-organism spread is decided
+entirely at `theta == 0`**: there `GCA_000151225.1` scores **0.996** and
+`GCA_000209935.1` **0.005**, and each organism's corner score equals its overall
+`cos_theta` to three decimals. Whatever separates them is not the `theta` band.
+
+**Still unexplained**, and now the only live question: why two organisms collapse
+at the corner where nineteen do not. Nothing measured — degeneracy rate, dual
+magnitude, selection rate, theta share, `theta` band — separates them. Note the
+two failures have selection rates of **2.2% and 2.3%** against 25-58% for the
+rest, i.e. few theta tangents each carrying a very large dual (`pi` 1495 and
+10000); whether that sparsity is the mechanism is untested.
 
 **Not built, deliberately.** `sampling/design.py` gains no secretion band —
 premise 1 says the existing design already spans the channel, so a redesign would
