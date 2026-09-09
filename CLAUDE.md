@@ -30,7 +30,8 @@
 > | M3b HPC sweep | **two runs. 2026-08-25** (350 tasks, 324 cpu-h) refuted its own "scale closes the gap": width/depth inert. **2026-08-27** (442/442 tasks, 21 cells x 21 organisms) is the source of the roster numbers below. The rows arm has now failed to run three times | `examples/hpc_run/`, `--stage sweep` |
 >
 > | M9-M14 Phase 7 applications | **spec written; M9, M10 and M11 done** — `cfs simulate` integrates a community forward, batch or chemostat (`--dilution`), surrogate only, no LP — and `--stiff` (BDF in `log X`) is what makes the chemostat *transient* trustworthy, landing on the independently-solved fixed point to 1.3e-10; `cfs maximise-growth` is §13.2's convex medium design, 19/20 V5 round-trips at the default trust region, median true gain +2.2%, median optimism 0.3%. `cfs minimal-medium` is §13.3's convex program; **V6 passes on 4/4 communities with `--lp-repair` (2026-09-06)** — the residual failure was not Head A's essentiality gap (that closed 2026-08-31) but a **synthetic-lethal set** the single-knockout pin cannot see, repaired by the true LP at +2 components in 370. The rest (steady state, interaction maximisation, the inverse-problem posterior) is specced in **§13** with a per-use-case accuracy table: most need less than M3's and M5's unmet gates | `src/cfs/compose/dfba.py` (`simulate`, `with_chemostat`), `src/cfs/science/growth.py` |
-> | M16 §13.11 product inhibition | **stages 1'-4' done** — the thermodynamic secretion bound `ub = Vmax max(0, 1-c/c^eq)` in the true LP (`cfs interactions --inhibition`), and now in the **surrogate**: Head A gains a per-metabolite `theta` channel (444 -> 888), Head B an inference clamp `z <= Vmax theta`, and `rhs_truth`/`rhs_hybrid` take `ceq` from the checkpoint so the ruler matches the model. The concentrated second label root stage 4' was written around is **refuted** — the existing design already spans `theta` on 26-36% of entries and `mu` moves on 50% of media. Open: the roster-scale relabel and a gate on it | `cfs generate --inhibition`, `src/cfs/surrogate/data.py`, `src/cfs/compose/dfba.py` |
+> | M16 §13.11 product inhibition | **stages 1'-4' done and the roster relabel is run.** The thermodynamic secretion bound `ub = Vmax max(0, 1-c/c^eq)` in the true LP (`cfs interactions --inhibition`) and in the **surrogate**: Head A gains a per-metabolite `theta` channel (444 -> 888), Head B an inference clamp `z <= Vmax theta`, and `rhs_truth`/`rhs_hybrid` take `ceq` from the checkpoint so the ruler matches the model. At **`c^eq` = 1.0 mM** (`labels_i3`; 0.1 mM starved 13 of 21 organisms) it lands: worst grad cosine **0.896**, median **0.986**, median value R2 **0.9997**, 20/21 >= 0.95, 7/21 clearing M3's gate, and a composition that **beats the plain-FBA control** (overall log-X **0.011** vs 0.013, `mu_rel` **0.0001** vs 0.0020). **The gate is not stated, and is blocked on M17** | `cfs generate --inhibition`, `src/cfs/surrogate/data.py`, `src/cfs/compose/dfba.py` |
+> | **M17 `CP000139.1` — REQUIRED, next** | **The only thing between M16 and a gate statement.** One organism at grad cosine **0.895** / value R2 **0.318** where the roster median is 0.986 / 0.9997. A single band — true `mu` in [0.80, 1.30), 180 of 800 held-out rows, predicted **2.85 against a true 0.98**, 89% `EX_o2_e`-limited — with every other band exact to 1e-4. Coverage, labels, cut selection and plane installation are each excluded by measurement; the cause is `repair_intercepts`. **Two fixes already refuted**: no repair (roster `value_under_rate` 0.000 -> 0.970) and `--gm-repair-local` (roster median R2 -> **-0.665**). Read the design spec's M17 row before proposing a third | `src/cfs/surrogate/groupmax.py` |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
@@ -4060,6 +4061,20 @@ truth off its territory is paid for by raising **every** plane. The lift goes
 A global correction cannot preserve a local repair. Default off, negative result
 on file. `CP000139.1` stays open — its unrepaired R2 of 0.48 says the repair was
 never its whole story.
+
+**`CP000139.1` is now M17 and it is required, not optional** — see the milestone
+table and design spec §13.11 / the M17 row. M3's gate is the worst organism by
+construction, so **M16 stays unstated until this closes**, even though 20 of 21
+organisms are at >= 0.95 and the composition already beats the plain-FBA control.
+Live directions, cheapest first: (a) confirm the band's plane *slopes* are still
+the label tangents (this head is `--epochs 0`, so they should be), which narrows
+it to the intercept LP's feasible set; (b) count the band's cuts — O2 was already
+the worst limiter in the n=1 titration because only ~3 planes are active there, so
+test whether it simply has too few to survive any intercept raise; (c) a **capped**
+per-plane lift, keeping global validity but bounding how far one plane may move —
+a one-line change to the closed form. **Its R2 is still 0.48 with the repair off**,
+so removing the lift is not sufficient and the gate must be re-read on cosine
+*and* value R2.
 
 **Also open:** Head B's 0.791; and re-reading stage 3''s §13.5 conclusions, all
 taken at `c^eq` = 0.1 mM.
