@@ -46,7 +46,7 @@ from cfs.surrogate.deepset import (  # noqa: F401  (the arch interface, re-expor
     organism,
 )
 from cfs.surrogate.picnn import _softplus_inv
-from cfs.surrogate.picnn_u import INPUT_TRANSFORM, W_CAP, to_diag  # noqa: F401
+from cfs.surrogate.picnn_u import INPUT_TRANSFORM, W_CAP, _INIT_SCALE, to_diag  # noqa: F401
 
 
 class TrunkU(deepset.Trunk):
@@ -65,7 +65,7 @@ class TrunkU(deepset.Trunk):
         # the conditioning term is a small perturbation at init and `cx / scale`
         # carries it along; this is an initial point, not a constraint, and the
         # constraint (the sign of the whole pre-softplus sum) is untouched.
-        scale = W_CAP / 2.0
+        scale = _INIT_SCALE
         shrink = lambda p: _softplus_inv(jax.nn.softplus(p) / scale)  # noqa: E731
         self.wx = [shrink(p) for p in self.wx]
         self.cx = [c / scale for c in self.cx]

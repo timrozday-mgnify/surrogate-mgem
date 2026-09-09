@@ -814,6 +814,20 @@ def load(outdir: Path, width: int = 128, depth: int = 3) -> tuple[eqx.Module, di
         gm_group=arch.get("gm_group"),
         gm_temp=arch.get("gm_temp"),
     )
+    # `W_CAP` moved 300 -> 1e5 on 2026-09-09 (M17), and it is part of the head's
+    # input map, not of its weights -- so a checkpoint trained under the old cap
+    # is silently a different function when reloaded under the new one. Nothing
+    # validates this string, so say so rather than enforce it: an old head is
+    # still usable, its numbers are just not the ones its diagnostics record.
+    from cfs.surrogate.picnn_u import INPUT_TRANSFORM
+
+    was = meta.get("input_transform")
+    if was and was != INPUT_TRANSFORM:
+        LOGGER.warning(
+            "%s was trained under a different input transform (%s); it is being "
+            "evaluated under %s",
+            outdir, was, INPUT_TRANSFORM,
+        )
     return eqx.tree_deserialise_leaves(outdir / "value_heads.eqx", like), meta
 
 
