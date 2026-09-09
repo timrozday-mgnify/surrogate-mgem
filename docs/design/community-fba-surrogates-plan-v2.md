@@ -7017,6 +7017,59 @@ rather than a tail.
 rows and never held-out ones, so if anything it flatters the `c^eq` 0.1 arm,
 which had it. The composition gate follows once the round completes.
 
+
+##### The full `c^eq` = 1.0 mM run: the composition gap closes too
+
+2026-09-09, `then_i3.sh` complete — `labels_i3` 63/63 base + 63/63 round-1, 100%
+optimal, `value_i3` + `behaviour_i3`, three medium draws on the same 10
+communities against the matched inhibited truth.
+
+**Round 1 changes Head A by nothing**, as it should (it adds training rows, never
+held-out ones): worst 0.8955 -> 0.8955, median 0.9857 -> 0.9859, median value R2
+0.9997 both. 20/21 >= 0.95, **7/21 clear the 0.99 gate**.
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max | `mu_rel` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `c^eq` 0.1 | 0.077 | 0.074 | 0.150 | 1.284 | 0.923 | 0.091 | 3.279 | 0.0008 |
+| **`c^eq` 1.0** | **0.011** | **0.011** | **0.002** | 0.277 | **0.127** | **0.011** | 0.696 | **0.0001** |
+| plain FBA | 0.006 | 0.007 | 0.009 | 0.060 | 0.175 | 0.013 | 0.508 | 0.0020 |
+
+1. **`overall` is 0.011 against the plain-FBA control's 0.013** — the inhibited
+   composition is now *better* in bulk than the FBA one, which is the strongest
+   available statement that §13.11 composes. `mu_rel` is **0.0001**, 20x better
+   than the control's 0.0020, so Head A is essentially exact along these paths.
+2. **Sizes 2/3/5 land at 1.1% / 1.1% / 0.2%**, i.e. at or under M5's 1% gate, from
+   7.7% / 7.4% / 15.0%. n=21 is 0.127 against the control's 0.175.
+3. **The benchmark also stops being pathological**: median `max mu_true_initial`
+   at n=2 goes **19.15 -> 45.10** (control 55.65), so members are no longer being
+   pushed into the `mu0/mu_scale < 2` regime by the inhibition itself.
+
+**The residual is n=10, and it is the medium draw, not the size** — the same
+confound this file already documents at n=21:
+
+| | draw 0 | draw 100 | draw 200 |
+| --- | --- | --- | --- |
+| n=10 log-X / `mu_rel` | **0.0008** / 0.00016 | 0.277 / 0.089 | 0.696 / 0.169 |
+| n=21 log-X / `mu_rel` | **0.0088** / 0.00078 | 0.127 / 0.015 | 0.376 / 0.079 |
+
+Draw 0 gives **0.0008 and 0.0088** — far inside the gate at both sizes. The bad
+draws carry `mu_rel` of 0.089-0.169, three orders above the median, so this is
+**Head A off-distribution**, §8.5's class, not Head B and not the integrator.
+Per this file's own rule, quote paired draws; a single invocation has ~6x
+sampling error.
+
+**Head B is the one thing that got worse**: worst R2 **0.791**, median 0.922,
+against `behaviour_p4r2`'s 0.935 / 0.964 on plain FBA. Expected — it keeps the
+`u` half alone by design (§13.11) and gains only the inference clamp, so the
+secretion regime inhibition creates is not in its input. Untested whether giving
+it the `theta` block would help.
+
+**Open after this run**, in order: `CP000139.1` (cosine 0.895, value R2 **0.318**
+where every other organism is >= 0.9967, not starved) — one organism, a different
+failure, and already visible pre-relabel as the only organism whose predicted
+theta share missed its target; Head B's 0.791; and re-reading stage 3''s §13.5
+conclusions, all measured at `c^eq` = 0.1 mM.
+
 **Not built, deliberately.** `sampling/design.py` gains no secretion band —
 premise 1 says the existing design already spans the channel, so a redesign would
 be spending 21 organism-hours on a coverage problem that is not there.

@@ -3996,8 +3996,34 @@ stops predicting because its variable stops varying.
 organism whose predicted theta share (91.9%) missed its target (74.8%) in
 `theta_split`, so it predates the relabel. One organism, not a tail.
 
-**Caveat:** base-only. Round 1 adds training rows and never held-out ones, so it
-flatters the `c^eq` 0.1 arm, which had it. Composition gate follows.
+**Round 1 then changed Head A by nothing**, as it should: worst 0.8955 ->
+0.8955, median 0.9857 -> 0.9859. **And the composition gap closes** — 3 draws x
+the same 10 communities, matched inhibited truth:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max | `mu_rel` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `c^eq` 0.1 | 0.077 | 0.074 | 0.150 | 1.284 | 0.923 | 0.091 | 3.279 | 0.0008 |
+| **`c^eq` 1.0** | **0.011** | **0.011** | **0.002** | 0.277 | **0.127** | **0.011** | 0.696 | **0.0001** |
+| plain FBA | 0.006 | 0.007 | 0.009 | 0.060 | 0.175 | 0.013 | 0.508 | 0.0020 |
+
+`overall` **beats the plain-FBA control** (0.011 vs 0.013) at `mu_rel` 20x better,
+sizes 2/3/5 are at or under M5's 1% gate, and n=21 beats the control too. Median
+`max mu_true_initial` at n=2 goes **19.15 -> 45.10** (control 55.65), so
+inhibition stops forcing members into the `mu0/mu_scale < 2` regime.
+
+**The residual is the medium draw, not the size** — draw 0 gives **0.0008 (n=10)
+and 0.0088 (n=21)**, while draws 100/200 carry `mu_rel` 0.089-0.169, three orders
+above the median. That is Head A **off-distribution** (§8.5's class), not Head B.
+Quote paired draws.
+
+**Head B is the one regression**: worst R2 **0.791** / median 0.922 against
+`behaviour_p4r2`'s 0.935 / 0.964. Expected — §13.11 keeps its input as `u` alone
+and gives it only the inference clamp, so the secretion regime is not in its
+input. Untested whether adding the `theta` block helps.
+
+**Open:** `CP000139.1` (0.895, value R2 **0.318**, not starved — a different
+failure, one organism); Head B's 0.791; and re-reading stage 3''s §13.5
+conclusions, all taken at `c^eq` = 0.1 mM.
 
 ### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
 
