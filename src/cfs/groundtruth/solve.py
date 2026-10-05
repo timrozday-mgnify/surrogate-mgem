@@ -63,6 +63,21 @@ def mm_lower_bound(vmax: float, c: float, km: float) -> float:
     return -abs(vmax) * c / (km + c)
 
 
+def mm_upper_bound(vmax: float, c: float, ceq: float) -> float:
+    """Secretion upper bound under thermodynamic product inhibition (§13.11).
+
+    ``ub = Vmax * max(0, 1 - c/ceq)``: the displacement from equilibrium, so
+    secretion stops once the external concentration reaches ``ceq``. **Affine**
+    in ``c`` on purpose -- ``mu_max`` is concave in the LP's bound vector, so it
+    stays concave in ``c`` only while the bound is affine in ``c``. The
+    hyperbolic/competitive form ``Vmax/(1 + c/Ki)`` is convex and would cost
+    §13.2 and §13.3 their convexity; see the plan's §13.11.
+    """
+    if ceq <= 0.0:
+        return 0.0
+    return abs(vmax) * max(0.0, 1.0 - c / ceq)
+
+
 def _base_id(exchange_id: str) -> str:
     """BiGG base metabolite token: EX_glc__D_e -> glc, EX_na1_e -> na1."""
     core = exchange_id
@@ -88,13 +103,21 @@ def km_for_exchange(exchange_id: str, km_cfg: dict) -> float:
     return float(km_cfg["default"])
 
 
-def apply_mm_bounds(model, concentrations: dict[str, float], km_cfg: dict) -> None:
+def apply_mm_bounds(
+    model, concentrations: dict[str, float], km_cfg: dict, ceq: dict[str, float] | None = None
+) -> None:
     """Set exchange uptake lower bounds from concentrations, in place (§3.3).
 
     ``concentrations`` maps exchange id -> concentration. Vmax is the exchange's
     existing default uptake magnitude (``abs(lower_bound)``). Exchanges absent from
     ``concentrations`` are left at their current bound (the caller sets background
     levels). Call inside a ``with model:`` block to keep the change scoped.
+
+    ``ceq`` turns on §13.11's thermodynamic product inhibition: for each exchange
+    it names, the *secretion* upper bound falls affinely to zero as ``c`` reaches
+    that metabolite's equilibrium concentration. ``None`` (the default) is plain
+    FBA, bit for bit -- every result on file was measured that way, so the two
+    modes have to stay comparable.
     """
     for ex_id, c in concentrations.items():
         if ex_id not in model.reactions:
@@ -102,6 +125,12 @@ def apply_mm_bounds(model, concentrations: dict[str, float], km_cfg: dict) -> No
         rxn = model.reactions.get_by_id(ex_id)
         vmax = abs(rxn.lower_bound) or 1000.0
         rxn.lower_bound = mm_lower_bound(vmax, c, km_for_exchange(ex_id, km_cfg))
+    for ex_id, eq in (ceq or {}).items():
+        if ex_id not in model.reactions:
+            continue
+        rxn = model.reactions.get_by_id(ex_id)
+        c = concentrations.get(ex_id, 0.0)
+        rxn.upper_bound = mm_upper_bound(rxn.upper_bound or 1000.0, c, eq)
 
 
 # --------------------------------------------------------------------------- #
@@ -216,7 +245,12 @@ def mu_optimize(model, what: str = "") -> float:
 
 
 def solve(
-    model, concentrations: dict[str, float], alpha: float, eps: float, km_cfg: dict | None = None
+    model,
+    concentrations: dict[str, float],
+    alpha: float,
+    eps: float,
+    km_cfg: dict | None = None,
+    ceq: dict[str, float] | None = None,
 ) -> Solution:
     """Ground-truth solve for one (medium, alpha, eps) (plan §3.2).
 
@@ -236,7 +270,7 @@ def solve(
     # int(): optlang's GLPK interface multiplies this into glpk's int tm_lim.
     model.solver.configuration.timeout = int(_QP_TIME_LIMIT)
     with model:
-        apply_mm_bounds(model, concentrations, km_cfg)
+        apply_mm_bounds(model, concentrations, km_cfg, ceq)
 
         try:
             fba = model.optimize()
@@ -267,3 +301,137 @@ def solve(
         status=status.lower(),
         fluxes=v,
     )
+
+
+# --------------------------------------------------------------------------- #
+# dz*/dc — the QP's own derivative (implicit differentiation of its KKT system)
+# --------------------------------------------------------------------------- #
+
+
+def flux_sensitivity(
+    s_matrix: np.ndarray,
+    v: np.ndarray,
+    lb: np.ndarray,
+    ub: np.ndarray,
+    dbound: np.ndarray,
+    tol: float = _FLUX_EPS,
+) -> np.ndarray:
+    """``dv/dtheta`` for :func:`elastic_net_fluxes`, given how the bounds move.
+
+    The elastic net exists to make ``v`` unique (D4/§5.4). Uniqueness is exactly
+    what implicit differentiation of the KKT system needs, so the *same* decision
+    that made the labels well posed makes them differentiable — and unlike the
+    published route (Chapman et al. 2025, `DifferentiableMetabolism.jl`) there is
+    no pruning step to run, because there is nothing to disambiguate.
+
+    At the optimum every reaction is in one of three sets, and each is trivial:
+
+    * **at a bound** — ``v_i`` tracks the bound, so ``dv_i = dbound_i``;
+    * **at zero** by the L1 term — the subgradient is interior, so ``v_i`` stays
+      at 0 and ``dv_i = 0``. That is the correct local behaviour of a lasso, not
+      an approximation;
+    * **free** — stationarity is ``eps*v_i + sign(v_i) = (S' y)_i``, and the sign
+      is locally constant, so ``eps*dv_F = S_F' dy``: the free block moves inside
+      the row space of ``S_F``. Together with ``S dv = 0`` that is
+
+          ``dv_F = argmin ||d|| s.t. S_F d = -S_B dbound_B``
+
+      i.e. the minimum-norm restoration of mass balance. **`eps` cancels**, so the
+      derivative does not depend on the smoothing scale — only on which set each
+      reaction is in, which is where `eps` acts.
+
+    ``dbound`` is ``(n, P)``: for each reaction, the derivative of whichever bound
+    it is pinned to, w.r.t. each of ``P`` parameters. Rows for free/zero reactions
+    are ignored. Returns ``(n, P)``.
+
+    Assumes strict complementarity and that the active set does not change — the
+    same assumption Chapman et al.'s pruning makes, and the reason a derivative
+    says nothing about crossing a basis change (P3, and every "which metabolite
+    empties first" result in this project).
+    """
+    n = len(v)
+    span = np.maximum(np.abs(lb), np.abs(ub))
+    btol = tol * np.maximum(span, 1.0)
+    at_lb = np.abs(v - lb) <= btol
+    at_ub = np.abs(v - ub) <= btol
+    bound = at_lb | at_ub
+    zero = (~bound) & (np.abs(v) <= tol)
+    free = ~(bound | zero)
+
+    dv = np.zeros((n, dbound.shape[1]), dtype=float)
+    dv[bound] = dbound[bound]
+    if not free.any():
+        return dv
+    rhs = -s_matrix[:, bound] @ dv[bound]
+    dv[free] = np.linalg.lstsq(s_matrix[:, free], rhs, rcond=None)[0]
+    return dv
+
+
+def mu_curvature(dmu_dc: np.ndarray, c: np.ndarray, km: np.ndarray) -> np.ndarray:
+    """``d2 mu_max / dc^2`` — the exact diagonal, from the gradient alone.
+
+    ``mu_max`` is piecewise **linear** in the saturation ``u = c/(Km+c)``, so
+    ``d2mu/du2 = 0`` inside every critical region and the whole second derivative
+    is the chain rule's remaining term:
+
+        ``d2mu/dc_m dc_n = delta_mn (dmu/du_m)(d2u_m/dc_m^2)``,
+        ``d2u/dc2 = -2 Km/(Km+c)^3``,   so   ``H_mm = -2 (dmu/dc_m)/(Km_m + c_m)``.
+
+    So the Hessian is **diagonal, negative and free** wherever the gradient is
+    known — and *none of it is the LP*. All the curvature is Michaelis-Menten; the
+    LP contributes zero in the interior of a region and a Dirac measure on the
+    kinks (P3). A smoothed head's Hessian is therefore not an estimate of this
+    object but a mollification of those kinks, with width set by ``--gm-temp``.
+
+    Verified against central differences of the true LP on 12 (organism, medium,
+    limiting metabolite) cases: agreement to 6 significant figures, and unchanged
+    over a 10x range of step size.
+    """
+    return -2.0 * dmu_dc / (km + c)
+
+
+def exchange_jacobian(
+    model,
+    solution: Solution,
+    concentrations: dict[str, float],
+    wrt: list[str],
+    km_cfg: dict | None = None,
+) -> np.ndarray:
+    """``d z / d c`` at a solved medium: ``(len(model.exchanges), len(wrt))``.
+
+    Two routes carry a concentration into the QP and both are included:
+
+    1. the metabolite's own uptake bound, ``d lb_m/d c_m = -Vmax Km/(Km+c)^2``;
+    2. the fixed biomass flux ``alpha * mu_max``, whose sensitivity is the FBA
+       stage's dual under :mod:`cfs.surrogate.data`'s sign convention and clamp —
+       ``d mu/d c_m = max(-pi_m, 0) * Vmax * Km/(Km+c)^2``. Route 2 is why a
+       scarce medium moves *every* flux, not just its own exchange.
+    """
+    km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
+    from cobra.util import create_stoichiometric_matrix
+
+    rxns = model.reactions
+    idx = {r.id: i for i, r in enumerate(rxns)}
+    with model:
+        apply_mm_bounds(model, concentrations, km_cfg)
+        lb = np.array([r.lower_bound for r in rxns], dtype=float)
+        ub = np.array([r.upper_bound for r in rxns], dtype=float)
+    bi = idx[_biomass_reaction(model).id]
+    lb[bi] = ub[bi] = solution.alpha * solution.mu_max
+
+    s_matrix = create_stoichiometric_matrix(model)
+    dbound = np.zeros((len(rxns), len(wrt)))
+    for j, ex_id in enumerate(wrt):
+        c = float(concentrations.get(ex_id, 0.0))
+        if c <= 0.0 or ex_id not in idx:
+            continue
+        km = km_for_exchange(ex_id, km_cfg)
+        vmax = abs(model.reactions.get_by_id(ex_id).lower_bound) or 1000.0
+        dxdc = km / (km + c) ** 2
+        dbound[idx[ex_id], j] = -vmax * dxdc  # route 1
+        pi = solution.shadow_prices.get(ex_id, 0.0)
+        dmu = (-pi * vmax * dxdc) if pi < -1e-9 else 0.0  # route 2, data.py's clamp
+        dbound[bi, j] = solution.alpha * dmu
+
+    dv = flux_sensitivity(s_matrix, solution.fluxes, lb, ub, dbound)
+    return dv[[idx[ex.id] for ex in model.exchanges]]

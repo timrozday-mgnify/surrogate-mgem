@@ -49,6 +49,7 @@ def cells(
     batch,
     lr,
     w_grad,
+    w_rel,
     eps,
     emb_dim,
     gm_group,
@@ -74,6 +75,7 @@ def cells(
         "--batch": batch,
         "--lr": lr,
         "--w-grad": w_grad,
+        "--w-rel": w_rel,
         "--eps": eps,
         "--emb-dim": emb_dim,
         "--gm-group": gm_group,
@@ -94,6 +96,7 @@ def cells(
         "--batch": "b",
         "--lr": "lr",
         "--w-grad": "g",
+        "--w-rel": "wr",
         "--eps": "eps",
         "--emb-dim": "emb",
         "--gm-group": "grp",
@@ -157,6 +160,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--batch", type=_csv, default=["512"])
     p.add_argument("--lr", type=_csv, default=["3e-3"])
     p.add_argument("--w-grad", type=_csv, default=["1"])
+    p.add_argument(
+        "--w-rel",
+        type=_csv,
+        default=[""],
+        help="Relative value-error weight; '' = the CLI default (0, off).",
+    )
     p.add_argument("--eps", type=_csv, default=["1e-3"])
     p.add_argument("--emb-dim", type=_csv, default=["8"], help="deepset only.")
     p.add_argument("--gm-group", type=_csv, default=[""], help="groupmax-u only; '' = default.")
@@ -187,6 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             batch=a.batch,
             lr=a.lr,
             w_grad=a.w_grad,
+            w_rel=a.w_rel,
             eps=a.eps,
             emb_dim=a.emb_dim,
             gm_group=a.gm_group,
@@ -221,6 +231,7 @@ def demo() -> None:
             batch=["512"],
             lr=["3e-3"],
             w_grad=["1"],
+            w_rel=[""],
             eps=["1e-3"],
             emb_dim=["8"],
             gm_group=[""],
@@ -254,6 +265,7 @@ def demo() -> None:
             batch=["512"],
             lr=["3e-3"],
             w_grad=["10"],
+            w_rel=[""],
             eps=["1e-3"],
             emb_dim=["8"],
             gm_group=["8"],
@@ -284,6 +296,7 @@ def demo() -> None:
             batch=["512"],
             lr=["3e-3"],
             w_grad=["1"],
+            w_rel=[""],
             eps=["1e-3"],
             emb_dim=["8"],
             gm_group=[""],

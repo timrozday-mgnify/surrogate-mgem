@@ -32,13 +32,88 @@ class SamplingConfig:
     """Design knobs for one organism (plan §4.3-4.5). Defaults are the D10 scale."""
 
     n_media: int = 20000
-    log10_lo: float = -4.0  # log10(c/Km) lower end
+    log10_lo: float = -4.0  # log10(c/Km) lower end of the *unfocused* strata
     log10_hi: float = 1.0  # log10(c/Km) upper end (also the "rich" level)
+    # How far below Km the probe and the per-metabolite focus strata may reach.
+    # Separate from `log10_lo` because the two answer different questions: the
+    # unfocused strata move every dimension at once and must stay near Km or the
+    # medium starves on everything (measured -- see `sample_media`), while a
+    # metabolite's own band has to reach wherever *it* starts limiting.
+    #
+    # -4 was hiding a fifth of the design. The trace metals saturate at
+    # `c/Km ~ 1e-6`, so `demand_probe` saw no change across `[-4, 1]`, omitted
+    # them by contract, and `band_scales` defaulted them to 1.0: 100 of 496 active
+    # (organism, metabolite) bands roster-wide were anchored at the default and
+    # therefore sampled replete in every medium. At -12, CP070062.1 anchors 23/23
+    # instead of 16/23 -- `EX_cobalt2_e` at -6.41, `EX_zn2_e` at -5.88,
+    # `EX_o2_e` at -5.89 -- for 0.5 s more probing, and the anchors that already
+    # worked move by <=0.06 decades. It is what M11 ran into: a head whose input
+    # coordinate never resolved those metabolites cannot know they are essential.
+    probe_lo: float = -12.0
     frac_below_km: float = 0.40  # fraction of bulk media with c < Km (§4.3)
-    frac_bg_perturb: float = 0.10  # fraction of media that perturb the background
+    # Fraction of media that perturb the background, each over a random share of
+    # it -- the community regime. Raise it for a §4.6 round aimed at composition.
+    frac_bg_perturb: float = 0.10
     # Share of the bulk budget given to the per-metabolite focus strata below.
     # This is the single biggest lever on M3 — see `sample_media`.
     frac_focus: float = 0.50
+    # Share of the bulk budget spent on deliberately slow media: a small random
+    # subset of `A_i` drawn *below* its own limiting onset, the rest replete.
+    #
+    # The focus strata straddle each metabolite's onset and the unfocused ones sit
+    # near Km, so the design lands on the growth plateau: 76% of held-out media are
+    # above 75% of the organism's max `mu` and 7% below 5%. That is the band where
+    # Head A's error lives (§"Head A over-predicts at low mu": +0.978 median bias
+    # below 5% of max) and where §8.1's slow members are, and neither more capacity
+    # nor a reweighting puts rows there. Co-limitation rather than one scarce
+    # metabolite because that is what a community medium looks like.
+    frac_low_mu: float = 0.15
+    # Where the *non-focused* columns of a focus medium sit, in decades above each
+    # metabolite's own anchor. "Replete" has to be per-metabolite: with the band
+    # absolute (`[0, log10_hi]`, the pre-2026-08-31 behaviour) and `probe_lo`
+    # having moved onsets 2-6 decades below Km, a background metabolite stopped
+    # being near its own limit and became super-replete. The design then never
+    # shows the head several metabolites near onset at once, which is exactly what
+    # a community pool over the union of members' active subspaces is: at the
+    # 21-member medium that fails on every Head A seed, GCA_000151225.1 has 10 of
+    # 32 active metabolites within +-0.5 decades of their anchors against a
+    # training median of 0 (p95 7); pre-relabel it was 4 of 32 against a median
+    # of 15. That -- not the co-limitation count, and not the stratum budget,
+    # both of which were relabelled and refuted -- is the §8.1 size-21 regression.
+    #
+    # This is *not* the "everything starves together" collapse (see `sample_media`),
+    # which came from shifting whole bands so nothing was replete. Every column
+    # here stays above its own onset; only the focused one goes below.
+    focus_bg_decades: tuple[float, float] = (0.0, 1.5)
+    # B2 (§8.5): the mid-`mu` stratum. A share of `A_i` drawn *between* each
+    # metabolite's own 10%-recovery anchor and its `mid_target_frac`-recovery
+    # point, the rest replete -- so several metabolites are mildly limiting at
+    # once and `mu` lands in the middle of the organism's range, which is the
+    # regime §8.1 actually runs in and the one the design had emptied.
+    #
+    # E1 measured why this is the lever: at the 21-member medium that fails on
+    # every Head A seed, the binding tangent of the *parameter-free* cutting-plane
+    # model over `p4`'s own labels is anchored at a `mu = 50.6` plateau row and
+    # over-predicts the true 17.63 by +153% -- worse than the trained head. The
+    # same model on `r1`'s labels is exact there, and its binding tangent is
+    # anchored at `mu = 17.9`. A max-affine head cannot beat the min over its own
+    # planes, so the deficit is which media were labelled, and the missing ones
+    # are the mid-`mu` ones: rows with `mu/mu_max` in 0.3-0.6 fell 261 -> 90
+    # (AAXE02) and 231 -> 109 (GCA_000151225.1) across the relabel, while rows
+    # below 0.2 went 0.17 -> 0.65 of the design.
+    frac_mid_mu: float = 0.15
+    mid_target_frac: float = 0.5  # the second probe's recovery target
+    mid_mu_share: tuple[float, float] = (0.2, 1.0)  # share of A_i drawn near onset
+    # Where the picked metabolites sit, in decades *above* their own
+    # `mid_target_frac` point. Above, not between it and onset: co-limitation
+    # compounds downward, so a share of `A_i` each individually at 50% recovery
+    # lands the joint `mu` far below 50%. Measured -- the first version drew in
+    # [onset, mid] and moved rows with `mu/mu_max` in [0.3, 0.8] the *wrong* way
+    # (AAXE02 29 -> 13, `<0.2` 0.65 -> 0.76). Each metabolite is individually
+    # replete-ish and the *combination* is what pulls `mu` into the middle.
+    mid_mu_decades: tuple[float, float] = (0.0, 1.0)
+    low_mu_subset: tuple[int, int] = (1, 3)  # how many metabolites go scarce at once
+    low_mu_decades: tuple[float, float] = (-1.0, 0.5)  # drawn relative to the anchor
     # Growth-rate grid, K=8, densified near 1 where dFBA lives and z moves fastest.
     alphas: tuple[float, ...] = (0.0, 0.25, 0.5, 0.7, 0.85, 0.93, 0.97, 1.0)
     # eps == tau (D7/§5.5): the smoothing/regularisation family, middle is primary.
@@ -48,7 +123,7 @@ class SamplingConfig:
     # §4.7: measure each metabolite's limiting regime by LP before sampling, so a
     # genome with no previous labels still anchors its own bands.
     probe: bool = True
-    probe_steps: int = 12  # bisection steps over the 5-decade band
+    probe_steps: int = 12  # bisection steps over the probe_lo..log10_hi band
     seed: int = 0
 
 
@@ -138,6 +213,7 @@ def sample_media(
     cfg: SamplingConfig | None = None,
     scales: dict[str, float] | None = None,
     focus_weights: dict[str, float] | None = None,
+    mid_scales: dict[str, float] | None = None,
 ) -> list[dict]:
     """Return ``[{exchange_id: concentration}]`` media for one organism (§4.3).
 
@@ -190,6 +266,7 @@ def sample_media(
     # 27 to 7 — `EX_k_e` and `EX_acnam_e` took 85% of media between them and
     # `EX_o2_e` never limited at all.
     anchor = {ex: np.log10(float(scales.get(ex, 1.0))) for ex in sampled}
+    anchor_v = np.array([anchor[ex] for ex in sampled])
     held_rich = {ex: km[ex] * 10.0**cfg.log10_hi for ex in held}
     sampled_rich = {ex: km[ex] * 10.0**cfg.log10_hi for ex in sampled}
 
@@ -209,14 +286,33 @@ def sample_media(
             warnings.simplefilter("ignore", category=UserWarning)
             return qmc.Sobol(d=d, seed=int(rng.integers(1 << 31))).random(n)
 
+    def _perturb_bg(m):
+        """The community regime: take a random *share* of the background off rich."""
+        if held and rng.random() < cfg.frac_bg_perturb:
+            # A *subset* of the background, not all of it. In a community the
+            # background metabolites that stop being replete are the other
+            # members' active sets, which is 20% of the background for a pair
+            # and most of it for the whole roster -- so the share is itself
+            # drawn, spanning every community size in one design.
+            #
+            # Perturbing all-or-nothing left this bimodal: 90% of media with
+            # every background dim rich and 10% with essentially none, and
+            # nothing in between. Every failing M5 community medium sits in
+            # that hole -- 2.92 from the nearest training medium against a
+            # held-out median of 0.10, with each coordinate individually in
+            # range. Head B's flux cosine tracks that distance on all 21
+            # organisms (Spearman 0.33-0.84).
+            share = rng.random()
+            for ex in held:
+                if rng.random() < share:
+                    m[ex] = km[ex] * 10.0 ** rng.uniform(cfg.log10_lo, cfg.log10_hi)
+        return m
+
     def _emit(u, lo, hi):
         """Unit cube -> media. ``lo``/``hi`` are scalars or per-column log10 bounds."""
         for row in kmv * 10.0 ** (lo + u * (hi - lo)):
             m = {**held_rich, **{ex: float(c) for ex, c in zip(sampled, row, strict=True)}}
-            if held and rng.random() < cfg.frac_bg_perturb:
-                for ex in held:
-                    m[ex] = km[ex] * 10.0 ** rng.uniform(cfg.log10_lo, cfg.log10_hi)
-            media.append(m)
+            media.append(_perturb_bg(m))
 
     # Per-metabolite focus strata: an equal share of the budget for each sampled
     # metabolite, in media where *that* metabolite is the scarce one (drawn below
@@ -234,6 +330,13 @@ def sample_media(
     # metabolite to *exactly* zero, which for an essential one means no growth,
     # and a zero-growth row is dropped from the Sobolev term (`gvalid`). Scarce
     # but non-zero is what yields a usable dual.
+    # `frac_low_mu` comes out of `n_rest`, which shrinks the unfocused "below Km"
+    # stratum -- the only one that produces co-limited media (22.5% of it has >=5
+    # binding uptakes, against 2.7% of the focus strata). Paying for it out of
+    # `frac_focus` instead was tried on the full roster and **rejected**: it lifts
+    # roster co-limitation 8.6% -> 9.9% and changes §8.1 not at all (median log-X
+    # 0.031 -> 0.030 over 5 replicates x 10 communities), while costing Head A
+    # worst-organism cosine 0.966 -> 0.935 on its worst seed. See §4.3.
     n_focus = int(round(cfg.frac_focus * n_bulk))
     # Equal shares by default; `focus_weights` (from `topup_weights`) skews them
     # toward the metabolites a previous run got measurably wrong.
@@ -244,22 +347,61 @@ def sample_media(
     for j in range(d):
         if quota[j] <= 0:
             continue
-        # Everything else stays genuinely replete, at or above its literature Km;
-        # only the focused metabolite is driven down, and only as far as its *own*
-        # limiting regime (`anchor`), which for the ions is ~3.8 decades below Km
-        # and for EX_o2_e is ~0.1 decades above it. A single shared [-4, 0) band
-        # is what left `EX_mg2_e` limiting in 2% of media and `EX_k_e` in 14%.
-        lo = np.full(d, 0.0)
-        hi = np.full(d, cfg.log10_hi)
+        # Everything else stays replete *for itself* — `focus_bg_decades` above its
+        # own anchor, capped at the rich level — and only the focused metabolite is
+        # driven below, and only as far as its own limiting regime (`anchor`),
+        # which for the ions is ~3.8 decades below Km and for EX_o2_e is ~0.1
+        # decades above it. A single shared [-4, 0) band is what left `EX_mg2_e`
+        # limiting in 2% of media and `EX_k_e` in 14%.
+        bg_lo, bg_hi = cfg.focus_bg_decades
+        lo = np.minimum(anchor_v + bg_lo, cfg.log10_hi)
+        hi = np.minimum(anchor_v + bg_hi, cfg.log10_hi)
         a = anchor[sampled[j]]
-        lo[j], hi[j] = max(cfg.log10_lo, a - 1.5), min(cfg.log10_hi, a + 0.5)
+        lo[j], hi[j] = max(cfg.probe_lo, a - 1.5), min(cfg.log10_hi, a + 0.5)
         _emit(_sobol(int(quota[j])), lo, hi)
         n_focused += int(quota[j])
+
+    # Deliberately slow media: 1-3 metabolites below their *own* onset at once,
+    # everything else replete. Anchor-relative on purpose -- an absolute band is
+    # what left the plateau over-represented, because `c/Km = -3` is still replete
+    # for a metabolite whose onset is at -6.
+    n_low = int(round(cfg.frac_low_mu * n_bulk)) if d else 0
+    k_lo, k_hi = cfg.low_mu_subset
+    d_lo, d_hi = cfg.low_mu_decades
+    for _ in range(n_low):
+        m = {**held_rich, **sampled_rich}
+        for j in rng.choice(d, size=min(int(rng.integers(k_lo, k_hi + 1)), d), replace=False):
+            a = anchor[sampled[j]]
+            m[sampled[j]] = kmv[j] * 10.0 ** max(cfg.probe_lo, a + rng.uniform(d_lo, d_hi))
+        media.append(m)
+
+    # B2: mid-`mu` media -- a community-sized share of `A_i` between its own
+    # anchor (10% recovery) and its `mid_target_frac` point, everything else
+    # replete for itself. Co-limitation pulls the joint `mu` below what any one
+    # of them would give, which is the shape of a real community medium.
+    n_mid = int(round(cfg.frac_mid_mu * n_bulk)) if d else 0
+    mid = {ex: np.log10(float(v)) for ex, v in (mid_scales or {}).items()}
+    s_lo, s_hi = cfg.mid_mu_share
+    for _ in range(n_mid):
+        m = {**held_rich}
+        for j, ex in enumerate(sampled):
+            a = anchor[ex]
+            m[ex] = kmv[j] * 10.0 ** min(a + cfg.focus_bg_decades[1], cfg.log10_hi)
+        share = rng.uniform(s_lo, s_hi)
+        pick = rng.choice(d, size=max(1, int(round(share * d))), replace=False)
+        m_lo, m_hi = cfg.mid_mu_decades
+        for j in pick:
+            a = anchor[sampled[j]]
+            # No second probe for this metabolite (it never limits inside the
+            # band): half a decade above its own anchor is the honest stand-in.
+            b = mid.get(sampled[j], a + 0.5)
+            m[sampled[j]] = kmv[j] * 10.0 ** min(b + rng.uniform(m_lo, m_hi), cfg.log10_hi)
+        media.append(_perturb_bg(m))
 
     # The remainder keeps the original two strata in log10(c/Km): below Km
     # [lo, 0), at/above Km [0, hi]. Both regimes still need unfocused coverage —
     # real media limit on several things at once and the head has to see that.
-    n_rest = n_bulk - n_focused
+    n_rest = n_bulk - n_focused - n_low - n_mid
     n_below = int(round(cfg.frac_below_km * n_rest))
     for n_str, lo, hi in ((n_below, cfg.log10_lo, 0.0), (n_rest - n_below, 0.0, cfg.log10_hi)):
         if n_str <= 0:

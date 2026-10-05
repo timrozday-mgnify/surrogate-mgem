@@ -417,7 +417,13 @@ def test_organism_arrays_signs_and_scatter(tmp_path):
 
     km_cfg = {"classes": {"sugars": 0.01}, "default": 0.01, "keywords": {"sugars": ["glc"]}}
     col = {"EX_o2_e": 0, "EX_glc__D_e": 1, "EX_other_e": 2}
-    x, mu, g, gvalid, mask, ihash, mid = _organism_arrays(tmp_path, "g0", 1e-3, col, km_cfg, 3)
+    # [:9] -- §13.11's inhibition channel appends (theta, dmu/dtheta, theta mask),
+    # all None unless the label root carries an `inhibition.json`.
+    x, mu, g, gvalid, mask, ihash, mid, z, alphas = _organism_arrays(
+        tmp_path, "g0", 1e-3, col, km_cfg, 3
+    )[:9]
+    # Head B's targets are opt-in: without `with_z` the alpha grid is not even read.
+    assert z is None and alphas is None
     assert mid.tolist() == [0, 1]
 
     assert x.shape == (2, 3) and ihash == "h"
@@ -515,3 +521,390 @@ def test_reanchor_revives_dead_planes_and_fixes_the_rows_they_left_behind():
     # Still a valid concave head: every seeded slope is non-negative.
     assert (np.asarray(jax.nn.softplus(h.wx[0])) >= 0).all()
     assert to_diag(jnp.asarray(ds.x_val)).shape == ds.x_val.shape
+
+
+def test_w_rel_cuts_the_low_mu_bias_the_plain_mse_leaves():
+    """The absolute MSE ignores the small-mu rows; ``--w-rel`` is what sees them.
+
+    On the real labels the plain loss over-predicts *every* held-out medium below
+    75% of max mu (median +98% below 5%), which is what the §8 composition
+    integrates. Here the same signature has to show on the synthetic target: the
+    bottom-quartile rows are fit relatively better with the term than without,
+    with no collapse of the plateau.
+    """
+    ds = _synthetic()
+    kw = {"arch": "icnn", "width": 64, "depth": 2, "epochs": 400, "batch": 64, "lr": 3e-2}
+
+    def low_mu_bias(w_rel):
+        heads = train_value_heads(ds, w_rel=w_rel, **kw)
+        mu = ds.mu_val / ds.mu_scale[:, None]
+        mu_hat = np.asarray(batched_value(heads, jnp.asarray(ds.x_val)))
+        low = mu < np.quantile(mu, 0.25, axis=1, keepdims=True)
+        return float(np.median(np.abs((mu_hat - mu)[low] / mu[low])))
+
+    assert low_mu_bias(1.0) < low_mu_bias(0.0)
+
+
+def test_temperature_anneal_reaches_its_final_value():
+    """`temp` is static, so annealing has to rebuild the treedef of the head *and*
+    of Adam's moments; a mismatch there is a pytree error mid-run, not a bad fit."""
+    ds = _synthetic()
+    heads = train_value_heads(
+        ds,
+        arch="groupmax-u",
+        width=1,
+        depth=1,
+        gm_group=16,
+        gm_temp=0.1,
+        gm_temp_final=0.01,
+        epochs=40,
+        batch=64,
+        lr=3e-2,
+    )
+    assert heads.temp == pytest.approx(0.01)
+    assert (
+        evaluate(heads, ds, arch="groupmax-u")["per_organism"]["g0"]["concavity_violation_rate"]
+        == 0.0
+    )
+
+
+def test_calibration_is_increasing_concave_and_identity_at_zero():
+    """`g(m) = m - d0*exp(-m/beta)` is what keeps `mu_hat` concave in `u` after the
+    low-mu bias is removed -- if it stopped being increasing and concave the head's
+    concavity guarantee and §8.4's PSD tag would go with it."""
+    from cfs.surrogate import calibrate
+
+    m = np.linspace(-0.2, 4.0, 500)[None, :]
+    assert np.allclose(calibrate.apply(m, np.array([[0.0, 1.0]])), m)
+    for cal in ([[0.09, 2.7]], [[0.4, 0.3]]):
+        g = calibrate.apply(m, np.array(cal))[0]
+        d = np.diff(g)
+        assert (d > 0).all()
+        assert (np.diff(d) <= 1e-12).all()
+
+    # And the fit recovers a planted bias of exactly that shape.
+    y = np.random.default_rng(0).uniform(0.0, 3.0, (2, 4000))
+    cal = calibrate.fit(y + 0.1 * np.exp(-y / 0.5), y)
+    resid = calibrate.apply(y + 0.1 * np.exp(-y / 0.5), cal) - y
+    assert abs(np.median(resid[y < 0.3])) < 0.01
+
+
+def test_identity_calibration_is_finite_on_negative_predictions():
+    """`d0 = 0` must vanish, not overflow.
+
+    An uncalibrated checkpoint stores `beta = 0`, and `apply` floors the divisor
+    at 1e-12, so `exp(-m/beta)` overflows to `inf` for any m < 0 and `0 * inf` is
+    NaN. Head A's raw output is negative at a scarce medium, so this took a dFBA
+    trajectory to NaN at step 0 the first time an uncalibrated head was composed.
+    """
+    import numpy as np
+
+    from cfs.surrogate import calibrate
+    from cfs.surrogate.train import _identity_cal
+
+    m = np.array([[-5.0], [-0.1], [0.0], [3.0]])
+    for cal in (_identity_cal(4), np.array([[0.0, 0.0, 1.0]] * 4)):  # new and on-disk
+        out = calibrate.apply(m, cal)
+        assert np.isfinite(out).all()
+        assert np.allclose(out, m)
+
+
+def test_w_under_penalises_only_under_prediction():
+    """The hinge is one-sided: sitting above a labelled point is free.
+
+    `mu_max` is concave and the head is a min of affine pieces, so a correct head
+    is an upper bound on every labelled row; `mu_hat < mu` proves a plane has
+    drifted below the target. `w_rel` penalises both directions and therefore
+    trades accuracy; this forbids a violation.
+    """
+    import jax.numpy as jnp
+    import numpy as np
+
+    from cfs.surrogate.train import _loss
+
+    class _Fake:  # a head that just returns a stored prediction
+        def __init__(self, out):
+            self.out, self.mask = out, jnp.ones((1, 1, 2))
+
+    mu = jnp.array([[1.0, 1.0]])
+    g = jnp.zeros((1, 2, 2))
+    gvalid = jnp.zeros((1, 2))
+    x = jnp.full((1, 2, 2), 0.5)
+    args = (x, mu, g, gvalid, np.ones((1, 2), dtype=np.float32), jnp.ones(1), 0.0)
+
+    def loss(pred, w_under, w_tau=0.5):
+        h = _Fake(jnp.asarray(pred))
+        return float(
+            _loss(h, *args, 0.0, w_under, w_tau, None, 0.0, lambda hh, xx: (hh.out, g))[1][0]
+        )
+
+    over, under = [[1.5, 1.5]], [[0.5, 0.5]]
+    # Without the hinge the two are symmetric; with it, only under-prediction pays.
+    assert loss(over, 0.0) == loss(under, 0.0)
+    assert loss(over, 10.0) == loss(over, 0.0)
+    assert loss(under, 10.0) > loss(under, 0.0)
+
+    # `--w-tau` is the other one-sided knob, and it is NOT the hinge: it tilts every
+    # row rather than only the violating ones, which is what reaches the slopes.
+    # tau = 0.5 must reproduce the plain MSE exactly -- every number on file was
+    # measured at that scale, and a silent factor would move `lr` and `w_grad` too.
+    assert loss(over, 0.0, 0.5) == loss(over, 0.0)
+    assert loss(under, 0.0, 0.9) > loss(under, 0.0, 0.5)
+    assert loss(over, 0.0, 0.9) < loss(over, 0.0, 0.5)  # over-prediction gets cheaper
+    # ...and unlike the hinge it is still symmetric-in-form: tau and 1-tau swap the
+    # two sides, so the asymmetry is a single interpretable number.
+    assert loss(under, 0.0, 0.9) == loss(over, 0.0, 0.1)
+
+
+def test_level1_drops_exactly_the_cuts_with_an_empty_territory():
+    """SDDP's Level 1 / territory rule: a cut kept iff it is active somewhere.
+
+    Three tangents to a concave function, one of which (`hi`) lies strictly above
+    the other two everywhere on the trial set — it is *useless* in the SDDP sense,
+    since `min_j` never selects it, so dropping it changes the approximation
+    nowhere. Level 1 must rank it last with territory 0, while `rank_by_active_set`
+    cannot see it: its dual support pattern is as common as anyone's.
+    """
+    import numpy as np
+
+    from cfs.surrogate.groupmax import rank_by_territory
+
+    # mu_hat(w) = min_j (a_j . w + c_j), one input dimension that matters.
+    w = np.array([[0.0, 0.0], [4.0, 0.0], [2.0, 0.0]])
+    g_w = np.array([[1.0, 0.0], [0.1, 0.0], [1.0, 0.0]])  # slopes
+    mu = np.array([0.0, 1.0, 9.0])  # third row's intercept sits far above
+    mask = np.ones(2)
+    valid = np.ones(3, dtype=bool)
+    pts = np.stack([np.linspace(0, 8, 40), np.zeros(40)], axis=1)
+
+    order, territory = rank_by_territory(g_w, w, mu, mask, pts, valid)
+    assert territory[2] == 0  # never the active minimum: useless
+    assert territory[0] > 0 and territory[1] > 0
+    assert order[-1] == 2  # ranked last, so a budget of 2 excludes it
+
+    # The point set is the lever: restricted to large w, the shallow cut owns
+    # everything and the steep one is the useless one.
+    _, far = rank_by_territory(g_w, w, mu, mask, pts[pts[:, 0] > 5], valid)
+    assert far[1] > 0 and far[0] == 0
+
+
+def test_repair_restores_validity_without_loosening_the_fit():
+    """A head pushed below its own labels is put back above them, and no higher.
+
+    The invariant is one-sided: a min of supporting hyperplanes of a concave
+    function cannot read low, so a head that does has left the family. Break it
+    the way training does -- shift every intercept down -- and check the pass
+    restores ``mu_hat >= mu`` on every training row while staying *tight*.
+    """
+    import equinox as eqx
+
+    from cfs.surrogate import groupmax
+
+    ds = _min_affine_dataset(K=5, n=600, M=4)
+    M = ds.x_train.shape[-1]
+    heads = groupmax.stack_heads(
+        jax.random.PRNGKey(0), 1, M, ds.mask, width=1, depth=1, group=64, temp=1e-2
+    )
+    seeded = groupmax.init_from_tangents(heads, ds)
+    mu = ds.mu_train[0] / ds.mu_scale[0]
+    # A production temperature, not a token one: per-plane validity is necessary
+    # and NOT sufficient, because the smoothed min sits up to `T*ln(K)` below the
+    # hard one. At `temp=1e-4` that gap hides under any tolerance and the bug
+    # (repair leaving 96% of rows under-predicted) does not show.
+
+    def resid(h):  # mu_hat - mu on the training rows; must be >= 0
+        v = np.asarray(groupmax.batched_value(h, jnp.asarray(ds.x_train)))[0]
+        return v - mu
+
+    # Training moves intercepts; a downward shift is exactly the failure mode.
+    b0 = np.asarray(seeded.b[0]).copy() + 0.5
+    broken = eqx.tree_at(lambda h: h.b[0], seeded, jnp.asarray(b0))
+    assert resid(broken).min() < -0.1, resid(broken).min()
+
+    fixed = groupmax.repair_intercepts(broken, ds)
+    r = resid(fixed)
+    assert r.min() > -1e-3, r.min()  # valid: no row left under-predicted
+    # ...and tight: it does not buy validity by lifting the whole head.
+    assert float(np.median(r)) < 0.05, float(np.median(r))
+    # Idempotent — a valid head is already at the tightest intercepts.
+    assert np.allclose(
+        np.asarray(groupmax.repair_intercepts(fixed, ds).b[0]), np.asarray(fixed.b[0]), atol=1e-4
+    )
+
+
+def test_prox_holds_slopes_near_the_seeded_tangents():
+    """The stability centre binds on the slopes, and only on them.
+
+    `w_prox` exists because frozen label tangents win the composition's tail while
+    trained slopes win its bulk, so the knob has to actually interpolate: at a
+    large weight the slopes must stay put, at zero they must be free to move.
+    """
+    import jax.numpy as jnp
+    import numpy as np
+
+    from cfs.surrogate import groupmax
+    from cfs.surrogate.train import train_value_heads
+
+    ds = _min_affine_dataset(K=5, n=600, M=4)
+    kw = {
+        "arch": "groupmax-u",
+        "width": 1,
+        "depth": 1,
+        "epochs": 40,
+        "batch": 64,
+        "lr": 3e-2,
+        "gm_group": 32,
+        "gm_temp": 1e-2,
+        "gm_init": "labels",
+        "seed": 0,
+    }
+
+    def drift(w_prox):
+        h = train_value_heads(ds, w_prox=w_prox, **kw)
+        seed_h = groupmax.init_from_tangents(
+            groupmax.stack_heads(
+                jax.random.PRNGKey(0),
+                1,
+                ds.x_train.shape[-1],
+                ds.mask,
+                width=1,
+                depth=1,
+                group=32,
+                temp=1e-2,
+            ),
+            ds,
+        )
+        a = np.asarray(jax.nn.softplus(h.wx[0]))
+        a_seed = np.asarray(jax.nn.softplus(seed_h.wx[0]))
+        return float(np.sqrt(np.mean((a - a_seed) ** 2) / np.mean(a_seed**2)))
+
+    free, held = drift(0.0), drift(1e4)
+    assert held < free / 2, (free, held)
+    assert held < 0.05, held
+    # It must not silently apply to an unseeded head, where there is no centre.
+    h = train_value_heads(ds, w_prox=1e4, **{**kw, "gm_init": None})
+    assert jnp.isfinite(groupmax.batched_value(h, jnp.asarray(ds.x_val))).all()
+
+
+def test_repair_slack_is_proportional_to_the_evaluation_temperature():
+    """The post-repair over-prediction IS the smoothing, so it scales with ``T``.
+
+    ``repair_intercepts`` cancels the softmin's downward gap with ONE uniform
+    lift, sized by the largest gap over the training rows. The gap is
+    ``c*T*ln(n_active)``, so on a row where fewer planes are active the lift is
+    uncancelled and the head reads high by a constant -- which is the low-``mu``
+    floor measured on the n=1 titration (0.0107 / 0.0011 / 0.0001 ``mu_scale``
+    units at T = 1e-2 / 1e-3 / 1e-4). Colder evaluation must therefore be
+    strictly tighter while staying valid.
+    """
+    from cfs.surrogate import groupmax
+
+    ds = _min_affine_dataset(K=5, n=600, M=4)
+    M = ds.x_train.shape[-1]
+    mu = ds.mu_train[0] / ds.mu_scale[0]
+
+    def slack(temp):
+        heads = groupmax.stack_heads(
+            jax.random.PRNGKey(0), 1, M, ds.mask, width=1, depth=1, group=64, temp=temp
+        )
+        fixed = groupmax.repair_intercepts(groupmax.init_from_tangents(heads, ds), ds)
+        r = np.asarray(groupmax.batched_value(fixed, jnp.asarray(ds.x_train)))[0] - mu
+        assert r.min() > -1e-3, (temp, r.min())  # still a valid outer approximation
+        return float(np.median(r))
+
+    hot, cold = slack(1e-2), slack(1e-4)
+    assert cold < hot / 5.0, (hot, cold)
+
+
+def test_territory_repair_does_not_lift_a_plane_out_of_its_own_band():
+    """`--gm-repair-local`: a plane is constrained by the rows it binds at.
+
+    The global rule lifts every plane above *every* training label, so a cut
+    anchored where `mu` is small must clear the largest label in the set and is
+    pushed out of the regime it was tight in. On CP000139.1 that took the
+    `mu ~ 1` band from a true 0.98 to a predicted 2.85 -- 22.5% of its held-out
+    rows, and all of its 0.895 cosine / 0.318 value R2 -- while every other band
+    stayed exact to 1e-4.
+
+    Two planes, two well-separated bands, one row each: the low plane is exact at
+    its own row under `local=True` and lifted under the global rule. Training-row
+    validity must hold either way, since the uniform smoothing lift absorbs the
+    residual.
+    """
+    import jax.numpy as jnp
+    import numpy as np
+
+    from cfs.surrogate import groupmax
+
+    m = 2
+    # Row 0 sits low in a coordinate the low plane is tight on; row 1 sits high.
+    x = np.array([[[0.2, 0.0], [0.0, 0.8]]], dtype=np.float32)  # (1, 2, m)
+    mu = np.array([[1.0, 6.0]], dtype=np.float32)
+    g = np.array([[[2.0, 0.0], [0.0, 4.0]]], dtype=np.float32)
+    ds = type(
+        "DS",
+        (),
+        {
+            "x_train": x,
+            "mu_train": mu,
+            "mu_scale": np.array([1.0], dtype=np.float32),
+            "g_train": g,
+            "gvalid_train": np.ones((1, 2), dtype=bool),
+            "mask": np.ones((1, m), dtype=bool),
+            "genome_ids": ["g0"],
+        },
+    )()
+    heads = groupmax.stack_heads(
+        jax.random.PRNGKey(0), 1, m, np.ones((1, m), dtype=bool), 1, 1, group=2, temp=1e-4
+    )
+    heads = groupmax.init_from_tangents(heads, ds, select="active-set")
+    w = jnp.asarray(groupmax.to_diag(jnp.asarray(x[0])))
+
+    glob = groupmax.repair_intercepts(heads, ds, local=False)
+    loc = groupmax.repair_intercepts(heads, ds, local=True)
+    v_glob = np.asarray(jax.vmap(groupmax.organism(glob, 0).on_w)(w))
+    v_loc = np.asarray(jax.vmap(groupmax.organism(loc, 0).on_w)(w))
+
+    # Validity on the training rows survives both (the uniform lift guarantees it).
+    assert np.all(v_glob >= mu[0] - 1e-4)
+    assert np.all(v_loc >= mu[0] - 1e-4)
+    # ...and the territory rule is no looser anywhere, strictly tighter somewhere.
+    assert np.all(v_loc <= v_glob + 1e-5)
+    assert float(np.max(v_glob - mu[0])) >= float(np.max(v_loc - mu[0]))
+
+
+def test_only_valid_cuts_stops_the_repair_lifting_the_model():
+    """A one-sided dual makes a tangent that repair *lifts*, ruining its own region.
+
+    M17: at a kink the stored dual is a one-sided subgradient, so its tangent
+    falls below the target away from its anchor. ``repair_intercepts`` restores
+    validity by raising that plane -- correct globally, and it destroys the fit
+    wherever that plane was the right binding cut. On ``labels_i3`` that is 34% of
+    ``CP000139.1``'s tangents and it takes its mid-`mu` band from a true 0.98 to
+    2.85. Selecting only genuine outer approximations is the fix, and it is free.
+    """
+    from cfs.surrogate import groupmax
+    from cfs.surrogate.picnn_u import to_diag
+
+    ds = _min_affine_dataset(K=5, n=600, M=4)
+    M = ds.x_train.shape[-1]
+    # Corrupt the *lowest* row: a shallow slope there falls below the target
+    # everywhere above it, which is what a one-sided dual at a kink does.
+    bad = int(ds.x_train[0].sum(-1).argmin())
+    ds.g_train[0, bad] *= 0.2
+
+    x = ds.x_train[0]
+    g_w = ds.g_train[0] * (1.0 - x) ** 2 / ds.mu_scale[0]
+    w = np.asarray(to_diag(jnp.asarray(x)))
+    ok = groupmax.valid_cuts(g_w, w, ds.mu_train[0], ds.mask[0], ds.gvalid_train[0])
+    assert not ok[bad] and ok.mean() > 0.98  # that row is rejected, near-nothing else
+
+    def err(only_valid):
+        heads = groupmax.stack_heads(
+            jax.random.PRNGKey(0), 1, M, ds.mask, width=1, depth=1, group=64, temp=1e-4
+        )
+        h = groupmax.init_from_tangents(heads, ds, only_valid=only_valid)
+        v = np.asarray(groupmax.batched_value(groupmax.repair_intercepts(h, ds), ds.x_val))
+        return float(np.max(np.abs(v[0] - ds.mu_val[0])))
+
+    assert err(True) < 0.1 * err(False), (err(True), err(False))

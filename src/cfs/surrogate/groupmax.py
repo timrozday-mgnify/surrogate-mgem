@@ -54,6 +54,19 @@ min's accuracy *and* buys the curvature §8 needs; 0.1 is already past the knee 
 0.3 collapses. A trained head's pre-activations need not sit on the label scale, so
 treat this as a prior on the axis rather than a transferred optimum.
 
+**Within that window ``T`` is set by the low-``mu`` bias, and 0.01 wins — measured
+2026-08-29, which is why ``DEFAULT_TEMP`` moved from 0.03.** The smoothing sits
+``~T*ln(K_active)`` *below* the hard min: an absolute offset, so it is ~4% of a
+plateau ``mu`` and >100% of a starving one, and the absolute value MSE (74% of rows
+are plateau) then lifts the bottom past the target rather than fixing it. On 21
+organisms, 0.03 -> 0.01 takes the median bias below 5% of max ``mu`` from **+0.978
+to +0.442** and the §8.1 composition's worst community from 0.322 to 0.051 log-X
+error, ~5% at every community size, for worst gradient cosine 0.958 -> 0.928 (one
+seed). Outside the window it reverses: **T=0.003 is worse than both on every
+axis** (bias +1.305, worst cosine 0.880) — an optimisation failure, not a
+representation one, and annealing into it (``--gm-temp-final``) does not rescue it
+at roster scale either.
+
 The design **nests max-affine exactly**: ``width=1, depth=1, group=K`` is
 ``min_k(a_k . w + c_k)`` and nothing else. Wider and deeper generalises it.
 
@@ -64,6 +77,8 @@ for the reason documented there — the target is concave in ``u`` and *not* in
 
 from __future__ import annotations
 
+import logging
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -73,8 +88,10 @@ from jax import Array
 from cfs.surrogate.picnn import _softplus_inv
 from cfs.surrogate.picnn_u import INPUT_TRANSFORM, W_CAP, to_diag  # noqa: F401
 
+LOGGER = logging.getLogger(__name__)
+
 DEFAULT_GROUP = 8
-DEFAULT_TEMP = 0.03
+DEFAULT_TEMP = 0.01
 
 
 class GroupMaxHead(eqx.Module):
@@ -191,6 +208,32 @@ def batched_value_diag(heads: GroupMaxHead, w: Array) -> Array:
     return jax.vmap(head_in_diag(heads))(w)
 
 
+def with_temp(heads: GroupMaxHead, temp: float) -> GroupMaxHead:
+    """Same head, different temperature.
+
+    ``temp`` is a static field, so it lives in the treedef: ``dataclasses.replace``
+    re-enters the custom ``__init__`` (which rebuilds the weights from a key),
+    ``eqx.tree_at`` only reaches leaves, and ``copy.copy`` re-runs the vmapped
+    constructor. Rebuilding the treedef and re-hanging this head's leaves on it is
+    the one route that touches neither. Retraces the step, so call it a few times
+    per run, not every epoch."""
+    # `None` is a leaf here: Adam's moments are the *filtered* head, whose static
+    # leaves are None, and dropping them would shift every remaining leaf.
+    leaves = jax.tree_util.tree_flatten(heads, is_leaf=lambda z: z is None)[0]
+    # A treedef carries the static fields but no shapes, so a one-input head of the
+    # same depth donates a structurally identical one with the new temperature.
+    like = GroupMaxHead(
+        jax.random.PRNGKey(0),
+        1,
+        jnp.ones((1,), bool),
+        width=1,
+        depth=len(heads.wx),
+        group=heads.group,
+        temp=temp,
+    )
+    return jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(like), leaves)
+
+
 @eqx.filter_vmap(in_axes=(0, 0))
 def batched_value_and_grad(heads: GroupMaxHead, x: Array):
     """``(G, B, M) -> ((G, B), (G, B, M))`` — the gradient IS the shadow price."""
@@ -237,6 +280,130 @@ def rank_by_active_set(g_w: np.ndarray, valid: np.ndarray) -> np.ndarray:
     return np.asarray(out, dtype=int)
 
 
+def rank_by_territory(
+    g_w: np.ndarray,
+    w: np.ndarray,
+    mu: np.ndarray,
+    mask: np.ndarray,
+    w_eval: np.ndarray,
+    valid: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Row indices ordered by **Level 1 dominance** — SDDP's cut-selection rule.
+
+    Our tangent model ``mu_hat(w) = min_j [mu_j + pi_j.(w - w_j)]`` is exactly the
+    outer approximation SDDP maintains for a Bellman value function, sign-flipped:
+    their *cuts* are our label tangents, their *trial points* are our media, and
+    ``--gm-group K`` is their cut budget. That field has settled how to choose
+    which cuts to keep, and this is their rule.
+
+    A cut is **useless** when dropping it changes the approximation nowhere on the
+    domain. Deciding that exactly costs one LP per cut (Pfeiffer, Apparigliato &
+    Auchapt 2012, the *test of usefulness*) and is too slow to run routinely. The
+    **territory algorithm** -- identical in its selection to de Matos, Philpott &
+    Finardi's *Level 1 dominance* -- replaces "everywhere on the domain" with "at
+    the trial points actually visited": each cut owns the points where it is the
+    active one, and a cut whose territory is empty is dropped. Pure evaluations, no
+    LP. It can drop a cut that would be useful on a region containing no visited
+    point; in SDDP that is safe because the cut can be recomputed, and here because
+    :func:`reanchor` reinstalls tangents mid-training.
+
+    Because we score every cut at every point in one pass and keep, per point, only
+    the index of its active cut, this is the *limited memory* variant (Guigues
+    2017): memory is O(points), not O(cuts x points).
+
+    **The point set is the whole lever, and it is ours to choose.** Ranking over
+    the training rows reproduces the design's own distribution; ranking over
+    community-regime media puts planes where §8.1 evaluates, which is why K above
+    1000 was inert -- more planes, still in the wrong place. Measured in SDDP
+    (Pfeiffer et al., 19-dimensional state, 500 iterations): territory selection
+    cuts the model from 490 to 220 cuts per stage, and the combination with the
+    exact test to 55, with the forward cost decreasing *at the same rate* as with
+    no selection at all. The count was never the lever there either.
+
+    ``w_eval`` is ``(P, M)`` trial points in the head's own ``w`` coordinate.
+    Returns ``(order, territory)``: row indices sorted by territory size, largest
+    first and empty territories last, plus the per-row point count.
+    """
+    ok = np.flatnonzero(valid)
+    territory = np.zeros(len(w), dtype=int)
+    if ok.size == 0 or len(w_eval) == 0:
+        return ok, territory
+    a = (g_w * mask)[ok]  # (J, M) non-negative slopes
+    c = mu[ok] - np.einsum("km,km->k", a, w[ok])  # (J,) intercepts
+    # min_j over cuts at every trial point, in chunks: (P, J) is P*J floats.
+    step = max(1, int(2e7 // max(len(ok), 1)))
+    for lo in range(0, len(w_eval), step):
+        active = np.argmin(w_eval[lo : lo + step] @ a.T + c, axis=1)
+        np.add.at(territory, ok[active], 1)
+    # Largest territory first; ties by row order so the result is deterministic.
+    order = ok[np.argsort(-territory[ok], kind="stable")]
+    return order, territory
+
+
+def valid_cuts(g_w, w, mu, mask, valid, tol: float = 1e-6) -> np.ndarray:
+    """Which label tangents are genuine outer approximations over the training rows.
+
+    A supporting hyperplane of a concave function is >= that function everywhere,
+    so a tangent that reads *below* a labelled row is proof its dual is not a
+    supergradient. That happens here for a measured reason: at a kink the stored
+    dual is one-sided (§13.11 finite-differenced `theta = 0` duals at 0.16-0.54 of
+    the true derivative), and a too-shallow slope falls away from its own anchor.
+    On `labels_i3` **34% of CP000139.1's 3981 usable tangents are invalid**, by up
+    to 2.85 `mu_scale` units.
+
+    They are not harmless, because :func:`repair_intercepts` restores validity by
+    *lifting* the offending plane -- which is correct globally and ruins it in its
+    own territory. That is the whole of M17: the seeded head's hard min in that
+    organism's mid-`mu` band is exact (0.9845 against a true 0.9845) and the
+    repaired one reads **2.85**, with 239 planes lifted and 87% of the total lift
+    forced by **five** rows.
+
+    **Dropping them is SDDP's own rule (never add an invalid cut), it is free
+    (2628 valid cuts against a budget of 1000) -- and it is REFUTED, 2026-09-09.**
+    ``--gm-valid-cuts`` does exactly what it was built to do: the repair's
+    per-plane lift vanishes (drop uniform 0.000489-0.000494, i.e. the smoothing
+    alone, against a mean of 0.59 before). The band moves by **0.0001**, this
+    organism goes cosine 0.895 -> **0.847** and value R2 0.318 -> **0.229**, and
+    the roster worst 0.8955 -> **0.8234**.
+
+    The reason is that no subset of these tangents is right everywhere, and it is
+    one measurement (`20hm_bands/m17_bands.py`, median relative error per `mu/max`
+    band on CP000139.1):
+
+    ======================  ===============  ===============
+    cut model over          `mu/max` <= 0.25   `mu/max` 0.5-0.75
+    ======================  ===============  ===============
+    all 3981 tangents       -0.0000          **-0.6707**
+    the 2628 valid ones     **+0.1527**      +0.0000
+    ======================  ===============  ===============
+
+    So the invalid planes are *load-bearing*: they are the only reason the head is
+    tight at high `mu`, and lifting them is the only reason it is tight there
+    after selection. E1's "the labels are sufficient" verdict for this organism
+    was taken in the mid-`mu` band alone -- **read the cut model over every band.**
+
+    Neither the violation rate nor its size predicts the gate over the roster
+    (Spearman +0.18 / -0.24 against cosine, p >= 0.29): DACTBY01 violates by 1.71
+    and scores 0.9896 / R2 0.9992. Ninth refuted proxy.
+
+    Kept, default off, for the negative result and because the mask itself is the
+    cheapest statement of how far the labels are from concave.
+
+    Returns a bool mask over rows, ``valid`` AND outer-approximating.
+    """
+    ok = np.flatnonzero(valid)
+    out = np.zeros(len(w), dtype=bool)
+    if ok.size == 0:
+        return out
+    a = (g_w * mask)[ok]
+    c = mu[ok] - np.einsum("km,km->k", a, w[ok])
+    step = max(1, int(2e7 // max(len(w), 1)))
+    for lo in range(0, len(ok), step):
+        blk = np.asarray(jnp.asarray(a[lo : lo + step]) @ jnp.asarray(w).T)
+        out[ok[lo : lo + step]] = (blk + c[lo : lo + step, None] - mu[None, :]).min(1) >= -tol
+    return out
+
+
 def _softplus_inv_np(a: np.ndarray) -> np.ndarray:
     """``softplus^-1``, stable: ``expm1`` overflows at ``a ~ 88`` in float32 and the
     head is then seeded with inf weights and NaN curvature. Real label tangents
@@ -255,7 +422,14 @@ def _tangent_planes(g_w, w, mu, mask):
     return a, mu - np.einsum("km,km->k", a, w)
 
 
-def init_from_tangents(heads: GroupMaxHead, ds, seed: int = 0) -> GroupMaxHead:
+def init_from_tangents(
+    heads: GroupMaxHead,
+    ds,
+    seed: int = 0,
+    select: str = "active-set",
+    trial_points: np.ndarray | None = None,
+    only_valid: bool = False,
+) -> GroupMaxHead:
     """Seed the first layer's units with real supporting hyperplanes of ``mu_max``.
 
     Every labelled row is an *exact* tangent of the target — ``mu_max`` is concave
@@ -279,6 +453,18 @@ def init_from_tangents(heads: GroupMaxHead, ds, seed: int = 0) -> GroupMaxHead:
     non-negative sum of group-wise minima rather than one global minimum, so it is
     a warm start and not a reproduction. The docstring says so because the
     difference is measurable and someone will otherwise assume the exact case.
+
+    ``select`` picks which tangents fill the budget. ``"active-set"`` buckets rows
+    by their dual's support pattern (:func:`rank_by_active_set`), a *proxy* for
+    which regimes occur. ``"level1"`` is SDDP's own answer
+    (:func:`rank_by_territory`): keep the cuts that are the active minimum at some
+    trial point, which is the exact version of what that proxy approximates.
+
+    ``trial_points`` is ``(G, P, M)`` in the ``w`` coordinate, one point set per
+    organism — the medium distribution the head will be *evaluated* on, which for
+    §8.1 is community-regime media rather than the design's own. Default: the
+    organism's training rows, which is the closest Level 1 analogue of SDDP's
+    "points the forward pass actually visited".
     """
     n_slots = heads.wx[0].shape[1]
     G, _, M = ds.x_train.shape
@@ -294,7 +480,29 @@ def init_from_tangents(heads: GroupMaxHead, ds, seed: int = 0) -> GroupMaxHead:
         g_w = ds.g_train[i] * (1.0 - x) ** 2 / ds.mu_scale[i]
         w = np.asarray(to_diag(jnp.asarray(x)))
         mu = ds.mu_train[i] / ds.mu_scale[i]
-        idx = rank_by_active_set(g_w, ds.gvalid_train[i])
+        gv = ds.gvalid_train[i]
+        if only_valid:
+            gv = valid_cuts(g_w, w, mu, ds.mask[i], gv)
+            LOGGER.info(
+                "%s: %d of %d usable tangents are valid outer approximations",
+                ds.genome_ids[i],
+                int(gv.sum()),
+                int(ds.gvalid_train[i].sum()),
+            )
+        if select == "level1":
+            pts = w if trial_points is None else np.asarray(trial_points[i])
+            idx, territory = rank_by_territory(g_w, w, mu, ds.mask[i], pts, gv)
+            LOGGER.info(
+                "%s: level1 keeps %d cuts with a non-empty territory of %d usable, "
+                "over %d trial points; budget %d",
+                ds.genome_ids[i],
+                int((territory > 0).sum()),
+                int(gv.sum()),
+                len(pts),
+                n_slots,
+            )
+        else:
+            idx = rank_by_active_set(g_w, gv)
         if idx.size == 0:
             continue
         if idx.size < n_slots:  # too few usable rows: cycle, then jitter the rest
@@ -410,3 +618,118 @@ def reanchor(heads: GroupMaxHead, ds, frac: float = 0.1, seed: int = 0) -> tuple
 
     heads = eqx.tree_at(lambda h: (h.wx[0], h.b[0]), heads, (jnp.asarray(wx0), jnp.asarray(b0)))
     return heads, slots
+
+
+def repair_intercepts(heads: GroupMaxHead, ds, local: bool = False) -> GroupMaxHead:
+    """Restore the outer-approximation invariant: no plane below any training label.
+
+    A min of *supporting* hyperplanes of a concave function is an upper bound
+    everywhere, so a trained head that reads **low** is proof it has left the
+    family: Adam moves both slope and intercept, and nothing re-imposes validity.
+    (Measured: on `p4` training rows in the bottom 5% of `mu` the head
+    under-predicts 53-68%, i.e. it is below labels it was fit on. The other
+    candidate mechanism, the softmin's `T*ln(K)` downward gap, is refuted -- at the
+    failing n=21 medium, re-evaluating at `T -> 1e-6` moves `mu_hat` by 0.008.)
+
+    This is SDDP's cut-validity invariant, which that literature keeps by never
+    modifying a cut once added. We do modify them, so we restore it afterwards.
+    With the slopes held, the tightest valid intercept per plane is a closed form:
+    the head is ``mu_hat(y) = min_j[(c a_j + q).y - c b_j - out_b]``, and plane `j`
+    is valid iff ``c b_j <= min_r[(c a_j + q).y_r - out_b - mu_r]``. Taking that
+    bound with equality gives the *lowest* valid upper bound for those slopes --
+    so it is the exact optimum of the intercept LP, not a heuristic, and it
+    tightens over-predicting planes in the same pass.
+
+    **Exact only at width=1, depth=1**, the production config, where the head
+    really is a min of affine functions; wider or deeper it is a non-negative sum
+    of group-wise minima and no per-plane intercept has this meaning. Other shapes
+    are returned untouched.
+
+    ``local=True`` repairs each plane over **its own territory** — the training
+    rows where it is currently the active minimum — instead of over every row.
+    The global rule lifts a plane above labels it was never meant to bind at: on
+    `CP000139.1` a plane anchored in the `mu ~ 1` band has to clear labels at
+    `mu ~ 4.4`, which took that band from a true 0.98 to a predicted 2.85 (+1.87)
+    while every other band stayed exact to 1e-4 — 22.5% of its held-out rows, and
+    the whole of its 0.895 cosine / 0.318 value R2. The repair is global where
+    the cut is local.
+
+    **Measured and REFUTED, 2026-09-09; default off, kept for the negative
+    result.** It does what it was built for — `CP000139.1` cosine 0.895 -> 0.964 —
+    and is a roster disaster: median grad cosine **0.9859 -> 0.7764**, median
+    value R2 **0.9997 -> -0.665**, worst R2 -3.45.
+
+    The reason is structural and kills the idea rather than the implementation.
+    Training-row validity is restored by the *uniform* lift below, so a locally
+    repaired plane that sits under the truth off its own territory is paid for by
+    raising **every** plane: the lift goes from **0.00047** (global rule, where it
+    only ever compensates the softmin gap) to **1.49 median / 2.54 max** — 3000x,
+    in `mu_scale` units. A global correction cannot preserve a local repair.
+    Rescuing it would need the lift to be local too, and then nothing enforces
+    validity between territories.
+    """
+    if len(heads.wx) != 1 or heads.out_z.shape[1] != 1:
+        LOGGER.warning("repair_intercepts: head is not width=1 depth=1 — skipped")
+        return heads
+
+    b0 = np.asarray(heads.b[0]).copy()
+    for i in range(ds.x_train.shape[0]):
+        head = organism(heads, i)
+        w_rows = np.asarray(to_diag(jnp.asarray(ds.x_train[i])))  # (N, M)
+        y = w_rows * ds.mask[i]
+        mu = ds.mu_train[i] / ds.mu_scale[i]  # (N,)
+        c = float(jax.nn.softplus(head.out_z)[0])
+        if c <= 1e-12:  # a collapsed output gain carries no planes to repair
+            continue
+        s = c * np.asarray(jax.nn.softplus(head.wx[0])) + np.asarray(
+            jax.nn.softplus(head.out_x)
+        )  # (K, M)
+        # `min_r` is over rows *jointly* with `mu_r`, so the label cannot be split
+        # out of the matmul: (K, N) is the whole point.
+        pre = np.asarray(jnp.asarray(s) @ jnp.asarray(y).T) - float(head.out_b)  # (K, N)
+        slack = pre - mu[None, :]
+        if local:
+            # Each plane is constrained only by the rows it actually binds at. A
+            # plane that is nowhere the active minimum has no territory and keeps
+            # the global rule, which is the conservative choice: it is exactly the
+            # plane that could start binding once its neighbours move.
+            owner = pre.argmin(axis=0)  # (N,) the active plane at each row
+            own = np.full_like(slack, np.inf)
+            rows = np.arange(len(mu))
+            own[owner, rows] = slack[owner, rows]
+            new = own.min(axis=1) / c
+            empty = ~np.isfinite(new)
+            new[empty] = slack.min(axis=1)[empty] / c
+        else:
+            new = slack.min(axis=1) / c
+
+        # The head is the *smoothed* min, which sits below the hard one by up to
+        # `c*T*ln(K)` -- so per-plane validity is necessary and not sufficient, and
+        # training had been paying for that gap in the intercepts. Lowering every
+        # `b_j` by the same delta shifts all pre-activations together, hence lifts
+        # the smoothed head by exactly `c*delta`, so the minimal uniform lift that
+        # restores validity is one evaluation away. Doing it this way rather than
+        # assuming the worst-case `T*ln(K)` keeps the bound tight: the realised gap
+        # is `T*ln(#near-active)`, which is far smaller.
+        shifted = eqx.tree_at(lambda h: h.b[0], head, jnp.asarray(new))
+        v = float(np.max(mu - np.asarray(jax.vmap(shifted.on_w)(jnp.asarray(w_rows)))))
+        if v > 0:
+            new = new - v / c
+        LOGGER.info(
+            # The median hides this: on CP000139.1 the global repair's median drop
+            # is 0.0005 and its *mean* is 0.59, with 299 of 1000 planes moved by
+            # >0.1 and one by 2.86 -- which is the whole of that organism's
+            # +1.87 band error. Report the tail.
+            "%s: repaired %d of %d planes (%s), drop median %.3g / mean %.3g / "
+            "max %.3g, smoothing lift %.3g",
+            ds.genome_ids[i],
+            int((new < b0[i] - 1e-9).sum()),
+            b0[i].size,
+            "territory" if local else "global",
+            float(np.median(b0[i] - new)),
+            float(np.mean(b0[i] - new)),
+            float(np.max(b0[i] - new)),
+            max(v, 0.0) / c,
+        )
+        b0[i] = new
+    return eqx.tree_at(lambda h: h.b[0], heads, jnp.asarray(b0))

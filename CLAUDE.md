@@ -16,7 +16,7 @@
 > The existing **`src/surrogate_mgem/`** package (PyTorch + MICOM growth
 > surrogate, documented below) is **legacy/reference** — kept, not deleted.
 >
-> ### Progress — M0–M2 and §4 done on the real roster; M3 at 0.958 of a 0.99 gate
+> ### Progress — M0–M2 and §4 done on the real roster; M3 at 0.952 (plain FBA) / 0.959 (inhibited) of a 0.99 gate
 >
 > | Milestone | State | Code |
 > | --- | --- | --- |
@@ -24,8 +24,14 @@
 > | M1 degeneracy → D4 | **done, V1 complete** — **68.9%** of 371k exchange-FVA observations degenerate roster-wide (59.7–82.8% per genome; 88% at α=0.7 vs 50% at α=1.0) ⇒ **D4 = elastic net** | `src/cfs/validate/degeneracy.py` |
 > | M2 solve interface | **done, §3.4 gate verified on a real GEM** — MM uptake bounds (§3.3), FBA for `mu_max` + duals, then the **Clarabel** elastic-net QP for `z` | `src/cfs/groundtruth/solve.py` |
 > | §4 sampling + bulk labels | **done, generated** — active subspace, stratified-Sobol design, parquet driver | `src/cfs/sampling/`, `--stage labels` |
-> | M3 Head A (value) | **gate not met; roster-wide worst is 0.958 against 0.99.** Three causes, each measured and each fixed: concavity imposed in the wrong coordinate (`x`, not `u`), random initialisation collapsing the max-affine head, and planes going *dead during training* and being unable to revive. Seeded `groupmax-u` + `--gm-reanchor 3`, 21 organisms: worst cosine **0.958**, median 0.978, median R² 0.995 | `src/cfs/surrogate/{picnn_u,deepset_u,groupmax}.py` |
+> | M3 Head A (value) | **gate not met on cosine — worst 0.952 against 0.99 — but Head A is no longer what §8.1 is waiting on.** Causes found and fixed in order: concavity imposed in the wrong coordinate (`x`, not `u`), random init collapsing the max-affine head, planes dying during training, and finally the repair's uniform softmin lift (§8.6c). Best head is **frozen** label tangents — `--epochs 0 --gm-init labels --gm-select level1 --gm-repair --gm-eval-temp 1e-4` — worst cosine 0.952, median 0.981, median R² 0.9999, low-`mu` bias **+0.0004**, and `mu_rel_median <= 0.0005` on all 30 §8.1 cells | `src/cfs/surrogate/{picnn_u,deepset_u,groupmax}.py` **Unmoved by `W_CAP` 300 -> 1e5 (M17): 0.9522 -> 0.9519 on plain-FBA labels, value R2 identical — that raise is worth 0.8955 -> 0.9593 on the *inhibited* root and nothing here, which is why the clip went unseen.** |
+> | M4 Head B (behaviour) | **done, and now the M5 bottleneck.** `z_i(c, alpha)` masked MLP predicting **specific** flux `z / mu_max`; on `labels_p4`, worst held-out R2 **0.931** / median 0.963, worst flux cosine 0.985. Held-out is not the binding number: per-member flux cosine falls to **0.74-0.96** at community media, tracking NN distance to its own training media | `src/cfs/surrogate/behaviour.py` |
+> | M5 dFBA composition | **gate met at n=2/3/5 and n=21; n=10 and one cell of 30 are open.** Median log-X over 3 medium draws x 10 communities, frozen Head A at `--gm-eval-temp 1e-4`: **0.003 / 0.004 / 0.000 / 0.025 / 0.009** at sizes 2/3/5/10/21, overall 0.004, max 0.318. Head A contributes essentially nothing now (`mu_rel_median <= 5e-4` everywhere); the residual is **Head B's coverage of community-regime media**, whose NN-distance proxy predicts `dc_rel` at Spearman +0.673 over the cells on disk. §8.6c/§8.6d | `src/cfs/compose/dfba.py`, `src/cfs/surrogate/{behaviour,calibrate}.py` |
 > | M3b HPC sweep | **two runs. 2026-08-25** (350 tasks, 324 cpu-h) refuted its own "scale closes the gap": width/depth inert. **2026-08-27** (442/442 tasks, 21 cells x 21 organisms) is the source of the roster numbers below. The rows arm has now failed to run three times | `examples/hpc_run/`, `--stage sweep` |
+>
+> | M9-M14 Phase 7 applications | **spec written; M9, M10 and M11 done** — `cfs simulate` integrates a community forward, batch or chemostat (`--dilution`), surrogate only, no LP — and `--stiff` (BDF in `log X`) is what makes the chemostat *transient* trustworthy, landing on the independently-solved fixed point to 1.3e-10; `cfs maximise-growth` is §13.2's convex medium design, 19/20 V5 round-trips at the default trust region, median true gain +2.2%, median optimism 0.3%. `cfs minimal-medium` is §13.3's convex program; **V6 passes on 4/4 communities with `--lp-repair` (2026-09-06)** — the residual failure was not Head A's essentiality gap (that closed 2026-08-31) but a **synthetic-lethal set** the single-knockout pin cannot see, repaired by the true LP at +2 components in 370. The rest (steady state, interaction maximisation, the inverse-problem posterior) is specced in **§13** with a per-use-case accuracy table: most need less than M3's and M5's unmet gates | `src/cfs/compose/dfba.py` (`simulate`, `with_chemostat`), `src/cfs/science/growth.py` |
+> | M16 §13.11 product inhibition | **stages 1'-4' done and the roster relabel is run.** The thermodynamic secretion bound `ub = Vmax max(0, 1-c/c^eq)` in the true LP (`cfs interactions --inhibition`) and in the **surrogate**: Head A gains a per-metabolite `theta` channel (444 -> 888), Head B an inference clamp `z <= Vmax theta`, and `rhs_truth`/`rhs_hybrid` take `ceq` from the checkpoint so the ruler matches the model. At **`c^eq` = 1.0 mM** (`labels_i3`; 0.1 mM starved 13 of 21 organisms) it lands: worst grad cosine **0.896**, median **0.986**, median value R2 **0.9997**, 20/21 >= 0.95, 7/21 clearing M3's gate, and a composition that **beats the plain-FBA control** (overall log-X **0.011** vs 0.013, `mu_rel` **0.0001** vs 0.0020). **M17 closed 2026-09-09 (`W_CAP` 300 -> 1e5), so the gate can now be stated: worst grad cosine 0.9593, worst value R2 0.9967, 8 of 21 clearing M3's 0.99, under-rate 0.000, and composition overall log-X 0.011 against the plain-FBA control's 0.013 — M3's own 0.99 worst-organism gate is still unmet** | `cfs generate --inhibition`, `src/cfs/surrogate/data.py`, `src/cfs/compose/dfba.py` |
+> | **M17 `CP000139.1`** | **CLOSED 2026-09-09, and it was `W_CAP`.** `to_diag` clipped `w = min(u/s, 300)`, and clipping is many-to-one: two media above the cap share a `w` and differ in `mu`, so a label tangent taken at one is not a valid upper bound at the other. 239 407 of this organism's entries clipped, 34% of its tangents were invalid, and `--gm-repair` lifted 239 planes to fix that -- the +1.87 band error. The knee is at **1e5** (cut model over its own tangents: -0.67 at `mu/max` 0.5-0.75 at cap 300, -0.49 at 1e4, **+0.0000 at 1e5**, identical to 1e12). `W_CAP` is now 1e5; the init scale keeps its measured 150. Roster worst cosine **0.8955 -> 0.9593**, worst value R2 **0.3177 -> 0.9967**, `n >= 0.99` 7 -> 8, under-rate still 0.000; this organism 0.8955 -> **0.9950** / R2 **0.9994**, clearing M3's gate. The plain-FBA control is unchanged (0.9522 -> 0.9519), which is why it went unseen. Retracts, same day: the labels and duals are fine (the 25 forcing rows re-solve to machine precision; `reduced_costs` reproduce the edited dual at x0.5), and `--gm-valid-cuts` is refuted as a fix and kept as the diagnostic. **Rule: a clip in the input map is a modelling assumption. `min(w, cap)` preserves concavity and destroys injectivity, and an upper-bound invariant needs the second.** | Closed Composition (3 draws x the same 10 communities, matched inhibited truth): the tail, not the bulk -- n=10 **0.277 -> 0.105**, n=21 **0.127 -> 0.017**, max **0.696 -> 0.306**, sizes 2/3/5 and the overall median unchanged; paired, n=10 draw 200 is 0.6961 -> 0.1048 and n=21 draw 100 is 0.1269 -> 0.0170 while every other draw moves <= 0.001. |
 >
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
@@ -34,13 +40,25 @@
 > `index_hash` throughout (P13). Per organism: 32 000 rows at the primary
 > `eps=1e-3` and 6400 at each of `1e-2`/`1e-4`. `|A_i|` = 11–32, median 24.
 >
+> Four label roots now live under it: `labels` (= `r1`, pre-relabel), `labels_p2`
+> (`probe_lo = -12` + the low-`mu` stratum), `labels_p3` (P24 budget, reverted in code)
+> and `labels_p4` (`focus_bg_decades`, kept). Each has base + a round-1 community pass,
+> 63/63 shards, 100% optimal, one `index_hash`; every §8.1 comparison in this file is on
+> the identical community list and media. See the design spec §8.5.
+>
 > It supersedes `20hm/` (same design, one shared sampling band) and differs only
 > in that each metabolite's focus stratum is centred on **its own** limiting
 > regime — `design.limiting_scales` → `cfs generate --scales`. Over `A_i`, roster
 > medians: the median metabolite's limiting media **143 → 174**, metabolites with
 > ≥50 media 15 → 17, the top metabolite's share 0.58 → 0.55. The run dir holds
 > `make_scales.py` (labels → `scales.json`), `check_coverage.py` (the number that
-> predicts the gate), `run_labels.sh` + `one_organism.sh` (21-way local fan-out —
+> predicts the gate), the analysis scripts this file's later sections cite —
+> `e1_cutting_plane.py` (§8.5's label-vs-head check), `repair_posthoc.py`
+> (`--gm-repair` applied to an existing checkpoint, no refit), `make_trial_pool.py`
+> and `make_traj_pool.py` (Level 1 point sets, no LP solves), `titrate_n1.py` +
+> `titrate_n1b.py` (the n=1 low-`mu` characterisation), `analyse_n15.py` and
+> `agg.py` (per-size medians over replicates) — `run_labels.sh` +
+> `one_organism.sh` (21-way local fan-out —
 > **not** nextflow: the `0.1.2` data image predated the band code and would have
 > silently regenerated the old design. Fixed at `0.1.3` — the image rebuilds from
 > `src/`, and `GENERATE_LABELS` now passes the band flags via
@@ -51,6 +69,17 @@
 > passes as `--index`. Its **label shards were deleted** (disk, 2026-07-27); so
 > were the `value/` and `value_v3/softmin_*` weights, whose `diagnostics.json`
 > (the measured record cited below) were kept.
+>
+> **Second cleanup, 2026-09-02** (the disk hit 1.5 GiB free). Same rule: weights
+> go, the measured record stays. Deleted — every `20hm_bands/{value,behaviour}_*`
+> `*heads.eqx` except `value_p4_ncrep_T0.0001`, `value_p4{,_nc}`, `value_r1`,
+> `behaviour_{p4,r1}` (those four cannot be rebuilt once a round moves `x_scale`);
+> the HPC export's per-task `value_heads.eqx` and its `labels_out` 20k-media
+> shards; `hpc_run/sumgem-results.tar.gz` (every file verified present under
+> `export/`); `trial_pool_{20k,200k}.npz` (no solves — `make_trial_pool.py`
+> rebuilds them in ~4 min); and the `community_*.log` stdout, whose metrics live
+> in each run's `community.json`. Every `diagnostics.json`, `value_heads.json` and
+> `community.json` was kept, so nothing in this file lost its source. 1.5 -> 14 GiB.
 >
 > Generating a set costs ~30 MB/organism and ~1 h/organism at 10-way concurrency;
 > it dies mid-shard on a full disk, and the resulting partial shard must be
@@ -438,8 +467,8 @@
 >
 > **The second sweep has since run** — 442/442 tasks, and everything above that is
 > one laptop organism is superseded by the roster numbers in "The second sweep ran"
-> below. `examples/hpc_run/sweep_full.csv` is now 30 cells (arms A-C, E-G as run,
-> plus H for `--gm-reanchor` and the seed axis), regenerated by
+> below. `examples/hpc_run/sweep_full.csv` is now 36 cells (arms A-C, E-G as run,
+> plus H for `--gm-reanchor` and the seed axis and H' for `--w-rel`), regenerated by
 > `make_sweep_full.sh`, which carries the measurement motivating each arm.
 >
 > ### The second sweep ran, and the gate is now a plane-death problem — 2026-08-27/28
@@ -526,11 +555,3914 @@
 > plane, unmoved by re-anchoring. Same for `EX_arg__L_e` on AAXE02 (184 rows, 0.888
 > in all ten runs). Whatever closes the last 0.03 is not this.
 >
-> **Next:** `examples/hpc_run/sweep_full.csv` is 30 cells; Arm H is
-> `grp1000 T=0.03` x `--gm-reanchor {0,3}` x seed {0,1,2}, which is the smallest
-> design that separates the pass from the seed noise on 21 organisms.
+> **Next:** `examples/hpc_run/sweep_full.csv` is 36 cells; Arm H is
+> `grp1000 T=0.01` x `--gm-reanchor {0,3}` x seed {0,1,2}, which is the smallest
+> design that separates the pass from the seed noise on 21 organisms, and H' adds
+> `--w-rel {0,0.3}` at `--gm-reanchor 3` over the same seeds. `T` moved 0.03 ->
+> 0.01 for the reason in the low-mu section below.
 >
-> ### The conditioning bill is not §8's — measured, 2026-08-26
+> ### M4 + M5: the heads compose, and community error does not grow with size — 2026-08-28
+>
+> Head B and the §8.1 composition are built: `src/cfs/surrogate/behaviour.py`
+> (`cfs train-behaviour`) and `src/cfs/compose/dfba.py` (`cfs community`).
+> Checkpoints on `20hm_bands`: `value_ra3` (seeded `groupmax-u` w1/d1 K=1000
+> T=0.03 `--gm-reanchor 3`, worst cosine **0.947**, median 0.966, value R2 median
+> 0.986) and `behaviour_b1` (600 epochs, lr 1e-3, worst **R2 0.856**, median
+> 0.921, worst median flux cosine 0.993, worst sign agreement 0.941).
+>
+> **Head B's binding constraint was output scaling, not capacity.** The head emits
+> `z / z_scale` and the label scale is applied outside it. Predicting raw
+> mmol/gDW/h instead scores held-out **R2 0.017**, worse than predicting the
+> per-alpha mean; the same net on the normalised target scores **0.885** on the
+> same organism. Exchange fluxes run to O(400) on the gases and O(1e-3) on the
+> ions, so a `sqrt(2/n_in)` init starts ~400x short on the dimensions carrying the
+> variance and Adam spends the run walking biases — the same failure
+> `picnn_u`'s scale-aware init exists for. `z_scale` is in the checkpoint;
+> `behaviour.flux` is the accessor. Do not "simplify" the head to raw units.
+>
+> **10 communities, sizes 2-21, `20hm_bands` media, 40 Euler steps, per-organism
+> FBA as ground truth on the identical integrator/step/inoculum:**
+>
+> | size | dc/dt cosine | mu rel | log-X final | overgrowth (V5) | cross-feed |
+> | --- | --- | --- | --- | --- | --- |
+> | 2 (x5, median) | 0.983 | 0.016 | 0.055 | <=0.066 | 6/8 |
+> | 3 (x2) | 0.847 | 0.083 | 0.122 | <=0.210 | 8/9 |
+> | 5 | 0.915 | 0.133 | 0.322 | 0.182 | 10/11 |
+> | 10 | 0.996 | 0.013 | 0.041 | -0.002 | 27/27 |
+> | **21** | **0.997** | **0.014** | **0.044** | **-0.001** | **38/38** |
+>
+> 1. **Size is not the error axis.** The 21-member community is the *second most*
+>    accurate run in the set and recovers every one of its 38 cross-feeding links
+>    (a metabolite one member secretes and another consumes). Errors are
+>    per-organism and largely independent, so they partially cancel in the pool
+>    sum rather than compounding — which is the central bet of D1(a)+§8.1 and it
+>    holds. 89/93 links recovered overall.
+> 2. **A slow member is.** Every bad cell contains an organism with `mu0 < 1.3
+>    h^-1` (GCA_000007325.1 at 0.42, AAXE02 at 1.23 on its drawn medium): the
+>    2-member 0.866/0.215 row, the 3-member 0.695/0.219 row and the 5-member row.
+>    Head A's held-out R2 is taken over each organism's *own* `mu` spread, so a
+>    near-starving organism is a small absolute error and a large relative one,
+>    and the composition integrates the relative one. **The next Head A signal is
+>    accuracy at low `mu`, not the roster-worst cosine.**
+> 3. **M5's 1% gate is not met, and the shortfall is the value head's, not the
+>    integrator's.** Median log-X error is 4-5%: `d(log X)/dt = mu`, so a 1.4%
+>    `mu` error over ~2 doublings integrates to ~4%. Closing it needs a better
+>    `mu`, not a better ODE solver.
+> 4. **P4 does not bite.** Re-solving the true LP at the state the surrogate
+>    walked *itself* to (V5) gives `overgrowth <= 0.21` of initial `mu` and ~0 on
+>    the large communities. The composition does not run away to a fictitious
+>    fast-growing state.
+>
+> **Two traps this cost time to find, both now in the code.** A batch culture has
+> two independent clocks — members doubling and the pool emptying — and a horizon
+> set by the growth clock alone killed the true community at step 2 of 40, leaving
+> two live points to score. `run` now solves for the *inoculum* instead
+> (`dc/dt` is linear in `X`, so one probe solve fixes it) so the pool empties at
+> the end of `--doublings`. And metrics are scored only while the true community
+> is alive and normalised by fixed initial scales: a dead culture has `mu = 0`
+> everywhere, where a per-step relative error divides by zero — the first version
+> reported `nan` and a 237% `mu` error for a run whose live phase agreed to 2%.
+> Concentration error is per metabolite relative to its own `c0`; a plain L2 over
+> the pool is 0.7% on a trajectory where the limiting ion is gone in the truth and
+> untouched in the surrogate.
+>
+> **Not measured yet:** §8.2 SteadyCom and §8.3 MICOM (this is §8.1 only, and
+> deliberately — a joint community LP is a *different model*, so mixing it in
+> would make a Head B error and a modelling choice indistinguishable); the
+> `--steps` refinement check; abundances other than equal-split; and M6's implicit
+> gradients through the Newton form.
+>
+> ### Head A over-predicts at low `mu`, and `T` is the lever — measured, 2026-08-29
+>
+> The M5 note above ("the next Head A signal is accuracy at low `mu`") is now
+> measured. Held-out media binned by each organism's own `mu / max(mu)`, `value_ra3`
+> (seeded `groupmax-u`, T=0.03, `--gm-reanchor 3`), 21 organisms:
+>
+> | band | rows | median rel err | median bias | grad cosine |
+> | --- | --- | --- | --- | --- |
+> | < 5% of max mu | 52 | 0.978 | **+0.978** | 1.000 |
+> | 5-10% | 26 | 0.427 | +0.427 | 1.000 |
+> | 10-25% | 29 | 0.188 | +0.188 | 1.000 |
+> | 25-50% | 42 | 0.117 | +0.117 | 0.994 |
+> | 50-75% | 33 | 0.065 | +0.065 | 0.943 |
+> | > 75% | 586 | 0.012 | -0.012 | 0.959 |
+>
+> **100% of held-out rows below 75% of max mu are over-predicted**, and the error is
+> pure bias — median |rel| equals median signed rel in every low band. It is
+> invisible to every existing diagnostic: value R² is 0.986, and the *gradient*
+> cosine in those bands is 1.000, better than on the plateau. `score` now reports
+> `value_rel_err_low_mu` / `value_bias_low_mu` (median over rows below 25% of max).
+>
+> **It is not labels, coverage, or the plane budget.** The parameter-free
+> cutting-plane model over the same organism's training tangents has bias
+> **-0.000 in every band including <5%**, and so does a K=1000 subset picked by
+> `rank_by_active_set` — i.e. the head's own *initialisation*. Training creates the
+> bias. Two absolute offsets do it: (1) the softmin smoothing sits `~T*ln(K_active)`
+> **below** the hard min — ~0.2 in `mu_scale` units at T=0.03, which is 4% at the
+> plateau and >100% at a starving medium (the 1-epoch seeded head reads -1.207 at
+> <5% and -0.040 at the plateau, exactly that shape); and (2) `_loss`'s value term
+> is an absolute MSE with 74% of rows on the plateau, so Adam removes the offset
+> where the rows are and lifts the bottom straight past the target.
+>
+> **`--gm-temp 0.01` fixes more of it than anything in the loss, and it is what §8
+> feels.** Roster (21 organisms) and the same 10 communities as `community_c1`,
+> per-organism FBA truth, seed 0 throughout:
+>
+> | run | low-mu bias | plateau rel | worst cos | med R² | log-X err, sizes 2/3/5/10/21 |
+> | --- | --- | --- | --- | --- | --- |
+> | `value_ra3` T=0.03 | +0.978 | 0.012 | **0.958** | 0.986 | 0.055 / 0.122 / **0.322** / 0.041 / 0.044 |
+> | **`value_T01`** T=0.01 | +0.442 | **0.005** | 0.928 | **0.990** | **0.034 / 0.050 / 0.051 / 0.048 / 0.047** |
+> | `value_T01_wrel03` `--w-rel 0.3` | +0.100 | 0.014 | 0.924 | 0.989 | 0.058 / 0.082 / 0.060 / 0.065 / 0.064 |
+> | `--w-rel 1` | -0.002 | 0.031 | 0.944 | 0.986 | 0.095 / 0.101 / 0.085 / 0.140 / 0.138 |
+> | T=0.003 | +1.305 | 0.018 | 0.880 | 0.979 | 0.150 / 0.555 / 0.293 / 0.394 / 0.352 |
+>
+> 0. **`groupmax.DEFAULT_TEMP` is now 0.01** (was 0.03), and `--gm-temp`'s help
+>    text said 0.1, which was stale. Re-running an old checkpoint's settings needs
+>    an explicit `--gm-temp`; the sweep cells all set it.
+> 1. **T=0.01 is a sweet spot, not a direction.** It cuts the composition's worst
+>    community from 0.322 to 0.051 log-X error and flattens M5 to ~5% at every size;
+>    T=0.003 is worse than either on *every* axis, so do not read this as "sharper is
+>    better". The price is worst grad cosine 0.958 -> 0.928 — ~2x the seed sd, one
+>    seed, unrepeated.
+> 2. **`--w-rel` (new) buys the bottom by selling the plateau.** It adds the same
+>    value error measured relatively, denominator floored at 0.1 of the organism's
+>    mean `mu` (no floor => plateau unweighted => R² -1.66). It removes the low-mu
+>    bias outright at **no cost in grad cosine** (0.928 -> 0.924 -> 0.944 across
+>    0/0.3/1), but the plateau carries most of what `d(log X)/dt = mu` integrates in
+>    a big community, so composition gets monotonically worse there. Default 0.
+>    Use it when slow members dominate; leave it off for large pools.
+> 3. **The M5 conclusion is unchanged and sharpened**: with T=0.01 the log-X error
+>    is ~5% at *every* community size, and the two bad cells from 2026-08-28 (the
+>    3- and 5-member communities with a slow member) were that slow member's
+>    relative error, not composition.
+>
+> **Two fixes that look obvious and are not.** *More low-mu labels*: the
+> information is already there -- the cutting-plane model over the *existing*
+> training tangents, and the K=1000 seeded init itself, have bias -0.000 in every
+> band. Extra rows would enter through the same absolute MSE and only change the
+> low-mu row *share*, i.e. a reweighting, which `--w-rel` does directly instead of
+> ~1 h/organism of solves. *A harder softmax*: `--gm-temp-final` anneals `T` in 3
+> geometric stages (`groupmax.with_temp`; `temp` is static, so Adam's moments have
+> their metadata rewritten too). On 3 organisms it looked decisive -- 0.03 -> 0.003
+> took the low-mu bias +1.845 -> **-0.009** with the plateau intact, beating
+> `--w-rel` on both. **On 21 organisms it loses to fixed T=0.01 on every axis**:
+> bias +0.315, worst cosine 0.899, community log-X 0.102 vs 0.047 at size 21
+> (0.03 -> 0.01 is in between: bias -0.101, cosine 0.928, log-X 0.099). Kept and
+> off by default, with the negative result on file. Third time a 3-organism
+> frontier has failed to survive the roster -- do not promote one again.
+>
+> And the temperature cannot be made *per row*: `T*logsumexp(a/T)` is concave in
+> `a` only for constant `T`, and exact concavity in `u` is what the head is for.
+> Per-epoch is free; per-prediction is not. `--w-rel` already is the per-row
+> growth-rate weighting -- `1/(mu + 0.1*mean mu)^2` -- and its scalar plus that 0.1
+> floor are the shape knobs.
+>
+> Not done: multi-seed confirmation of the 0.958 -> 0.928 cosine cost, Head B
+> retrained at T=0.01 (`behaviour_b1` is reused as-is above, which is fair since
+> only Head A changed), and `--w-rel` on the HPC sweep.
+>
+> ### The low-mu bias is an output calibration, and it buys M5 — 2026-08-30
+>
+> `src/cfs/surrogate/calibrate.py`. Head A's low-`mu` over-prediction is a function
+> of the **predicted value alone**: an isotonic map fit on the train rows and applied
+> to held-out media drives every band's median bias to <=0.005 and *raises* R2
+> (0.9898 -> 0.9901). So it is correctable after the fact, and nothing is missing
+> from the labels — which is a second, independent refutation of "more low-`mu`
+> media would help".
+>
+> `g(m) = a*m - d0*exp(-m/beta)` is increasing (`a, d0 >= 0`) and concave
+> (`g'' < 0`), so `g(head(u))` stays exactly concave and non-decreasing in `u` —
+> §8.4's PSD Hessian tag and `concavity_violation_rate` both survive — and the
+> gradient is scaled by a positive per-row scalar, so **`grad_cosine` is
+> bit-identical**. It is fit at the end of `train.run`, stored in the checkpoint JSON
+> beside `mu_scale`, and applied where `mu_scale` is (`train.evaluate`,
+> `compose.dfba.Surrogate.mu_and_z`), so every existing checkpoint deserialises
+> unchanged and reads the identity.
+>
+> **The fit weight is the whole result, and it is set on the plateau — not on the
+> band that motivated the work.** Residuals are divided by
+> `max(|mu|, _W_FLOOR * max|mu|)`. Same 10 communities and media as
+> `community_T01`, per-organism FBA truth, `value_T01` throughout:
+>
+> | median log-X error | n=2 | n=3 | n=5 | n=10 | n=21 | low-mu bias | plateau |
+> | --- | --- | --- | --- | --- | --- | --- | --- |
+> | uncalibrated | 0.034 | **0.050** | 0.051 | 0.048 | 0.047 | +0.446 | -0.005 |
+> | `--w-rel 0.3` | 0.058 | 0.082 | 0.060 | 0.065 | 0.064 | +0.100 | +0.014 |
+> | `_W_FLOOR` 0 (pure relative) | 0.046 | 0.074 | 0.061 | 0.098 | 0.098 | **-0.033** | -0.009 |
+> | **`_W_FLOOR` 0.3 (default)** | **0.024** | 0.072 | **0.044** | **0.014** | **0.016** | -0.250 | **-0.002** |
+>
+> `median_mu_rel` at size 21 goes 0.009 -> 0.005 and R2/cosine do not move. **Sizes
+> 10 and 21 are now 1.4% / 1.6% against M5's 1% gate**, from 4.7%. Size 3 is the one
+> regression (0.050 -> 0.072).
+>
+> The `_W_FLOOR` 0 row is the trap: it removes the bias *outright* on every band and
+> doubles the composition error. The map is downward-only, the plateau was already
+> at -0.005, and `d(log X)/dt = mu` integrates the plateau, not the bottom — the same
+> trade `--w-rel` makes, moved after training. **Tune this by the composition, never
+> by `value_bias_low_mu`.**
+>
+> **Two things this retracts.** The mechanism in "Head A over-predicts at low mu"
+> blamed the softmin offset; re-evaluating the *same trained head* at `T -> 1e-6`
+> (`groupmax.with_temp`) makes the bias **worse** — +0.860 against +0.446 below 5%
+> of max `mu` — so the smoothing gap is a *downward* offset that partially cancels
+> it, and what is left is plane placement. That is what the class predicts: a min of
+> tangents to a concave function is an upper bound everywhere, so positive bias is
+> the only bias a max-affine head can have unless a plane sits tangent at that row.
+> And the hope of running `--gm-temp 0.03` plus calibration to recover worst cosine
+> 0.928 -> 0.947 is dead: `community_ra3_cal` is worse than `value_T01` on every
+> axis (log-X 0.081 at size 21). T=0.01 stays.
+>
+> **Not the lever:** re-anchoring on relative error. `reanchor` ranks rows by
+> gradient cosine and the low-`mu` rows score **1.000**, so they are never picked;
+> re-ranked by relative over-prediction, one post-hoc pass moves +0.446 -> 0.313 at
+> 30% of the planes and costs worst cosine 0.928 -> 0.901. Untested *inside*
+> training, where planes can still settle.
+>
+> ### M5's residual is Head B's magnitude, and it is a reparametrisation — 2026-08-30
+
+The M5 summary is a median per size, and it hides the shape of the failure. Across
+all 10 communities the final log-X error tracks **`dc_rel`** — Head B's pool
+derivative, scored on the *true* path — and not `mu_rel`, which is <= 3% everywhere:
+
+| `dc_rel_median` | 0.19-0.79 (6 cells) | 1.1-2.2 (4 cells) |
+| --- | --- | --- |
+| `x_log_err_final` | 0.003-0.024 | 0.044-0.589 |
+
+So M5 was Head A's problem only up to the point `--gm-temp 0.01` and the output
+calibration fixed it. **The remaining error is Head B's**, and the size story is
+cancellation: per-organism `z` errors are largely independent, so the 21-member
+pool sum averages them away and a 2-member one does not.
+
+**The failure is magnitude, not pattern, and it is medium-specific.** Per-organism
+`z` cosine at the community media is 0.40-0.87 on the bad cells for organisms whose
+*held-out* p05 is >= 0.93 — CP070062.1 scores 0.399 in one 2-member community and
+1.000 in a 3-member one. At the failing point it predicted `|z| = 2780` against a
+true `1040`: a replete organism's fluxes at a scarce medium (`mu` 25 where its
+plateau is 39), while Head A had `mu` right to 1%. The community medium is **not**
+out of distribution — every masked coordinate of it is inside that organism's own
+training range on every failing cell.
+
+**Exchange flux is nearly proportional to growth rate, and Head A already knows the
+growth rate.** Measured on the labels: one constant per (metabolite, alpha) times
+`mu_max` — a model with no inputs at all — explains a median **0.807** of the
+held-out `z` variance (0.63-0.86 over the 21 organisms), against the trained
+256x3 net's 0.921. Most of what Head B was learning was a magnitude it had to infer
+from `x` and Head A predicts directly.
+
+So Head B now emits **specific flux `z / mu_max`** and `compose.dfba` multiplies
+Head A's `mu` back in, floored at `data._MU_FLOOR_FRAC` = 5% of the organism's mean
+`mu` (1% of media have `mu_max` below 1% of the median, and dividing by those turns
+the target into noise — the same trade `calibrate._W_FLOOR` makes). The floor is in
+the checkpoint as `mu_floor`; a checkpoint without it reads as flux directly, so
+`behaviour_b1` still composes.
+
+`behaviour_zmu` (600 epochs, lr 1e-3, seed 0, otherwise identical to
+`behaviour_b1`), same `value_T01_cal`, same 10 communities, same media:
+
+| | n=2 worst two | n=3 med / worst | n=5 | n=10 | n=21 |
+| --- | --- | --- | --- | --- | --- |
+| `behaviour_b1` | 0.327 / 0.589 | 0.072 / 0.141 | 0.044 | 0.014 | 0.016 |
+| **`behaviour_zmu`** | **0.064 / 0.351** | **0.041 / 0.078** | 0.073 | 0.014 | 0.016 |
+
+Held-out Head B (scored against the labels' own `mu`, so this is pattern only):
+worst R2 0.856 -> **0.883**, median 0.921 -> 0.941, worst sign agreement 0.941 ->
+0.957. `mu_rel` is bit-identical everywhere — Head A did not move.
+
+1. **It buys the tail and nothing else.** The four `dc_rel > 1` cells improve, the
+   six good ones are unchanged to three decimals, and sizes 10/21 stay at 1.4% /
+   1.6%. Worst community over the whole set: 0.589 -> 0.351.
+2. **Size 5 regresses, 0.044 -> 0.073**, on the one cell whose `dc_rel` is 1.08 —
+   right at the boundary. Its cross-feeding recall goes 0.91 -> 1.00 at the same
+   time, so this is not a straight loss. Unexplained; one cell, one seed.
+3. The residual is then the **direction** of `dc`, not its size — see the MM clamp
+   below, which is the free half of it.
+
+### Head B was violating §3.3's own uptake bound — 2026-08-30
+
+The LP that made the labels cannot take up faster than `-Vmax_m * u_m`
+(`solve.mm_lower_bound`), and **every exchange of every roster GEM has
+`|lower_bound| = 1000`**, so that bound is a constant times the head's own input
+saturation — no fit, no per-organism data, nothing to store. Head B has no such
+constraint and breaks it: at M5's worst community, **28 of CP040530.1's 213
+exchanges** are below the floor at once, by up to 186x (`EX_acald_e` -260 against
+-1.4, `EX_glyc3p_e` -329 against -14) — and those are the same entries that lead
+the `dc` error. `compose.dfba.Surrogate.mu_and_z` now clamps.
+
+It is a projection onto a convex set the true `z` is already inside, so the
+right-hand-side error cannot rise, and it does not: `dc_rel_median` falls on
+**10/10 communities**. Same 10 communities, media and checkpoints throughout:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | worst cell |
+| --- | --- | --- | --- | --- | --- | --- |
+| `behaviour_b1` | 0.024 | 0.072 | 0.044 | 0.014 | 0.016 | 0.589 |
+| `behaviour_zmu` (specific flux) | 0.024 | 0.041 | 0.073 | 0.014 | 0.016 | 0.351 |
+| **+ MM clamp** | **0.011** | **0.035** | 0.086 | 0.014 | 0.016 | 0.408 |
+
+**A strictly better right-hand side does not give a monotonically better
+trajectory.** `dc_rel` improves on all ten, but two cells integrate worse (the
+0.351 -> 0.408 worst cell, and size 5 0.073 -> 0.086) because the clamp changes
+*which* metabolite empties first, and a batch culture's endpoint turns on that.
+Seven of ten improve, sizes 2 and 3 halve, cross-feeding recall and `overgrowth`
+(<= 0.028 everywhere) are unaffected. Keep the clamp: the rhs is the thing being
+modelled, and the trajectory flips are a property of the map.
+
+**Not done:** applying the clamp during Head B *training* (the targets already
+satisfy it, so the net is currently spending capacity on outputs the LP cannot
+produce), and re-fitting `calibrate` against the new Head B.
+
+### Head B's remaining error is label coverage of the community medium
+
+Measured on all 21 organisms: Spearman(distance to the nearest training medium in
+`x`, `1 - flux cosine`) is **0.33-0.84, median 0.65**, and the top NN-distance
+quintile's median cosine falls from ~0.999 to 0.89-0.99. Over the 10 communities
+the split is clean — every cell with a member at NN distance >= 1.67 has
+`dc_rel >= 0.90`, every cell whose members are all <= 0.31 has `dc_rel <= 0.84`,
+and the four worst-log-X cells are exactly the four far ones (the worst is at
+**2.92** against a held-out median of 0.10).
+
+**It is a joint gap, not a marginal one.** Every coordinate of the failing medium
+is inside that organism's own training range, and its count of scarce dimensions
+(110) is typical (train median 103). What is missing is the *combination*: §4.3
+samples `A_i` and holds the background at one rich level, while a community medium
+is a draw over the **union** of the members' active subspaces, so a member sees
+~30 of its background metabolites in bands at once.
+
+**`SamplingConfig.frac_bg_perturb` was already the knob, and it was degenerate.**
+`design.sample_media` perturbed the background all-or-nothing — 10% of media with
+*every* held metabolite redrawn, 90% with none — so the design is bimodal in the
+one axis the composition moves along, with nothing in between. It now draws a
+random *share* per medium, which spans a 2-member community's ~20% and the whole
+roster's ~all in one design, and `cfs generate --bg-perturb` exposes it. Test:
+`tests/test_cfs_sampling.py::test_background_is_perturbed_over_a_random_share`.
+
+### The community-regime round closes the tail and costs the two largest cells
+
+`cfs generate --n-media 800 --bg-perturb 0.9 --round 1 --seed 1` on all 21
+organisms (~1 h wall at 10-way; 21/21, 63/63 shards, 100% optimal, one
+`index_hash`, 98.9% of media growing — the §4.3 "titrate everything at once"
+collapse does **not** happen with a random share). Round media go to train only, so
+the held-out set is bit-identical to every earlier run. Both heads had to be
+retrained: `x_scale` is `_kink_scale` over the *training* rows, so a round changes
+it and `Surrogate.__init__`'s P14 check fires if only one head is rebuilt — which
+is exactly what it is for.
+
+| held out, same 800 media | before | after round 1 |
+| --- | --- | --- |
+| Head B worst R2 / median | 0.883 / 0.941 | **0.907 / 0.952** |
+| Head A worst grad cosine | 0.928 | **0.956** |
+| Head A low-`mu` bias, median | -0.083 | -0.071 |
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | worst cell |
+| --- | --- | --- | --- | --- | --- | --- |
+| session start (`behaviour_b1`) | 0.024 | 0.072 | 0.044 | 0.014 | 0.016 | 0.589 |
+| + specific flux + MM clamp | 0.011 | 0.035 | 0.086 | 0.014 | 0.016 | 0.408 |
+| **+ round 1 (both heads)** | **0.006** | **0.015** | 0.107 | 0.027 | 0.029 | **0.023*** |
+
+*worst 2- or 3-member cell; the size-5 cell at 0.107 is now the worst overall.
+
+1. **The coverage diagnosis is confirmed.** The two cells the whole investigation
+   started from go 0.327 -> 0.023 and 0.589 -> 0.006, and their `dc_rel` 1.60 ->
+   0.74 and 1.78 -> 0.22. `dc_rel` falls on 8/10.
+2. **Sizes 10 and 21 read as a regression (1.4%/1.6% -> 2.7%/2.9%), and the
+   comparison cannot support one.** See the next section: a single M5 cell is one
+   Head A seed *and* one medium draw, and both move it more than this. Every M5
+   number this file has carried, the 1.4% / 1.6% headline included, is n=1 on both
+   axes.
+3. **It is not the calibration.** Stripping `value_cal` from the round-1 head makes
+   all ten communities worse (size 21 0.029 -> 0.043), so the refit is still
+   earning its keep.
+4. **Size 5 keeps drifting** (0.044 -> 0.086 -> 0.107) across all three changes
+   while its `dc_rel` falls monotonically (1.089 -> 1.013 -> 0.897). Same
+   rhs-vs-trajectory decoupling as the clamp's two regressions.
+
+Cross-feeding recall is 1.00 at sizes 3, 5, 10 and 21 (0.91-0.89 before) and
+`overgrowth` <= 0.038 throughout, so V5/P4 still do not bite.
+
+### One M5 cell is n=1 on two axes, and the medium is the bigger one — 2026-08-30
+
+Every community number this file has ever carried is a single Head A seed at a
+single medium draw. Both were measured: 3 Head A seeds at a fixed medium
+(retraining `value_r1` at seeds 0/1/2, Head B and the medium held), and 3 medium
+draws at fixed heads (`cfs community --seed {0,100,200}`), over the same 10
+communities. Max/min per cell:
+
+| axis | median ratio | worst cell |
+| --- | --- | --- |
+| Head A seed | **1.8x** | 6.0x |
+| medium draw | **6.1x** | **448x** (0.002 -> 0.739) |
+
+**The medium is the dominant source of variance, by 3x, and the earlier claim that
+the seed was is retracted.** That claim came from a run where `--communities` was
+cut to the two large cells to save time: `dfba.run` draws each community's medium
+from `seed + n` with `n` its *index in the list*, so shortening the list silently
+re-drew every medium. The 0.029 -> 0.149 attributed to seed 1 was a different
+medium; seed 1 on the full list gives 0.029. **Two `cfs community` runs are
+comparable only if the community list is identical, in the same order** — and a
+single draw is not worth quoting whatever the order.
+
+Pooling both axes, n=5 replicates per community, `value_r1` + `behaviour_r1`:
+
+| size | median | p25 | p75 | max | n |
+| --- | --- | --- | --- | --- | --- |
+| 2 | **0.009** | 0.005 | 0.018 | 0.739 | 25 |
+| 3 | **0.018** | 0.007 | 0.064 | 0.110 | 10 |
+| 5 | 0.076 | 0.028 | 0.085 | 0.107 | 5 |
+| 10 | 0.027 | 0.022 | 0.029 | 0.125 | 5 |
+| 21 | **0.027** | 0.027 | 0.029 | 0.029 | 5 |
+
+1. **Sizes 2 and 3 are within 2x of M5's 1% gate on the median**; nothing passes it.
+2. **The 21-member community is the most reproducible cell in the set** — 1.7x
+   across seeds and **1.1x** across media, against 12x and 448x for 2-member ones.
+   That extends "size is not the error axis": large pools are not just as accurate,
+   they are far more *stable*, because the same independence that lets per-organism
+   errors cancel in the sum also averages away the medium draw.
+3. **The tail is a medium, not a community.** The 0.739 outlier is one 2-member
+   community on one draw where the same heads score 0.002 on another. Chasing a
+   worst-cell number without replicates is chasing the draw.
+
+**What this means for the M5 gate:** it has to be stated over replicates. A single
+`cfs community` invocation has a 6x sampling error on a small community, which is
+larger than every model change measured today.
+
+### M10: the medium designer walks out of the design unless it is stopped — 2026-08-30
+
+`cfs maximise-growth` (`src/cfs/science/growth.py`) is §13.2: projected gradient
+ascent on `mu_k(c)` under `cost . c <= B` and a box, with the head's own analytic
+gradient chained through `dx/du . du/dc`, then every optimum round-tripped through
+the true LP (V5). Head B is not needed, so `compose.dfba.Surrogate` now accepts
+`behaviour_dir=None`.
+
+**The result is P21, and it is severe.** Left with the budget and a box, the
+designer pays for carbon by zeroing ~50 cheap metabolites at once, and the LP at
+its "optimum" does not grow at all — `mu_true` 12.1 -> 0.0 on one case, 38.8 -> 0.0
+on another, while the head reports an improvement. It is always the same
+mechanism: one zeroed essential trace metabolite takes `mu` to 0 however good the
+rest of the medium is.
+
+The trust region is in `x`, the head's own input coordinate and the one §6.3's
+nearest-training-medium distance is measured in, centred on the §4.3 start draw,
+and **multiplicative** (`--trust-decades`, default 0.5) — an *additive* radius 0.2
+still lets a metabolite at `x ~ 0.1` reach exactly zero and still loses 3 of 20
+cases. 20 cases, one per roster organism, `value_r1`:
+
+| trust region | improved | median gain | max gain | worst | median abs optimism |
+| --- | --- | --- | --- | --- | --- |
+| additive, radius 0.2 | 15/20 | — | — | **-100%** (x3) | — |
+| 0.25 decades | 17/20 | +2.2% | 1.2x | -0.0% | 0.30% |
+| **0.5 (default)** | 17/20 | +2.2% | 3.6x | **-14.8%** | 0.30% |
+| 1.0 decades | 18/20 | +2.2% | **106x** | -0.0% | 0.28% |
+
+1. **The gradient is good enough for this use case, as §13.7 said it would be.**
+   Median optimism `mu_hat(c*) - mu_true(c*)` is **0.3%** of the LP's own value,
+   and 17-18 of 20 ascents improve the *true* growth rate. The unimproved cases are
+   start media already at the plateau.
+2. **Median gain is 2.2% at every radius; the tail is what widens** (1.2x -> 3.6x
+   -> 106x), and the big gains are near-starving start media rescued by
+   reallocating the same total budget.
+3. **The one loss is a `mu = 2.0` start medium** and it is not monotone in the
+   radius (0.25 and 1.0 both pass) — one optimistic point in Head A's known weak
+   low-`mu` band, not a trust-region trend. Do not tune the radius on it.
+4. The region designs by *reallocation*: a metabolite the start medium has none of
+   stays at zero. Seed the start medium to ask "should I add X".
+
+Not done: non-uniform cost vectors, the selective-medium DC program (§13.2's
+sign-flipped version), and the community version, which needs M12's steady state.
+
+### The band floor was hiding a fifth of the design — measured, 2026-08-31
+
+`SamplingConfig.log10_lo = -4` bounded `demand_probe`'s bracket *and* the focus
+stratum's floor together, so a metabolite whose limiting onset is below
+`c/Km = 1e-4` was invisible to the probe (`mu_lo == mu_hi` -> omitted by contract)
+and unreachable by its own band. Roster-wide, **100 of 496 active (organism,
+metabolite) bands were anchored at `"default"`** and therefore replete in every
+medium. `probe_lo = -12` separates the two knobs; `log10_lo` stays at -4 for the
+*unfocused* strata, where widening it is the measured "everything starves
+together" collapse.
+
+A second stratum, `frac_low_mu = 0.15`, draws 1-3 metabolites at once below their
+**own** anchors with the rest replete. The design otherwise lands on the plateau
+(76% of held-out media above 75% of max `mu`), which is where Head A is accurate
+and M5's slow members are not.
+
+`labels_p2` (4000 media + the round-1 community pass, 21/21, 63/63 shards):
+band sources **494 probe / 2 previous / 0 default**, from 377/100/16/3.
+
+| held out | `value_r1` worst / median | `value_p2` worst / median |
+| --- | --- | --- |
+| grad cosine | 0.9558 / 0.9674 | **0.9633 / 0.9813** |
+| grad cosine p05 | 0.711 / 0.797 | **0.756 / 0.917** |
+| top-1 share | 0.749 / 0.894 | **0.826 / 0.938** |
+| value R2 | 0.974 / 0.9905 | **0.989 / 0.9994** |
+| Head B R2 | 0.907 / 0.952 | **0.935 / 0.960** |
+
+20/21 organisms improve on cosine, and it reproduces across Head A seeds: worst
+cosine **0.9558 / 0.9500 / 0.9545** (r1, seeds 0/1/2) against **0.9633 / 0.9645 /
+0.9662** (p2), i.e. +0.011 with the seed sd halved (0.003 -> 0.0015).
+
+**M11's blocker is closed.** `n_missed_essential` **6 -> 0**. Unrestricted
+(`--no-keep-essential`), where the old head took a 273-component medium to 41 with
+`mu_true` 0/0/0 on every case, the new one gives 2/3, 0/3, **3/3** members clearing
+the floor and `worst_true_frac` 0.436 against 0.000. V6 still does not pass at a 0.5
+floor (0.491 / 0.436 / 0.512) but it is now a few-percent question. The minimal
+media are co-limited, as they should be: all three members land on the same `mu`
+(34.77 / 34.77 / 34.77).
+
+**`value_rel_err_low_mu` reads worse (median 0.077 -> 0.242) and is not
+comparable.** A new design means a new held-out set, and this one contains many
+more genuinely slow media. Same for any per-band row count.
+
+### ...and it made the §8.1 composition worse at large community size — 2026-08-31
+
+The same 10 communities, **n=5 replicates each** (3 medium draws x Head A seed 0,
+plus seeds 1 and 2 at draw 0 — matching the r1 replicate set exactly). The media
+are **identical** between the two: `community_medium` only uses band scales when
+`--scales` is passed, and the active-subspace lists did not change, so `p2` heads
+on the `r1` label root reproduce `p2` on `p2` bit for bit. Same ruler.
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | `mu_rel` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `r1` | 0.009 | 0.018 | 0.076 | 0.027 | **0.027** | 0.017 | 0.0045 |
+| `p2` | 0.014 | 0.067 | **0.029** | 0.093 | **0.466** | 0.031 | 0.0087 |
+
+1. **This is not seed noise, and it is not the medium draw.** At size 21 the p2
+   cells are bimodal: all three Head A seeds fail at medium draw 0
+   (0.482 / 0.466 / 0.469, `dc_cos` 0.913) where all three r1 seeds are fine
+   (0.029 / 0.029 / 0.017), and draws 100/200 give 0.078 / 0.081 against r1's
+   0.027. So there is a ~3x regression everywhere at size 21 plus a reproducible
+   blow-up on one medium.
+2. **It is a tail, not a level.** At the failing medium the median |rel| over the
+   21 members is 0.055 (r1) vs 0.071 (p2); what changed is the worst member —
+   p2 over-predicts AAXE02 by **+153%** (44.6 against a true 17.6) and
+   GCA_000151225.1 by +79%, where r1's worst is -28%.
+3. **Two hypotheses tested and refuted.** *Plane budget* — `--gm-group 2000` on
+   the same labels changes nothing at all: n=21 log-X 0.482 -> 0.482, `mu_rel`
+   0.1044 -> 0.1056, `dc_cos` 0.9133 -> 0.9134 (and held-out worst cosine 0.9633 ->
+   0.9596). K is not the lever above 1000, as it was not for width or depth.
+   *Out-of-distribution in `x`* — the §6.3 nearest-training-medium distance for the
+   failing members is **unchanged or slightly better** under the new coordinate
+   (AAXE02 4.218 -> 3.961, GCA_000151225.1 3.635 -> 3.471, CP002109.1 4.590 ->
+   4.614). The community medium is not further from the design than it was.
+4. **The limiter is a carbon source whose band did not move.** At that medium
+   AAXE02's true `mu` is set by `EX_g3pg_e` (10x it, `mu` +23.8 to 41.4; every
+   other active metabolite gives 0.000), and its band is `probe` in both runs at
+   7.43e-3 -> 7.34e-3. The surrogate's 44.6 is roughly the `mu` of a medium with
+   **10x** the limiting carbon — it is not resolving how scarce that one
+   metabolite is, at a point where ~30 others are also in bands.
+5. ~~**So the suspect is the budget reallocation, not the new anchors.**~~
+   **REFUTED — two relabels, see the next section.** `frac_low_mu` does come out
+   of `n_rest`, and the unfocused "below Km" stratum *is* the only one that
+   produces co-limited media. Both were fixed and neither changed the composition.
+
+**The verdict is not "revert".** The label fix is a clean, reproducible win on
+every label-level metric and it is what closes M11's essentiality blocker; the
+composition regression is a separate, newly exposed weakness of the head at
+multi-limited media. Do not read the old `r1` composition numbers as evidence the
+old labels were better — they were better *at hiding* those dimensions.
+
+### The size-21 regression: three design fixes, none of them it — 2026-08-31
+
+Full stock-take and the ranked plan are **§8.5 of the design spec**. Read that
+before touching the sampling design again. Summary:
+
+| median log-X, n=5 replicates | n=2 | n=3 | n=5 | n=10 | n=21 | overall |
+| --- | --- | --- | --- | --- | --- | --- |
+| `r1` pre-relabel | 0.009 | 0.018 | 0.076 | 0.027 | **0.027** | 0.017 |
+| `p2` relabel | 0.014 | 0.067 | 0.029 | 0.093 | 0.466 | 0.031 |
+| `p3` stratum budget out of `frac_focus` | 0.024 | 0.049 | 0.022 | 0.082 | 0.783 | 0.030 |
+| `p4` `focus_bg_decades = (0.0, 1.5)` | 0.032 | 0.048 | 0.026 | 0.095 | 0.706 | 0.035 |
+
+1. **Reproducible, and a tail.** At n=21, medium draw 0 fails on all three Head A
+   seeds (0.47/0.79/0.71) where all three `r1` seeds are fine; `mu_rel_median` on
+   the true path is 0.005 (`r1`) vs 0.104-0.144. Median |rel| over the 21 members
+   barely moves (0.055 -> 0.068) — it is **AAXE02 at +147%** (`mu_hat` 43.6 vs a
+   true 17.6) and GCA_000151225.1 at +74%.
+2. **Every label metric improved over the same relabel** — worst cosine 0.956 ->
+   0.963, R² 0.974 -> 0.989, Head B R² 0.907 -> 0.937, per-metabolite limiting
+   rows p10 **1 -> 100**, M11 misses 6 -> 0. So it is not fit and not coverage:
+   it is distribution shift the held-out protocol **cannot see**, because
+   held-out media come from the design that changed (P24).
+3. **Five refuted predictors (P25).** Co-limitation count, near-onset count,
+   NN-distance in `x`, per-metabolite limiting rows, held-out cosine/R². Each
+   moved as designed with no downstream effect. Also refuted: plane budget
+   (K 1000 -> 2000, nothing) and the limiter's band (never moved). **Do not spend
+   a 5 h relabel on a proxy that has not first been shown to correlate with §8.1
+   on runs already on disk.**
+4. **`p3` was reverted; `p4` (`focus_bg_decades`) was kept** as the more
+   defensible definition of "replete", not as a fix.
+5. **Structural reason max-affine over-predicts here:** a min of tangents to a
+   concave function is an *upper bound* everywhere and tight only near a tangent
+   point. At a medium with no nearby anchor the min of the rest sits high. Any
+   fix must put a plane in the community regime or bound the head from below.
+
+**E1 has run, and it decided the branch: the labels are insufficient.** The
+parameter-free cutting-plane model over `p4`'s *own* 3985 training tangents
+over-predicts AAXE02 at the failing medium by **+153%** — slightly worse than the
+trained head's +148% — while `r1`'s tangent set is **exact there (-0.000)**. So
+the head is at its label ceiling and every architecture branch (C1/C1b/C2/E2/D1)
+is refuted for this failure; the B branch is live. The mechanism is the mid-`mu`
+band: `p4`'s binding plane is anchored at a `mu = 50.6` plateau row where `r1`'s
+is at `mu = 17.9` against a truth of 17.63, and rows with `mu/mu_max` in 0.3-0.6
+fell **261 -> 90** (AAXE02) across the relabel. Nearest-row distance in `w` is
+*worse* for `r1`, so it is the growth regime, not proximity — a sixth refuted
+proxy. Numbers and the script (`20hm_bands/e1_cutting_plane.py`): **design spec
+§8.5 / "E1: the labels are insufficient"**.
+
+### M5's 1% gate is met at every size but 21, and n=21 is the whole remaining failure — 2026-09-01
+
+Median final log-X, 3 medium draws x 10 communities, identical list and media
+throughout. `p4` labels; `_nc` = the output calibration stripped.
+
+| run | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `r1` (pre-relabel) | 0.006 | 0.016 | 0.028 | 0.027 | **0.027** | 0.014 | 0.739 |
+| `p4` calibrated | 0.032 | 0.048 | 0.026 | 0.095 | 0.706 | 0.035 | 1.192 |
+| `p5` (B2 mid-`mu` stratum) | 0.028 | 0.026 | 0.028 | 0.269 | 0.569 | 0.038 | 1.698 |
+| `p4` no cal | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | 0.007 | 1.698 |
+| `+ --w-under 1` | 0.006 | 0.002 | 0.005 | **0.055** | 0.346 | **0.006** | 0.462 |
+| `+ level1` (rows) | 0.006 | 0.004 | 0.004 | 0.110 | 0.342 | **0.006** | 0.447 |
+| `+ level1` (community pts) | 0.005 | 0.005 | 0.009 | 0.106 | 0.340 | 0.009 | **0.418** |
+
+**Sizes 2/3/5 are at 0.4-0.9%, under M5's 1% gate. n=10 is 5.5-11%. n=21 sits at
+0.27-0.35 and has not moved for five independent interventions** — four label
+designs (`p2`/`p3`/`p4`/`p5`), the output calibration, `--w-under`, the plane
+budget, and cut selection. It is the entire remaining M5 failure.
+
+1. **The output calibration's sign flips with the label design.** It helps on
+   `r1` (A1 median abs 0.0022 vs 0.0054 uncalibrated) and is the *dominant*
+   error on the relabelled roots (`p4`: 0.0052 -> **0.0007**, worst organism
+   0.039 -> **0.0027**). `calibrate` weights residuals at `_W_FLOOR = 0.3` of
+   max `mu` — tuned when 72% of media sat above 0.8 of max `mu`; after
+   `probe_lo = -12`, **62% sit below 0.2**, so the fit is dominated by the bottom
+   and over-corrects the plateau, which is what `d(log X)/dt = mu` integrates.
+   The old note "it is not the calibration" was measured on `r1` only. **Re-measure
+   whether to calibrate on every new label root; it is a property of the design's
+   `mu` distribution, not of the head.** V5 improves too (`overgrowth` max +0.262
+   -> +0.097), so nothing runs away.
+2. **B2 (the mid-`mu` stratum) is refuted.** It hit its label-level target
+   exactly — rows in [0.3, 0.8] median 183 -> 555, **min 13 -> 470** — and made
+   both A1 and §8.1 worse, calibrated or not. Seventh refuted proxy, but caught
+   by A1 in seconds instead of a 5 h loop. Kept in the code, default 0.15;
+   **set `--mid-mu 0` for a new label root** until something re-motivates it.
+3. **`--w-under` (new): the one-sided hinge, and the diagnosis behind it.** At the
+   failing n=21 medium the head read `mu` = 0.055 against a true 0.363 — an
+   *under*-prediction, which a max-affine head cannot do from valid tangents. On
+   training rows in the bottom 5% of `mu`, `p4` under-predicts **53-68%** against
+   `r1`'s **0.2-0.5%**: `probe_lo` made the design bottom-heavy, so the absolute
+   MSE now has thousands of low-`mu` rows and straddles them, and near zero that
+   reads as a dead member. `_loss` now adds
+   `w_under * mean(relu(mu - mu_hat)/den)^2` — a **provable violation** (every
+   labelled point is one a min-of-supporting-hyperplanes must sit on or above),
+   not an accuracy trade like `--w-rel`. `w=1` beats `w=10` on every axis; it costs
+   worst held-out cosine 0.921 -> 0.899 and cuts A1's worst p90 0.311 -> 0.051.
+4. **Level 1 cut selection (`--gm-select level1`) — see below.** It gives that
+   cosine back (0.899 -> 0.919) and buys the worst cell, not `n=21`.
+5. **Bug fixed:** `calibrate.apply` returned **NaN** for a negative raw
+   prediction under the identity calibration (`d0 * exp(-m/1e-12)` = `0 * inf`),
+   which took a dFBA trajectory to NaN at step 0. Every pre-2026-08-30 checkpoint
+   was exposed.
+
+### C4 (min over Head A seeds) is refuted — the sign is wrong — 2026-09-01
+
+`cfs community --value a,b,c` now takes the **pointwise min** over several Head A
+checkpoints (`dfba.Surrogate._mu`; the first dir supplies all metadata, and
+`growth`/`minimal` still use it alone). Valid for free: a max-affine head is an
+upper bound off-distribution, so a min of seeds stays in the family.
+
+`p4` uncalibrated, seeds 0/1/2, 3 medium draws x the same 10 communities:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall |
+| --- | --- | --- | --- | --- | --- | --- |
+| `p4` no cal (seed 0) | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | 0.007 |
+| **C4 min over 3 seeds** | 0.006 | 0.004 | 0.005 | 0.102 | **0.259** | 0.007 |
+
+**Null, and structurally it had to be.** The min binds on 14 of 21 members at the
+failing medium (median ratio 0.995), so it *is* doing something — but the n=21
+failure is an **under**-prediction: `mu_rel_worst_member` is GCA_000007325.1 at
+**-0.857** in both arms, and the community's `mu_rel_median` gets *worse*
+(0.127 -> 0.143). Pushing predictions down cannot fix a member the head already
+reads too low. This is the second E1 verdict ("trained-head deficit", the head
+reading 0.055 against a true 0.363) restated as a composition metric: **read
+`mu_rel_worst_member`'s sign before picking a fix.** C4 is the right tool for the
+*calibrated* `p4` failure (AAXE02 at +148%), which is a different failure.
+
+Kept in the code — it costs one comma and it is the cheap fix if an
+over-prediction ever leads again.
+
+### An under-prediction is a validity failure, and `--gm-repair` proves it — 2026-09-01
+
+A min of *supporting* hyperplanes of a concave function is an upper bound
+everywhere, so a head that reads **low** has left the family. Two mechanisms can do
+that and both are separable in seconds, before any retrain:
+
+| mechanism | test | verdict on `p4` |
+| --- | --- | --- |
+| the softmin gap, `<= T*ln(K_active)` | re-evaluate at `T -> 1e-6` (`groupmax.with_temp`) | **refuted** — moves `mu_hat` 0.008 at the failing medium (the `T*ln K` bound, 0.75 in `mu` units, is loose: ~1 plane is near-active) |
+| planes no longer valid tangents | `mu_hat >= mu` on the head's **own training rows** | **confirmed** — 48.1% of rows under-predicted |
+
+`groupmax.repair_intercepts` / `cfs train-value --gm-repair` is the fix, and it
+applies **post hoc to an existing checkpoint** (`20hm_bands/repair_posthoc.py`, no
+refit): hold the slopes, set each plane's intercept to the tightest value keeping
+it above every training label, then apply the one uniform shift that covers the
+smoothing gap. It is SDDP's cut-validity invariant, which that literature keeps by
+never modifying a cut — we do, so we restore it after. With slopes fixed it is the
+exact optimum of the intercept LP, not a heuristic. Training rows under-predicted
+**48.1% -> 0.0%**, at a +4% median over-prediction.
+
+**Per-plane validity is necessary and NOT sufficient — this cost a cycle.** The
+head is the *smoothed* min and sits up to `c*T*ln(K)` below the hard one, and
+training had been paying for that gap in the intercepts. Repairing planes without
+restoring it left **96%** of rows under-predicted, worse than doing nothing. The
+uniform shift is exact: lowering every `b_j` by the same delta moves all
+pre-activations together, so it lifts the smoothed head by exactly `c*delta`. The
+regression test runs at a production temperature on purpose; at `temp=1e-4` the gap
+hides under any tolerance and the bug does not show.
+
+3 medium draws x the same 10 communities:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `p4` no cal | 0.005 | 0.002 | 0.004 | 0.093 | **0.272** | 0.007 | 1.698 |
+| + `--gm-repair` | 0.009 | 0.008 | 0.007 | **0.067** | 0.401 | 0.014 | 2.842 |
+
+**The under-prediction is gone and the head is now loose instead.** Every member at
+the failing n=21 medium flips sign — GCA_000007325.1 **-0.857 -> +0.998** — and
+`mu_rel_worst_member` becomes DACTBY01 at **+2.436**. So the §8.6 under-prediction
+and the §8.5 over-prediction are two ends of one thing, not two problems.
+
+**It localises the deficit to the slopes.** The projection moves intercepts only,
+and E1 found the cutting-plane model over the *same* labels is exact at that medium
+(0.363) — so a valid model can be tight there and this one cannot be at any
+intercept. Training moved the slopes off the label tangents. Do not read the n=21
+regression as the repair failing; it removed the thing hiding a slope error. Off by
+default. **Next is a chosen quantile (`--w-under` made explicit as `tau`), which
+moves the slopes too — the ranked options and their literature are design spec
+§8.6 and `docs/reading-map.md` §3c.**
+
+### `--w-tau`: the expectile works, and the hinge still beats it — 2026-09-01
+
+Option 2 of §8.6. `--w-tau` makes the value loss an **expectile** (asymmetric least
+squares): the under-predicting side gets weight `tau`, the rest `1-tau`, scaled so
+`tau = 0.5` is the plain MSE **bit for bit** — verified, `value_p4_tau0.5` matches
+`value_p4` on all 21 organisms' `grad_cosine` to 1e-9, so `lr`/`w_grad` keep their
+meaning. `score` now also reports `value_under_rate` / `value_under_rate_low_mu`,
+the one-sided invariant as a rate, so a knob like this is chosen from a checkpoint
+in seconds instead of a 5 h composition run.
+
+| 21 organisms | worst cos | med R2 | low-`mu` under-rate | A1 worst p90 | n=21 log-X |
+| --- | --- | --- | --- | --- | --- |
+| `tau 0.5` (= `value_p4`) | 0.9211 | 0.9994 | 0.558 | 0.4493 | **0.272** |
+| `tau 0.7` | 0.9237 | 0.9993 | 0.539 | 0.3045 | — |
+| **`tau 0.9`** | 0.9076 | 0.9993 | **0.517** | **0.1298** | 0.327 |
+| `tau 0.99` | 0.9228 | 0.9989 | 0.508 | 0.5322 | — |
+| `--w-under 1` | 0.8985 | 0.9993 | — | **0.0509** | 0.346 |
+
+1. **A prediction made here that it would be inert is retracted.** The value term
+   is 0.3% of the objective at `w_grad 10` (`loss 0.248, value 0.00071,
+   grad 0.02473`), and the inference that a tilt inside 0.3% cannot matter was
+   wrong: A1's `worst_p90` falls 3.5x monotonically over `tau` 0.5 -> 0.9, and
+   `tau 0.9` flips the failing n=21 member's sign exactly as the hinge does
+   (GCA_000007325.1 **-0.857** -> DACTBY01 **+0.713**). A small term can decide a
+   tail.
+2. **There is an optimum and it is interior.** `tau 0.99` turns over hard (A1 p90
+   0.130 -> 0.532) — at weight 0.02 nothing holds the plateau down. "More
+   one-sided is better" is false.
+3. **The hinge wins, and the mechanism is why.** The expectile tilts *every* row,
+   so it buys one-sidedness by degrading the fit everywhere — community
+   `mu_rel_median` 0.254 against `--w-under`'s 0.052 — while the hinge is exactly
+   zero on compliant rows. For a **provable violation**, paying only at the
+   violation is the right shape.
+4. **A1's p90 reproduced the composition's `max` ordering a third time**
+   (0.051 / 0.130 / 0.449 -> 0.462 / 1.658 / 1.698) and again did not predict
+   n=21. It is a tail-over-media instrument; n=21 is one member at one community.
+
+5. **The combination is refuted — they compete.** `--w-under 1 --w-tau 0.9`
+   lands on the expectile's behaviour and slightly worse, not between the two:
+   worst cosine **0.8870** (worst of the four arms), A1 p90 0.117, n=21 **0.362**,
+   composition max 1.755. Both act on the same residuals, so once every row is
+   tilted the hinge has no separate signal left. **Use `--w-under` alone.**
+
+| median log-X, 3 draws | n=2 | n=3 | n=5 | n=10 | n=21 | max | A1 p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `tau 0.5` (baseline) | 0.005 | 0.002 | 0.004 | 0.093 | **0.272** | 1.698 | 0.449 |
+| **`--w-under 1`** | 0.006 | 0.002 | 0.005 | **0.055** | 0.346 | **0.462** | **0.051** |
+| `tau 0.9` | 0.014 | 0.001 | 0.005 | 0.077 | 0.327 | 1.658 | 0.130 |
+| `--w-under 1 --w-tau 0.9` | 0.015 | 0.001 | 0.004 | 0.084 | 0.362 | 1.755 | 0.117 |
+
+**Also fixed:** `train.run` wrapped `calibrate.fit` in a try/except. A finished
+1500-epoch run was discarded by an import error inside that post-hoc 1-D fit; the
+identity is a valid calibration, so it must never be able to throw away training.
+
+### Selected label tangents, not trained ones: n=21 moves for the first time — 2026-09-01
+
+SDDP's position taken literally — **never modify a cut, only select which ones you
+keep** — is the arm nothing had tried, and it is the first thing to move `n=21`.
+`--epochs 0` with `--gm-init labels` is now a supported mode (optax needed a
+`max(1, ...)` on the decay schedule): the head is then exactly the selected
+label-tangent model, smoothed, with the slopes left as the duals wrote them.
+
+3 medium draws x the same 10 communities, all uncalibrated, `p4`:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max | A1 med / p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| trained baseline | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | **0.007** | 1.698 | 0.00066 / 0.311 |
+| trained `--w-under 1` | 0.006 | 0.002 | 0.005 | 0.055 | 0.346 | 0.006 | 0.462 | 0.00069 / 0.051 |
+| frozen, level1 | 0.058 | 0.058 | 0.055 | 0.063 | 0.198 | 0.059 | 1.698 | 0.02105 / 0.573 |
+| **frozen, level1 + `--gm-repair`** | 0.006 | 0.007 | 0.009 | 0.060 | **0.175** | 0.013 | 0.508 | **0.00033 / 0.218** |
+| frozen, active-set + repair | 0.015 | 0.016 | 0.009 | **0.039** | 0.336 | 0.016 | 1.023 | — |
+
+1. **`n=21` = 0.175, against 0.272-0.36 for everything else ever tried.** Nine
+   interventions left that cell flat; leaving the slopes alone moved it 36%. It is
+   still not the 1% gate, but it is the first evidence the training loop — not the
+   labels, the budget, the temperature or the loss — is what that cell was paying
+   for.
+2. **The repair is what makes it usable at all, and this is the cleanest
+   demonstration of why.** Frozen cuts alone are 10x worse in bulk (n=2
+   0.058 vs 0.006) because an untrained head has never absorbed the softmin's
+   `T*ln(K_active)` downward offset: A1 `median_signed` is **-0.021**, a pure
+   *under*-prediction, and DACTBY01 reads **-1.000** (predicted dead). Training
+   normally absorbs that in the intercepts; `--gm-repair`'s uniform shift does it
+   in closed form. After it, A1 `median_abs` 0.021 -> **0.00033**, i.e. **2x better
+   than the trained head's 0.00066**, and `worst_p90` 0.573 -> 0.218 vs 0.311.
+3. **The trial-point set is the lever, exactly as the cut-selection literature
+   says.** Level 1 over community-regime media gives n=21 **0.175**; the same
+   frozen model with `active-set` selection gives **0.336**. Same cuts available,
+   same budget, same everything else — only *which* 1000 of ~3985 are kept. That
+   is the strongest evidence yet for reading §8.1 as a cut-selection problem
+   (`docs/reading-map.md` §3a).
+4. **What training still buys is the bulk.** n=3 and n=5 stay better trained
+   (0.002/0.004 vs 0.007/0.009) and `overall` is 0.007 vs 0.013. So the trade is
+   now cleanly separated: **the label tangents are right for the tail, gradient
+   training is right for the middle** — which is what a proximal/stability-centre
+   method (bundle methods; Lemarechal-Nemirovskii-Nesterov 1995) exists to
+   interpolate. That is the next arm, and it now has direct evidence the trade-off
+   is live rather than being a guess.
+
+Reproduce: `cfs train-value --epochs 0 --gm-init labels --gm-select level1
+--gm-trial-media holdout_community/community_holdout.npz --gm-group 1000
+--gm-temp 0.01 --width 1 --depth 1`, then `20hm_bands/repair_posthoc.py`.
+
+**5. The trial pool is saturated at 2000 points — selection is now exhausted.** A
+10x pool (`trial_pool_20k.npz`, 20 000 community-regime media over the same 10
+communities) keeps **2.4x more cuts** (108/232/268 per organism against
+45/93/103) and buys nothing: n=21 **0.175 -> 0.169**, max 0.508 -> 0.484, every
+other size identical, A1 flat (med 0.00033 -> 0.00041, p90 0.218 -> 0.216).
+
+Building that pool is **free of solves** — `train._trial_points` reads only
+`media` and `exchanges`, never `mu`, because a cut is kept for being the active
+minimum at a point, which is a property of the head (`20hm_bands/make_trial_pool.py`,
+~4 min for 20 000 media). So this is a cheap test and it should be run before any
+future selection idea. Its verdict: **the useful cut count is set by the label
+tangents available, not by how many points you score them at.** Combined with
+"~90% of tangents never bind" and "K 1000 -> 2000 changes nothing", the whole
+selection axis is now closed. What is left is the *cuts* — their slopes — or the
+model class.
+
+### n=21 was never a size problem: it is medium scarcity, and the threshold is measured — 2026-09-02
+
+n=21 was structurally **n=1** — there is only one full roster — so it could never
+separate "large community" from "this medium". 16 distinct **15-member** subsets
+(`communities15.txt`, each organism in 7-15 of them) do separate it, and the
+answer is unambiguous.
+
+**1. The composition metric reduces exactly to Head A.** Over **480** (community,
+member) points — 16 subsets x 2 medium draws — `logX_err = |mu_rel| x that
+member's true growth` at correlation **0.9935**, median residual **0.0000**. The integrator, Head B and the pool sum
+add nothing: `d(log X)/dt = mu`, and the error is the relative `mu` error
+amplified by how much that member grows. Every §8.1 number in this file is a Head
+A number wearing a trajectory.
+
+**2. The regime that fails is a member below ~2x its own `mu_scale`** — i.e. how
+far down its own ramp the drawn medium puts it. It is a **step, not a trend**
+(Spearman only -0.227 because of that):
+
+| member's `mu0 / mu_scale` | n | median &#124;mu_rel&#124; | median logX err |
+| --- | --- | --- | --- |
+| < 1 | 62 | **0.0718** | 0.065 |
+| 1-2 | 23 | **0.0411** | 0.079 |
+| 2-4 | 395 | **0.0004** | 0.0010 |
+
+**~100-180x**, across a sharp boundary. Over both draws, 25 of the 32 n=15
+communities are below 0.05 and the median is **0.0175**.
+
+**3. So the n=21 cell is a medium draw, and 2 of its 3 were scarce.** Same head,
+same community, the three draws this file has always averaged:
+
+| draw | members with `mu0/scale < 2` | n=21 log-X err |
+| --- | --- | --- |
+| 0 | **21 of 21** | 0.175 |
+| **100** | **0 of 21** | **0.023** |
+| 200 | 20 of 21 | 0.343 |
+
+At draw 100 the 21-member community scores **0.023** — in line with n=3 and n=5.
+**There is no size effect to explain.** Every head-side fix this session failed on
+n=21 because they were aimed at a cell whose failure was the medium.
+
+**4. Size and scarcity are confounded *by the benchmark*.** `community_medium`
+draws one §4.3 medium over the **union** of the members' active subspaces, and
+§4.3 puts a fixed *fraction* of the active set into bands — so a bigger union
+means more of each member's own metabolites are scarce at once:
+
+| size | frac of members with `mu0/scale < 2` | median `mu0/scale` | median err |
+| --- | --- | --- | --- |
+| 2 | 0.13 | 2.47 | 0.0065 |
+| 3 / 5 | 0.33 | 2.4 | 0.007 / 0.009 |
+| 10 | 0.67 | 1.00 | 0.060 |
+| **15 (replete draw)** | **0.17** | **2.47** | **0.0185** |
+| 21 | 0.65 | 0.97 | 0.175 |
+
+n=15 is the control that breaks the monotone: a *large* community on a replete
+draw scores like a 3-member one. **Never compare communities of different sizes
+without matching `mu0/mu_scale` first** — the earlier "error does not grow with
+size" and the later "n=21 is the whole remaining failure" were both reading this
+confound.
+
+**What to do with it, in order.** (a) `mu0/mu_scale` is computable from the head
+alone at `t=0`, no LP — it is a *runtime* predictor of a 100x error and belongs in
+`cfs community` / `cfs simulate` output. (b) The fix target is now precise and it
+is not new: Head A's **relative** accuracy for members below 2x `mu_scale`, which
+is the low-`mu` band, with a measured threshold and a measured amplification
+(x that member's growth). (c) Re-state M5's gate over media matched on scarcity,
+or it is measuring the draw.
+
+### The low-`mu` error characterised at n=1: a fixed additive floor — 2026-09-02
+
+`20hm_bands/titrate_n1{,b}.py`: hold every metabolite at the design's rich level
+and titrate **one** down a log grid, per organism. That contrives the scarce
+regime with a single known limiter and no community, so the error is attributable
+to (organism, metabolite) instead of to a medium draw. Pass 1 (21 organisms x 8
+random active metabolites x 11 dilutions) found only **46 of 168 pairs limit at
+all** — 93% of rows never leave the plateau even at 1e-5 of rich. Pass 2 sweeps
+those 46 pairs over 28 points down to 1e-9 of rich: 1288 rows, `mu/mu_scale` from
+2.8 down to **1.2e-6**, `value_p4_frozen_l1_rep`.
+
+**1. The error is a constant additive over-prediction, not a varying one.** In
+`mu_scale` units it is flat at **~0.0105 across five decades** of `mu`:
+
+| `mu/mu_scale` | n | med true | med predicted | **med abs err** | med rel err |
+| --- | --- | --- | --- | --- | --- |
+| 0.000-0.001 | 225 | 0.00012 | 0.01030 | **0.00998** | +11.3 |
+| 0.001-0.01 | 127 | 0.00333 | 0.01439 | **0.01053** | +0.14 |
+| 0.01-0.05 | 90 | 0.02238 | 0.03407 | **0.01046** | +0.06 |
+| 0.05-0.25 | 91 | 0.11330 | 0.12532 | **0.01053** | +0.028 |
+| 0.25-1 | 77 | 0.51168 | 0.52084 | **0.01053** | +0.014 |
+| 1-2 | 125 | 1.67732 | 1.68730 | 0.01287 | +0.007 |
+| 2-9 | 553 | 2.49197 | 2.50553 | **0.00064** | +0.0003 |
+
+The relative error explodes only because the denominator goes to zero. **The
+"low-`mu` problem" is not a low-`mu` problem** — it is one fixed offset, visible
+everywhere, that only *matters* where `mu` is small.
+
+**2. The offset IS the head's floor.** Per organism the head never predicts below
+0.005-0.015 `mu_scale` while the truth reaches 1e-6. On deeply starved rows
+(`mu < 0.01 mu_scale`) the median offset and that floor agree to **7e-5**
+(correlation 0.894 over 18 organisms). Mechanistically this is what a max-affine
+upper bound must do: with no tangent anchored at a near-zero-`mu` row, the min of
+the remaining planes cannot descend, so it flattens out. **100.0% of all 1288 rows
+are over-predictions** — the one-sided structure again, with no exception.
+
+**3. It does NOT affect all genomes equally: 7.1x spread** (ABCC02 0.0054 ->
+GCA_000007325.1 0.0159, and CP027002.1 0.0387 which never went below 1.77x
+`mu_scale`). GCA_000007325.1 having the worst floor is the same organism that led
+the n=21 community failures.
+
+**4. Nor is it the same whichever metabolite limits — and that axis is the larger
+one.** Within a *single* organism, holding the genome fixed:
+
+| organism | offset by limiter (`mu_scale` units) |
+| --- | --- |
+| ABFX02 | malt **0.0002** / ca2 0.0152 / cl 0.0159 — **75x** |
+| CP000139.1 | acnam 0.0058 / k 0.0073 / mg2 0.0097 / cl 0.0130 / o2 **0.0246** |
+| CP009913.1 | k 0.0063 / ca2 0.0153 |
+| AAXE02 | k 0.0057 / mg2 0.0102 / cl 0.0102 / ca2 0.0104 |
+| GCA_000007325.1 | leu 0.0124 / lys 0.0140 / tyr 0.0159 / k 0.0180 / cl 0.0183 |
+
+Consistently: **carbon sources are cheap to get right** (maltose 0.0002, acnam
+0.0058), **the ions are the expensive ones** (ca2 0.0115, cl 0.0116, mg2 0.0102),
+and **O2 is the single worst** (0.0246). That is the same ranking the gradient
+cosine has always shown for `EX_mg2_e` / `EX_cl_e` / `EX_ca2_e`, now measured on
+the *value* rather than the gradient.
+
+**What this means for the composition.** `logX_err = |mu_rel| x growth` and
+`mu_rel = 0.0105 * mu_scale / mu_true`, so every §8.1 number in this file is that
+one offset divided by how starved the member is. The `mu0/mu_scale < 2` threshold
+is where `0.0105/f` crosses ~0.5%.
+
+**The "floor" framing above is superseded by the next section: the tangents that
+would descend are present and exact, and the offset is the softmin's, not the
+label set's.** The characterisation stands; the cause does not.
+
+### The floor IS the smoothing: `--gm-eval-temp` takes n=21 to 0.009 — 2026-09-02
+
+**The n=1 titration is now a harness.** `20hm_bands/n1_bench.py <value_dir>`
+rebuilds the media from `(organism, limiter, dilution)` + the sidecar — **no LP
+solves** — and scores any Head A checkpoint on the same 1288 rows in seconds,
+reporting plateau/ramp signed error, the ramp's **sd**, the local smoothing gap
+`c*T*ln(n_active)` and the softmin support size. Two readings crack it: the ramp sd
+is **0.00000 on 44 of 46 pairs** (one plane active, correct slope, wrong intercept
+— an intercept, not a floor), and the offset tracks **`-T*ln(n_active)`**
+(`n_active` 34 -> 0.0180, 126 -> 0.0054; predicted gap 0.0131 vs 0.0126 observed).
+O2 is the worst limiter *because* `n_active` ~ 3 there.
+
+`n1_decompose.py` splits it. `GCA_000007325.1 / EX_k_e`, `mu_scale` units:
+
+| model | value |
+| --- | --- |
+| hard min over **all 3985** label tangents | **exact to 5 dp at every row**, to `mu` = 5e-6 |
+| the head's hard min over its selected 1000 planes | truth **+0.05330**, constant everywhere |
+| smoothing gap, plateau (`n_active` 34-200) | -0.05313 |
+| smoothing gap, ramp (single plane) | -0.03526 |
+| **net** | plateau **+0.0002**, ramp **+0.0180** |
+
+The `+0.0533` is `repair_intercepts`' **uniform** smoothing lift, sized by the
+**max** local gap over training rows. Per-plane repair is exact (selection error
+1e-5). Wherever fewer planes are active than at that max the lift is uncancelled —
+and a starved medium is the one-plane case. **Selection is not lossy, the labels
+are not insufficient, the frozen head's slopes are fine.**
+
+**`--gm-eval-temp` (new)** ships the head at a colder temperature than it trained
+at: training needs a soft argmax so gradient reaches every plane, inference does
+not. `groupmax.with_temp` before the repair; `gm_temp` in the checkpoint becomes
+the shipped value (`gm_train_temp` records the other) so `train.load` rebuilds what
+was scored. Frozen level-1 head on `p4`, all else identical:
+
+| T | n=1 median ramp | worst | worst cos | med cos | low-`mu` bias | under-rate | A1 med / p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| unrepaired | -0.0041 | 0.037 | 0.9091 | 0.9367 | -0.171 | **1.000** | — |
+| 0.01 (was default) | 0.01074 | 0.0387 | 0.9091 | 0.9352 | +0.0457 | 0.000 | 0.00033 / 0.218 |
+| 0.001 | 0.00103 | 0.0039 | 0.9469 | 0.9767 | +0.0044 | 0.000 | 0.000044 / 0.0223 |
+| **0.0001** | **0.00011** | **0.0004** | **0.9522** | **0.9807** | **+0.0004** | 0.000 | — |
+
+Strictly better on every held-out axis, **no trade** — on a frozen head `T` is pure
+evaluation smoothing. Only cost is curvature -> 0 (P3), which `cfs master-jacobian`
+already showed does not reach §8.4.
+
+3 medium draws x the same 10 communities, uncalibrated throughout:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| frozen l1 + repair, T=0.01 | 0.006 | 0.007 | 0.009 | 0.060 | 0.175 | 0.013 | 0.508 |
+| **T=0.001** | 0.003 | 0.004 | 0.002 | 0.026 | **0.022** | **0.004** | 0.320 |
+| **T=0.0001** | 0.003 | 0.004 | **0.000** | 0.025 | **0.009** | **0.004** | 0.318 |
+| trained `p4` nc | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | 0.007 | 1.698 |
+| `r1` | 0.006 | 0.016 | 0.028 | 0.027 | 0.027 | 0.014 | 0.739 |
+
+1. **Sizes 2/3/5 and n=21 are under M5's 1% gate**; n=10 is 2.5%. Paired at n=21:
+   draw 0 **0.175 -> 0.009**, draw 100 **0.023 -> 0.0008**, draw 200 **0.343 ->
+   0.318, unmoved**. A 100x smaller offset bought 19-29x on the two draws whose
+   members were starved — the n=15 identity confirmed quantitatively.
+2. **Draw 200 is a different failure.** `mu_rel_worst_member` is
+   GCA_000151225.1 at **+0.254** with `mu_true` = 11.7 — a *mid-`mu`*
+   over-prediction, §8.5's class, not this one. Run E1 before choosing a fix.
+3. **`--gm-repair` now forces the identity calibration.** The two corrections
+   fight: the repair guarantees `mu_hat >= mu` on the training rows and
+   `calibrate` is a downward least-squares fit on those same rows, so it pulls the
+   head straight back under them — end to end, `value_under_rate_low_mu` **0.000 ->
+   0.977** on an otherwise-exact head. Third instance of "the calibration is
+   design-dependent", now with a structural reason rather than a measurement.
+4. **The whole low-`mu` branch is retired.** `--w-rel`, `--w-under`, `--w-tau`,
+   the mid-`mu` stratum B2, the output calibration and re-anchoring on relative
+   error were all compensating for this one arithmetic error — the **eighth
+   refuted proxy**, and the cheapest to have avoided.
+5. **What is left is slope drift, and it is now a number.** The same treatment on
+   a *trained* head (`value_p4_nc`, repair at T=1e-4) fixes the median but floors
+   at low-`mu` bias **+0.023 against the frozen head's +0.0004**, n=1 worst ramp
+   **0.027 vs 0.0004**. With the smoothing gone that residual is slope drift alone,
+   per (organism, limiter), in seconds. That is where the proximal/bundle arm
+   belongs.
+
+Reproduce: `cfs train-value --epochs 0 --gm-init labels --gm-select level1
+--gm-trial-media holdout_community/community_holdout.npz --gm-group 1000
+--gm-temp 0.01 --gm-eval-temp 0.0001 --gm-repair --width 1 --depth 1`. Scripts:
+
+**Step 4: with the smoothing gone, the frozen head dominates the trained one
+everywhere — "training wins the bulk" is retracted.** The same repair at T=1e-4
+applied to the *trained* head (`value_p4_nc`), same 3 draws, same 10 communities:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max | A1 med / p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **frozen l1 + repair, T=1e-4** | **0.003** | **0.004** | **0.000** | **0.025** | **0.009** | **0.004** | **0.318** | **0.000004 / 0.0093** |
+| trained + repair, T=1e-4 | 0.004 | 0.005 | 0.004 | 0.057 | 0.322 | 0.005 | 0.837 | 0.000266 / 0.0491 |
+| trained, T=0.01 (was the bulk winner) | 0.005 | 0.002 | 0.004 | 0.093 | 0.272 | 0.007 | 1.698 | — |
+
+1. **The frozen head is now better at every size and loses nowhere**, where at
+   T=0.01 the trained head won `overall` (0.007 vs 0.013) and sizes 2/3/5. That
+   trade was an artifact of the uniform lift: the trained head's intercepts had
+   absorbed the smoothing gap during training, so it paid less of the penalty the
+   frozen head paid in full. Remove the gap and the ordering flips.
+2. **Slope drift is worth ~90x at a scarce medium, not the ~50x the held-out rows
+   suggested.** Paired at n=21: draw 0 **0.0091 (frozen) vs 0.8368 (trained)**,
+   and the trained head gets *worse* there under the colder temperature
+   (0.7761 -> 0.8368) while the frozen head goes 0.1748 -> 0.0091. The held-out
+   low-`mu` bias gap (+0.0004 vs +0.023) understates it because the failure is one
+   member at one medium, which is exactly what A1's `worst_p90` catches
+   (0.0093 vs 0.0491) and its median does not.
+3. **So the proximal/bundle arm loses its motivation.** It existed to interpolate
+   between "label tangents win the tail, gradient training wins the bulk"; there
+   is no bulk left for training to win. `--w-prox` was already refuted directly
+   (monotonically harmful). Do not re-open it without a new measurement showing
+   gradient training buying something the selected tangents do not.
+4. **What is actually left is two cells, both §8.5's class, not §8.6b's.** n=10 at
+   0.025 (draws 0.0006 / 0.0249 / 0.0533) and the n=21 draw-200 cell at 0.318,
+   whose worst member is a **mid-`mu` over-prediction** (+0.254 at `mu_true` 11.7)
+   with `dc_rel_median` 0.878 — Head B is implicated there too. Run E1 on that
+   medium before choosing anything.
+`n1_bench.py`, `n1_decompose.py`, `repair_at.py`, `holdout_score.py` (§7.3
+diagnostics for an existing checkpoint, no retrain), `lowT.sh`, and the §8.6f
+Head B pass — `bound_binding.py` (complementary slackness on the labels),
+`gate_check.py`, `flux_rank.py` (SVD rank and the oracle basis error) and
+`offmanifold.py` (how far off the label manifold the head goes at trajectory
+states) — none of which solve an LP.
+
+### The trial pool is saturated, and 6 cuts per organism are enough — 2026-09-01/02
+
+Two extremes of the Level 1 point set, both on top of the frozen (`--epochs 0`)
+seeded head plus `--gm-repair`, 3 medium draws x the same 10 communities:
+
+| trial point set | cuts kept/organism | n=2 | n=3 | n=5 | n=10 | n=21 | A1 med / p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 2 000 community-regime draws | 45-103 | 0.006 | 0.007 | 0.009 | 0.060 | **0.175** | 0.00033 / 0.218 |
+| 20 000 draws | 108-268 | 0.007 | 0.007 | 0.009 | 0.053 | 0.169 | 0.00041 / 0.216 |
+| **200 000 draws** | — | 0.007 | 0.007 | 0.009 | 0.050 | **0.175** | — |
+| **1 010 dFBA trajectory states** | **3-10 (med 6)** | 0.006 | 0.007 | 0.009 | 0.064 | 0.178 | 0.00033 / 0.232 |
+| 202 trajectory states | 3-10 (identical) | 0.006 | 0.007 | 0.009 | 0.064 | 0.178 | 0.00033 / 0.232 |
+
+1. **100x more points buys nothing, and the "improvement" at 20k was one draw.**
+   Paired per draw at n=21: 0.1748/0.0229/0.3429 -> 0.1686/0.0232/0.3431. The
+   median *is* draw 0. 200k returns to 0.175 exactly. **Quote paired draws, never
+   the median of three.**
+2. **Trajectory states are SDDP's forward pass, taken literally, and they are the
+   cheapest point set that works.** `c_true` from any `cfs community` run is the
+   sequence of media the integrator actually visits — the initial-draw pool only
+   ever contains `t = 0`. 1010 of them keep **3-10 cuts** (median 6) against
+   45-103, and reproduce the bigger model cell for cell (n=21 0.178 vs 0.175, A1
+   median identical). Subsampling 5x selects the *same* cuts, because consecutive
+   states are near-duplicates. `20hm_bands/make_traj_pool.py`.
+3. **So the useful cut count is single digits per organism** — against a budget of
+   K=1000, three orders of magnitude. With "~90% of tangents never bind" and
+   "K 1000 -> 2000 is inert", the whole selection axis is closed from both ends.
+   The payoff is in §8.4, where the head is evaluated inside every Newton step.
+4. Building a pool costs **no LP solves** — `train._trial_points` reads `media`
+   and `exchanges` only, never `mu` (`20hm_bands/make_trial_pool.py`, 20 000 media
+   in ~4 min). Test any future selection idea this way first.
+
+### `--w-prox`: a stability centre at the seeded tangents, refuted — 2026-09-02
+
+`cfs train-value --w-prox W` penalises the first layer's slopes for leaving the
+tangents `--gm-init labels` seeded them with (proximal / level bundle methods —
+Lemarechal, Nemirovskii & Nesterov 1995; Kiwiel). Motivated by measurement, not a
+guess: frozen cuts win the n=21 tail while gradient training wins the bulk, so how
+far the slopes may move looked like the remaining lever. It is not.
+
+**First it was inert, and the reason is a trap worth keeping.** The original
+normalisation was one global `mean(d^2)/mean(a0^2)`. Label slopes span **five
+decades**, so that denominator is set by a handful of enormous planes and the
+ratio is ~0 for any drift the rest have: `w_prox` 0 -> 10 gave *bit-identical*
+composition to three decimals. **A "scale-free" normalisation over a heavy-tailed
+quantity is not scale-free.** It also made a derived diagnostic lie — a normalised
+"slope drift" of 0.0000 while 2.47 million of 9.32 million slope entries had in
+fact moved, by up to 3.2 absolute. Now normalised **per plane**, with the
+denominator floored on the organism's own median so an all-zero tangent does not
+get weight 1e12.
+
+**With the term actually binding it is monotonically harmful.** All at
+`--gm-reanchor 0`, level1 selection, repaired, 3 draws x 10 communities:
+
+| `w_prox` | n=2 | n=3 | n=5 | n=10 | n=21 | overall |
+| --- | --- | --- | --- | --- | --- | --- |
+| **0 (control)** | 0.008 | 0.007 | 0.008 | 0.080 | **0.337** | 0.011 |
+| 10 | 0.007 | 0.008 | 0.008 | 0.080 | 0.343 | 0.011 |
+| 100 | 0.007 | 0.008 | 0.012 | 0.059 | 0.360 | 0.013 |
+| 1000 | 0.007 | 0.008 | 0.012 | 0.059 | 0.364 | 0.013 |
+
+Kept in the code, default 0, because the negative result is worth being able to
+re-derive — but do not reach for it again without a new reason.
+
+**The 2x2 that produced it also found `--gm-reanchor` is what hurts this
+configuration**: at `w_prox` 0, n=21 is **0.427** with `--gm-reanchor 3` and
+**0.337** without, against **0.175** for no training at all. Less intervention on
+the planes is monotonically better here, which is the same "select, don't fit"
+ordering. `reanchor` remains the right tool for the dead-plane failure it was
+built for; it is not right on top of Level 1 selection.
+
+### E1, run twice, gives opposite answers — and both are right
+
+§8.5's cutting-plane check scores the parameter-free `min_j` model over a root's
+**own** training tangents at a failing medium. It has now been run on two
+different n=21 failures and it separates them cleanly:
+
+| failure | trained head | cutting-plane over the same labels | verdict |
+| --- | --- | --- | --- |
+| AAXE02, `p4` **calibrated** | +148% | **+153%** (`r1`: -0.000) | labels insufficient |
+| GCA_000007325.1, `p4` **uncalibrated** | 0.055 vs a true 0.363 | **0.363, exact** | trained-head deficit |
+
+So "the labels are insufficient" was correct for the over-prediction the
+calibration was masking, and is **wrong for the failure that remains**. Run E1
+before choosing a branch; it costs minutes and it has flipped once already.
+
+### SDDP's Level 1 cut selection, adopted — and ~90% of tangents never bind
+
+The cutting-plane model *is* SDDP's outer approximation, sign-flipped: label
+tangents are **cuts**, media are **trial points**, `--gm-group K` is the cut
+budget. `groupmax.rank_by_territory` implements **Level 1 dominance** (de Matos,
+Philpott & Finardi 2015) = the **territory algorithm** (Pfeiffer, Apparigliato &
+Auchapt 2012 — provably the same selection): each cut owns the trial points where
+it is the active minimum, and a cut with an **empty territory** is dropped. Scoring
+all cuts at all points in one pass, keeping only the active index per point, makes
+this the **limited-memory** variant (Guigues 2017): O(points), not O(cuts x points).
+We **store and select** rather than prune, which is free because the tangents live
+in the label shards. `--gm-select level1`, `--gm-trial-media <community_holdout.npz>`.
+
+**The diagnostic is the durable result, and it needed no training.** Of ~3985
+usable tangents per organism, those with a non-empty territory over the 4000
+training media number **174-686, median 419 — about 10%**; over community-regime
+trial points, **44-170**. The budget K=1000 **exceeds the useful count on 21/21
+organisms**, so K 1000 -> 2000 could not have helped: there were never 2000 binding
+cuts. That reproduces Pfeiffer et al.'s own ratio (490 -> 220 -> 55 cuts/stage with
+the forward cost falling at the same rate). **K was never the lever.**
+
+Level 1 wins the label metrics and the worst cell — worst grad cosine 0.899 ->
+0.919, A1 worst organism 0.0083 -> 0.0022, composition `max` 1.698 -> 0.418 across
+the four arms, an ordering that tracks A1's `worst_p90` exactly — and **loses at
+n=10** (0.055 -> 0.110). `rank_by_active_set` stays the default: it is a proxy for
+the same thing and every number on file was measured with it.
+
+**A1 is a tail instrument and behaved as one.** Its `worst_p90` reproduced the
+composition's `max` ordering; its median correctly said the four heads are
+equivalent in bulk. Neither predicts the n=21 median, because that is not a tail
+over media — it is one member at one community.
+
+### Where the plan stands, and what is next — 2026-09-02
+
+**The Head A branch is closed.** §8.5's staged plan (Stage 0 A1 done, Stage 1 B2
+refuted, Stage 2 done and inert) and the whole §8.6 under-prediction branch were
+chasing one arithmetic error: `repair_intercepts`' uniform smoothing lift, sized
+by the *max* local gap and therefore uncancelled wherever a single plane is active.
+`--gm-eval-temp 1e-4` removes it. Head A's `mu_rel_median` is now **<= 0.0005 on
+all 30 §8.1 cells** and its held-out low-`mu` bias is +0.0004. Do not reopen
+`--w-rel`, `--w-under`, `--w-tau`, the B2 stratum, the output calibration or
+relative-error re-anchoring; each was compensating for that lift.
+
+**Milestone position.**
+
+| gate | state |
+| --- | --- |
+| **M5, 1% log-X** | **met at every size at the default 4-doubling horizon (0.0-2.6%) — and failed at every size at 8 doublings (3.1-13.5%, overall 4.1%). The gate was a statement about the integration window; quote it with its horizon (§8.6f B4).** The 8-doubling gate now has one working lever: the **LP fallback** at `depth < 0.9` takes it to 0.028 overall and n=21 to 0.015, for 24.6% of the member-steps a full LP would cost (§8.6g(4)) |
+| **M3, 0.99 worst grad cosine** | 0.9522 — untouched by any of this, and no longer what §8.1 is waiting on |
+
+**What is open, in order.**
+
+1. **M5's residual is Head B's coverage, and the proxy passed P25's gate.** NN
+   distance in `x` to the member's own training media predicts `dc_rel` at
+   Spearman **+0.673** (p=4.6e-5) over the 30 cells already on disk — the only
+   proxy of eight to clear that bar before a relabel. The fix is to label the media
+   §8.1 actually visits: `make_traj_pool.py` extracts them from any `cfs community`
+   run. **`cfs generate --media <npz> --round N` labels them**, and round 2 has
+   run: it halves the whole-path NN distance and the composition's `overall`
+   (0.004 -> 0.002), improves 21 of 30 cells, and leaves the two far cells and the
+   0.318 outlier exactly where they were. One community's trajectory does not
+   reach another's — see "Round 2 labels the trajectory" below for what that
+   costs and what would fix it.
+1b. **Head B's error is now localised, and the obvious fix is refuted.** The
+   depletion sweep (21 monocultures, no community, no new code) puts it at
+   **3300x over-predicted flux magnitude** below 10% of starting growth, caused by
+   the inference-time `mu_floor` — and removing that floor improves `dc_rel` 2.7x
+   while making the trajectory 30x worse. Attribution across two community sets
+   says to rank **metabolites** (Spearman +0.879) and per-genome *difficulty*
+   (+0.719), never a genome's share of the pool error (+0.413). Next is the ranked
+   series in **design spec §8.6f**, the literature pass on Head B (reading map
+   **Part 3d**). Measured there, no solves: the label flux set is **rank 12-39 of
+   138-259 exchanges** and that basis reconstructs held-out truth to **0.1-0.5%**
+   against the head's own 9-26%, so **B1, a low-rank basis head** (`z/mu = w . V`,
+   `cfs train-behaviour --basis-var`) was built and is **null**: identical median
+   log-X at every community size over 3 draws x 10 communities (overall 0.002, max
+   0.318 in both arms), held-out worst R2 0.9354 -> 0.9199, `dc_rel` 0.079 ->
+   0.147 on the 15 easy cells and 0.920 -> 0.840 on the 10 hard ones. Default 0
+   (off). **In hindsight its ceiling was already measured**: the off-manifold
+   component is 0.9-8.7% of the norm against a 12-26% error, so a constraint is
+   worth at most the violation it removes — measure the violation first. **B2 is
+   refuted from the labels** — Spearman(`z_scale`, relative error) = **+0.018**, so
+   the 90.5% of raw squared error in the top flux quintile is a scale effect, not
+   a misallocated loss. **B3 is the wrong sign**: the floor is self-consistent
+   (train divides by `max(mu, floor)`, inference multiplies by it), 12% of training
+   rows are sub-floor, and §8.6e's 3318x is the head emitting the *unfloored*
+   specific flux at co-depleted media it never saw — dropping those rows removes
+   the only supervision the regime has. **B4 is done and is the important one**:
+   the 4-doubling benchmark spends 86% of member-steps above 0.9 of starting
+   growth and 0.4% below 0.1, and at 8 doublings M5 fails at every size (overall
+   0.002 -> 0.041) with `mu_rel` unchanged at 3e-5 — so the residual is Head B's,
+   the error peaks in the **0.1-0.5 transition band** (not at the bottom, where
+   both trajectories have stopped growing), and B1 re-tested on the deeper gate is
+   **still null** (12/30 cells, `dc_rel` worse). B5 (conservation / DC3
+   completion) is subsumed: those relations live inside the subspace B1 restricted
+   to. **The depletion coverage round (round 3, 567 co-depleted media from
+   8-doubling monoculture batches) is also null** — 10/30 and 8/30 cells better at
+   the two horizons, held-out Head B unchanged — and `depl_reach.py` says why:
+   median NN distance in `x` from the benchmark's deep community states to the new
+   pool is **5.57 against 5.22** to the existing training set, i.e. *no closer*. A
+   monoculture's depletion path does not reach a community's. Those distances are
+   4.1-7.7 where §8.6d's held-out median is 0.10, so the 8-doubling gate is an
+   **extrapolation** test, not a coverage one, **B6 is refuted before building, on both legs**: Head A's
+   predicted limiting set at the 208 deep failing states has Hamming distance
+   **median 0.0 and p90 0.0** to the training active sets (so conditioning on it
+   adds nothing where the failure is), and a ridge affine fit inside the commonest
+   limiting-set bucket reaches only **0.921 in-sample** (0.589 held out) where the
+   existing MLP is 0.964 held out — a limiting set is not a critical region,
+   because the shards record exchange duals and not the LP's optimal basis.
+   Storing the basis and relabelling is what would reopen it. `u` beats `x` in
+   that fit (0.921/0.589 vs 0.867/0.497) — a mild coordinate signal, not §7.2's.
+   **Round 4 then ran the large spend** — the 16 n=15 communities at 8
+   doublings, 598 labelled states, a pool whose reach to the benchmark's deep
+   states is 3.87 against the training set's 6.28. It **confirms the chain
+   `reach -> dc_rel`** (21/30 cells better, median 0.556 -> 0.482; per size
+   exactly where reach improved) **and does not reach the endpoint** (log-X 12/30,
+   median flat). Sixth and decisive instance of "a better rhs is not a better
+   trajectory". **Head B's accuracy is no longer the binding constraint on the
+   batch endpoint**; the endpoint turns on which metabolite empties first, which
+   no norm on `dc` sees. Also measured: generating depletion states needs **no
+   LP** (a pool built from `c_surr` reaches identically to one from `c_true`), and
+   the pool is 24x redundant (farthest-point cover at radius 1.0 = 25 of 598), so
+   a coverage round should generate free, subsample, and label ~25 per composition
+   across many compositions. **So the ranked list is closed** and what is left is a large label spend (the
+   16 n=15 sets at 8 doublings), stating M5 at a horizon the design covers, or
+   reporting the deep gate as the extrapolation benchmark it is. `dc_rel` improved on 21/30 deep cells
+   while the endpoint did not follow — the fifth instance of that. Two candidates were refuted in minutes and are on file: the
+   complementarity gate — `dual => flux on the MM bound` is 0.996-1.000 on the
+   labels, but `mu_and_z`'s clamp already lands there (relative error **0.000**)
+   and the tight set carries only 1-10% of the squared error — and the post-hoc
+   subspace projection (0.1238 -> 0.1228). **48-69% of the error is on
+   secretion**, which no bound constrains.
+2. **The two remaining bad cells are §8.5's class, not §8.6b's.** n=21 draw 200
+   (0.318) has `mu_rel_worst_member` = GCA_000151225.1 at **+0.254** with
+   `mu_true` = 11.7 — a *mid-`mu`* over-prediction — and `dc_rel` 0.878, so both
+   heads are implicated. n=10 is at 0.025-0.055. Run E1 on that medium before
+   choosing anything; it has flipped once already.
+3. **Check a diagnostic on the training set before building a loss on it.**
+   `--w-mm` ranked the ten communities by trajectory error and was still refuted:
+   the violation is 0.053% on training rows, so the loss had nothing to reach, and
+   where it *did* work the composition did not follow. A free predictor is not a
+   target.
+4. **Select, do not fit.** The frozen (`--epochs 0`) label-tangent head now beats
+   the trained one at every community size and loses nowhere; "training wins the
+   bulk" was an artifact of the same lift. The proximal/bundle arm has no
+   motivation left, and `--w-prox` was already refuted directly.
+5. **Do not** re-run `cfs topup` against held-out media from the design being
+   changed; that is the naive Stage 4 and it has failed twice.
+5b. **The runtime predictors are shipped (2026-09-03, §8.6g's item 1).**
+   `cfs simulate` reports `reach` per member at `t = 0`, plus `depth_final` and
+   `frac_steps_below_depth_0.9`; nothing solves an LP. `reach` needs the training
+   media at runtime, so `train-behaviour` now writes **`reference_x.npz`** beside
+   the head (512 strided rows per organism, 1.3 MB) and
+   `20hm_bands/ref_posthoc.py` back-fills an old checkpoint. A checkpoint without
+   it reports `reach: null` rather than failing. The subsample reads 5-11% high
+   against the exact distance — read it against the thresholds (held-out ~0.10,
+   Head B's failures at 4-8), not against `nn_proxy.py`. **`reach` is per cell
+   only**: per step it is worse than random (lift 0.9x); `depth` is the per-step
+   instrument (lift 3.0x, and it is the LP fallback's trigger).
+6. **Head B stock-take: design spec §8.6g** — the five issues, the revised
+   per-use-case verdicts (§13.7), the ranked solutions and what the literature
+   does and does not offer. The two convex design programs (§13.2, §13.3) use
+   Head A alone and **none of the Head B findings touch them**; §13.4 steady state
+   is the most exposed, because an equilibrium *is* a drawn-down medium.
+   **The secretion-side bound `E z <= 0` passed its premise check (2026-09-03,
+   `20hm_bands/element_bound.py`, no solves) — the first constraint to.** The
+   labels satisfy it *exactly* (violation rate 0.0000 on C/N/P/S over 21k rows,
+   dust rows dropped); Head B violates it on **39/37/34/43%** of held-out label
+   media and on **53% for carbon** at the states in failing cells, where the
+   median net carbon flux is *positive* — more carbon out than in. The excess is
+   **8-11% of that element's turnover** against Head B's own 12-26% error, so it
+   clears [[constraint-worth-at-most-the-violation]] by a wide margin (B1's was
+   0.9-8.7%). And unlike `--w-mm` it is **reachable in-distribution**, so a
+   training hinge is possible as well as an inference-time correction. **The
+   correction is built and on by default** (`dfba.Surrogate._element_balance`):
+   the weighted minimum-norm projection in the `z_scale` metric, a 4-D dual NNLS
+   by active-set enumeration. Paired over 3 draws x 10 communities it is
+   **14 cells better / 4 worse** on the endpoint, median 0.0023 -> 0.0019, size
+   medians and `max` unchanged, `mu_rel` and cross-feeding bit-identical. Two
+   traps it cost: a **uniform shrink** of the secretions satisfies the same
+   inequalities, is *not* a projection, and made `dc_rel` worse on 10 of the 11
+   cells it moved; and the dual's feasibility test was **sign-inverted**, so the
+   projection fired on 1.9% of states against a ~30% violation rate and the first
+   run read as null — check the fire rate against the measured violation rate
+   before believing a projection did nothing (`20hm_bands/proj_size.py`, which
+   also gives the honest premise number: the violation is 8-11% of *element
+   turnover* but a median **2.8% of `||z||`**).
+   **Trajectory-level training passed its premise check** (2026-09-03,
+   `20hm_bands/traj_sens{,2}.py`, no solves): the endpoint is smooth and monotone
+   in `z` on **20/20 cells** — no threshold blocking gradients — and **17 of 20
+   could close their whole endpoint error with a <= 10% relative move in `z`**,
+   with the linearisation holding (`||g||` at eps 0.01 vs 0.03 agrees within 5% on
+   15 cells, within 1.6x on the rest). The load-bearing number: the endpoint is
+   **~3 orders more sensitive to the *direction* of the `z` error than to its
+   magnitude** (`||g||` 0.067 uniform vs 272 full-space on one cell) — the
+   mechanism behind six instances of [[rhs-accuracy-does-not-buy-the-endpoint]],
+   since a `z_scale`d per-state loss spends itself on magnitude. It cannot reach
+   the n=21 draw-200 cell (`||g||` 0.198 against an error of 0.318), as expected:
+   that one is Head A's mid-`mu` over-prediction. Gradients reach ~300 through 40
+   Euler steps, so clip and prefer a whole-trajectory loss to an endpoint-only
+   one. **It is now built (`cfs train-traj`) and measured**, and the result is
+   mixed with a clean structure — design spec §8.6g(3). Four things to carry:
+   (i) **a community trajectory loss cannot identify per-organism behaviour** —
+   `d(log X)/dt` is Head A's frozen `mu`, so Head B reaches the loss only through
+   the pool sum, and 60 epochs take held-out label R2 from 0.577 to **-31.98**
+   with both gates worse; a weight-drift anchor cannot repair that (still -15.8 at
+   `--w-anchor 1.0`). (ii) **Monocultures can**: on `monodeep_s*` the trajectory
+   loss falls **3.4x** (against 9%) with worst R2 -0.445 and sign agreement
+   slightly better than baseline. (iii) At the gate it is size-split — at 8
+   doublings every size from 5 up improves 10-40% (n=10 0.053 -> 0.032, n=21 0.054
+   -> 0.039) and the small communities lose. (iv) **`dc_rel` got 3x worse while
+   the endpoint improved** — the exact inverse of
+   [[rhs-accuracy-does-not-buy-the-endpoint]]'s six instances, and the sharpest
+   evidence that the two are independent. Trap: one non-finite gradient poisons
+   Adam permanently through `clip_by_global_norm`, which reads as an `lr`
+   divergence at every `lr`; the guard skips on the gradient, not just the loss.
+   **(v) The joint loss closes it: the trajectory term is null.** `--w-label` adds
+   the per-state label term; `--w-traj 0` runs the label term alone through the
+   identical optimiser and data. Joint and control are a coin flip — the joint head
+   is better on **18/30** cells at 4 doublings and **16/30** at 8, median relative
+   difference 5-9% — and the control alone drives the *trajectory* loss down 3.7x,
+   more than the trajectory-only arm's 3.4x. **§8.6g(3) is refuted**; `cfs
+   train-traj` stays in the tree with the result on file. **(vi) And the control is
+   a tenth instance of [[held-out-cannot-see-a-design-change]], the sharpest yet:
+   it improves every held-out label metric** (worst R2 0.577 -> 0.816, median 0.937
+   -> 0.959, cosine 0.964 -> 0.982, sign 0.912 -> 0.953) **and makes the
+   composition worse at both gates** (0.002 -> 0.007, 0.041 -> 0.070). More label
+   training, better label scores, worse composition — so the held-out label fit is
+   not what selects a Head B for §8.1.
+
+   **The LP fallback is built and it is the first thing to buy the deep gate**
+   (`cfs community --fallback-depth 0.9`, `dfba.rhs_hybrid`, 2026-09-04): solve the
+   true LP for any member whose predicted depletion depth `mu_hat(t)/mu_hat(0)`
+   falls below the threshold. At 8 doublings, median log-X **0.041 -> 0.028
+   overall (26/30 cells better)**, and the large communities gain most — n=21
+   **0.054 -> 0.015 (-72%)**, n=10 -45%; at 4 doublings 0.002 -> 0.001. The pooled
+   fire rate is **24.6%** of member-steps, matching `fallback_roc.py`'s offline
+   prediction of 24% exactly, so it is a ~4x saving against solving everything and
+   the offline estimator can price a threshold before a run. Spearman(fire rate,
+   relative gain) = +0.458 (p=0.016) over the cells that fired. **Quote the pooled
+   rate, not the per-cell median** — 12.3% vs 1.8% at 4 doublings, because most
+   cells never deplete and a few fire on 83% of their steps. **The self-labelling half is
+   built and its first pass is null; the control is the keeper.** Trap 1 is
+   cleared — `load_{value,behaviour}_dataset(..., x_scale=...)` and
+   `cfs train-{value,behaviour} --x-scale-from <ckpt>` pin the input coordinate, so
+   a round extends a head **without rebuilding Head A** (P14 passes across it), and
+   pinning costs nothing (0.933/0.964 against 0.935/0.964 on unchanged labels).
+   `--fallback-media` writes the fired states in `cfs generate --media`'s layout;
+   71 media, labelled as round 5, retrained. Against its own control the round is
+   **null** (9/30 cells better at 8 doublings). **But the control moved the deep
+   gate's mean 0.085 -> 0.143 and its max 0.572 -> 1.866 on a fresh 600-epoch fit
+   at the same seed, with no new rows at all** — so retraining noise here exceeds
+   any round-sized effect. **Score a label round against a matched retrain, never
+   against the checkpoint it started from**; rounds 3 and 4 were scored the older
+   way. The online fallback is what works (0.041 -> 0.028), with no retraining.
+7. **Literature map:** `docs/reading-map.md` (also an artifact). Read §3a before
+   touching cut selection again, and Part 3d before touching Head B.
+
+**Caveat that affects all of it:** `x = u/(u+s)` takes `s` from the training
+rows, so every relabel silently changes the input coordinate and two label roots
+are never strictly comparable.
+
+### §8.6g's ranked list is complete, and one of the four works — 2026-09-04
+
+All four items built and measured, in order. **Only the LP fallback moves the
+gate**, and it does so without touching either head.
+
+| item | outcome |
+| --- | --- |
+| 1. runtime predictors | **shipped** — `cfs simulate` reports `reach` (per cell), `depth_final`, `frac_steps_below_depth_0.9`; the reference media ride in the Head B checkpoint |
+| 2. secretion bound `E z <= 0` | **built, kept, small** — premise passed on both legs (labels violate at 0.0000, Head B at 34-53%), min-norm projection is 14/30 cells better on the endpoint and never worse |
+| 3. trajectory-level training | **refuted** — a community loss cannot identify a member; on monocultures its whole gain is reproduced by the label term alone (`--w-traj 0`) |
+| 4. LP fallback at `depth < 0.9` | **works** — 8-doubling median log-X 0.041 -> 0.028, n=21 0.054 -> **0.015**, 26/30 cells better, at a 24.6% fire rate that matched the offline ROC exactly. Its self-labelling half is null at 71 media |
+
+**The three methodological results are worth more than three of the four arms.**
+(a) **Enforcing a constraint is not projecting onto it** — the uniform secretion
+shrink satisfied the same inequalities and made `dc_rel` worse on 10 of 11 cells.
+(b) **Run the zero-weight ablation** — the joint loss looked like a win on every
+metric until `--w-traj 0` reproduced it. (c) **Score a label round against a
+matched retrain** — a fresh fit at the same seed moves the 8-doubling mean 0.085
+-> 0.143 and the max 0.572 -> 1.866 with no new rows, which is larger than any
+round-sized effect; rounds 3 and 4 were scored the older way.
+
+**What the fallback changes about the plan.** It is a speed/accuracy knob, not a
+model fix: `fallback_roc.py` prices a threshold offline (no solves) and the live
+fire rate matches, so a use case can *choose* its LP budget. §13.7's per-use-case
+table should be read with that in mind — an application that cannot afford 24% of
+a full LP solve is a different application from one that can.
+
+**Where Head B stands after all of it.** Unchanged as a model: the residual is
+still extrapolation to community-regime states (§8.6g stock-take), every
+model-side arm is refuted, and coverage rounds are null or below the retrain noise
+floor. What is new is that the failure is now *detectable at runtime* (item 1) and
+*correctable on demand* (item 4).
+
+### M6/M12: the chemostat steady state — and a finite-difference step that was 61x wrong (2026-09-04)
+
+`cfs steady-state` (`src/cfs/science/steady.py`) is §13.4, the next milestone after
+§8.6g closed. Active-set Newton on `D(c_feed - c) + sum_i X_i z_i(c) = 0` and
+`X_i (mu_i(c) - D) = 0`; coexistence, stability, invasion and the implicit
+derivative `dy*/dc_feed` all fall out of one factorisation. `lstsq` after row and
+column equilibration, since §7 measured the Hessian sum at rank ~10-25 of 365.
+
+**The headline is the FD step, and it generalises past this file.** The Jacobian
+is finite-differenced in `c`, and the first step was `1e-3 * (c + Km)`. The
+limiting metabolite is by definition the scarce one: at a real fixed point
+`EX_k_e` sits at `c = 3.0e-8` against `Km = 1e-3`, so that step is **33x `c`
+itself** and secants clean across the Michaelis-Menten saturation.
+
+| `d(mu)/dc`, `EX_k_e` | value |
+| --- | --- |
+| the LP's shadow price, chain-ruled | **5 122 827.50** |
+| FD at `h = 1e-4 c` | 5 122 827.5 |
+| FD at `h = 1e-3 (c + Km)` | **84 153.7** — 61x low |
+
+Fixed to `1e-3 * max(c, 1e-3 Km)`. **Same cell: 159 Newton iterations / 9.3e-7 /
+615 s became 11 / 1.8e-8 / 55 s**, and 2 of 5 cells converge where 1 did. Both
+bounds bind: below ~3e-4 relative the float32 heads return noise, above it the
+step crosses the kink. It also made every other diagnosis in the session look
+worse than it was.
+
+**The LP hybrid, measured.** Three arms, five 2-member cells, identical warm
+starts. A **pure LP residual with a surrogate Jacobian does not converge** (0-13
+iterations, then no descent direction) — the textbook inexact-Newton failure, and
+`mu_rel` of 1e-4 to 9e-3 at those states says Head A was already accurate, so the
+inconsistency costs more than the truth buys. The **mixed** residual fixes it:
+solve both, keep the surrogate wherever it agrees within `--mix-mu-rel`, and give
+the Jacobian **exact dual rows for exactly the members the LP was used on** (NaN
+means "keep the FD"). It matches or beats surrogate-only and needs **2.3x fewer
+iterations on one cell** at 3-5% LP usage. Caveat: the trigger is on `mu` and Head
+B's error is in `z` — one cell fires on nothing at 1% while the pure LP finds a
+different fixed point where the surrogate's own residual is 4.4.
+
+**The exact dual rows are free**: `d(mu)/dc = pi * (-Vmax) * Km/(Km+c)^2`, with the
+*same two corrections* `data._organism_arrays` applies (the dual is that derivative
+only where the bound binds; clamping at 0 also drops the dust that is half the
+non-zero duals). Verified against a properly-scaled FD to 8 significant figures.
+
+**The remaining failures are the optimiser, not the model.** Two cells sit at a
+scaled residual of *exactly* 10.0 in all three arms, and that is `feed/Km ~ 10` on
+nearly every fed metabolite at once: the iterate collapsed the pool to `c ~ 0`
+with `mu ~ 0.005` against `D ~ 12`, including metabolites the community
+*secretes*, whose steady state is `c >= c_feed`. A damped line search is not
+enough globalisation; a trust region, Newton-Krylov (1 rhs per Krylov iteration
+against 230 FD columns) or pseudo-transient continuation are all
+`scipy.optimize.root` one-liners that would **delete** the hand-rolled Newton.
+
+**`reach` at `c*` is 1.0-5.5** against a held-out ~0.10, and the two failing cells
+are the two deepest. §13.7's "most exposed use case" is measured now. The cheap
+answer is that an equilibrium visits **one** state, so the LP costs nothing like
+§8.6g(4)'s 24.6% of member-steps along a trajectory.
+
+**Five more traps, three of which return a converged wrong answer.**
+
+1. **`Surrogate.reach` never existed.** §8.6g(1) recorded it shipped and
+   `cfs simulate` called it on line 871; the method was never written, so every
+   `simulate` run raised `AttributeError`. Found only when a second caller reused
+   it. **A feature recorded as shipped in the design spec is not evidence it runs.**
+2. **Do not warm-start a steady state by integrating.** The medium saturates `mu`
+   at ~0.2% of the feed, so explicit Euler ratchets `X` to ~1e8 at a large step and
+   washes out to the **spurious extinction** fixed point (`X ~ 1e-9`, residual
+   1e-13, a genuine root) at a small one. The warm start bisects a **partially**
+   scaled feed — only what the community consumes — because a secreted
+   metabolite's steady state is at or above the feed, and scaling it down too makes
+   the abundance NNLS return `X = 0` on 8 of 9 cells (water and protons dominate
+   the rhs and the community secretes both).
+3. **Fraction to the boundary, or the anti-cycling rule eats the community.** One
+   overshoot through `X = 0` plus the ban converges cleanly at residual 1e-13 on
+   `X = 0, c = c_feed`.
+4. **§8.4's `rtol=1e-10` is unreachable and the solver is not at fault** — float32
+   heads plus an FD `J` floor the residual near 5e-8. `tol` is `1e-6`,
+   dimensionless; read `residual_max_scaled`.
+5. **Report the residual of the rhs you actually solved.** It was taken from the
+   surrogate even in LP mode, making a converged LP run read as a failure at 4.4.
+   That number is worth keeping — it is how far the surrogate alone is from calling
+   the state an equilibrium — but under its own key.
+
+**The solver pass, 2026-09-04 — full detail and the ranked plan in design spec
+§13.4.** Four results:
+
+1. **Replacing the hand-rolled Newton with `scipy.optimize.root` is refuted, and
+   the reason generalises: none of those methods knows `X > 0`.** On the toy
+   chemostat, whose answer is closed-form, `hybr`, `df-sane`, `broyden1` and
+   `krylov` **all** converge to the *trivial washout root* `X = 0, c = c_feed` —
+   always present, usually nearest, wrong. Re-parametrising as `log X` removes
+   that root and does not rescue them. `--solver` keeps them, default `newton`.
+   **A matching fraction-to-the-boundary on `c` is refuted too**: it takes cell 1
+   from converged to failed. The boundaries are not symmetric — `c = 0` is a
+   normal steady state, `X = 0` is a change of active set.
+2. **Analytic growth rows (`_head_mu_rows` + `calibrate.deriv`) are exact and are
+   the durable win.** On the limiting metabolite: Head A analytic **5 122 829**,
+   the LP's chain-ruled dual **5 122 827.5** — two independent derivations
+   agreeing to 7 significant figures. And at `EX_cu2_e` the analytic gradient is
+   5.6 where the finite difference returns **0.0**; FD was silently zeroing real
+   entries. Cell 5 moves 7.8e-6 -> **1.2e-6** at half the iterations.
+3. **`--jac-temp` is real but not a default.** Head B's `z` is independent of Head
+   A's temperature, so the growth rows are the *only* place the shipped hard-min
+   `gm_eval_temp = 1e-4` reaches the Jacobian; warming it there costs nothing by
+   construction. At `T = 0.01` it takes cell 4 from 25 to **9** iterations and
+   cell 3 from 10.0 to 4.0, and **loses cell 1 outright**. A sweet spot, not a
+   direction.
+4. **V4 re-measured with the corrected FD step: median 3.1e-7 / 3.9e-6, max
+   1.4e-6 / 3.9e-5** on the two converging cells, against the void 2.0e-4 /
+   4.9e-3. **V4 passes wherever the solve converges.**
+
+Also: `--mix-z-rel`, because a `mu`-only mix trigger fires on nothing exactly
+where Head B is wrong (cell 5: 0% of members at 1%, while the pure LP found a
+different fixed point with a surrogate residual of 4.4). Measured: the z-side
+trigger fires on **54%** of that cell's members against 0%, and the solve takes
+**5 iterations against 23**; and regression tests for
+the dual chain rule and the stale-cache NaN fallback.
+
+**The globalisation pass, 2026-09-04 — both arms cell-dependent, neither a
+default.** `--ptc` (Levenberg-Marquardt trust region: escalate the damping and
+take a *different* direction when backtracking exhausts) is **null** — it fires
+on cells 2/3 and leaves the residual at exactly 10.0, so "a damped line search is
+not enough globalisation" is **retracted**: no reachable direction from that
+iterate helps. `--d-steps` (natural-parameter continuation in `D`, walked down
+from the transcritical end where `c = c_feed, X = 0` exactly) is the first thing
+to move those cells — cell 1 **11 -> 5** Newton iterations with V4 still passing,
+cell 3 **10.0 -> 4.5e-5** — and it breaks cell 4 (5.3e-8 -> 0.28) and cell 2
+(10.0 -> 270). Converged over the five: 2 / 2 / 1. **This solver has no single
+setting**; the per-cell decision is now three flags wide with `--jac-temp`.
+
+Cell 3 nearly converging is the free half of the "do cells 2/3 have a fixed
+point" question: a scaled residual of 4.5e-5 is almost one, so its old failure
+was the warm start. Cell 2's ladder converges only on its **top** rung, whose
+answer is `X ~ 0` by construction, and carries that degenerate state down —
+re-seeding abundances per rung is the untested variant.
+
+Two dampings that look equivalent and are not (both on the Monod toy, both in the
+docstring): `A + damp I` **after** row equilibration gives a step **4x larger**
+than the undamped one, and true pseudo-transient continuation without a line
+search is unbounded (`X` reaches 1e80). Only the normal-equation form
+`(A^T A + damp I) w = A^T r` is symmetric PSD and therefore always descent.
+
+`20hm_bands/branch_scan.py` (no LP, ~60 rhs calls) asks the two fixed-point
+conditions separately along the warm start's own path. `max mu / D` does cross 1
+on cells 2 and 3, but the **pool residual is 10-16 at every point on all three
+cells scanned, cell 1 included** — so that path never closes the pool balance even
+where the solve succeeds, and the scan cannot decide existence. Run it before any
+future warm-start idea.
+
+**The M12 gate over the roster, 2026-09-05 — 60% Newton failure, and one
+survivor everywhere.** All ten §8.1 communities, sizes 2-21, one feed draw, the
+default solver. **V4 passes on every converged cell (5.6e-7 to 3.1e-6)** — that
+half of the gate is met on four cells now, not two. **The failure rate is 60%
+against a 1% gate**, and it is *not* size-monotone: the 5-member cell converges
+in 35 iterations where three of the five 2-member cells fail.
+
+**`reach` does not separate converged from failed, and "the two failures are the
+two deepest" is retracted** — it was five 2-member cells. Over ten it is 2.2-2.7
+on the converged and **1.0-5.7** on the failed; cell 5 fails at the *shallowest*
+`reach` in the set. Being off-distribution at `c*` is still §13.7's problem; it
+is not the convergence predictor.
+
+**Failure is bimodal.** Cells 2/3/10 sit at residual 10-11 — the `feed/Km`
+signature of a collapsed pool. Cells 5/6/9 stop at 1.2e-6 / 4.2e-3 / 4.2e-3, one
+to three orders off tolerance on a state that is nearly an equilibrium. Two
+different problems; stop counting them as one number.
+
+**Exactly one survivor on every cell at every size — and four of those states an
+excluded member can invade.** `invasion_score` is free and is the check:
+`mu_j(c*) > D` for a non-survivor means the active set is wrong. Cells 1/6/8 are
+within **0.2% of `D`** of a tie (neutral coexistence at the surrogate's
+resolution, not exclusion) and **cell 9 is invalid at +41.0 against `D` = 11.1**.
+That is the anti-cycling ban doing what it is documented to do: Bland's rule
+guarantees termination, not termination on a state satisfying complementarity.
+`solve_steady` now reports `invadable` and **gates `converged` on it**, so a
+coexistence result can no longer be quoted off a residual alone.
+
+**Three of the four invadable cells are ties the surrogate cannot resolve, and
+the fix is a threshold — 2026-09-05.** The four split cleanly by margin: cells
+8/6/1 at **1.5e-5 / 5.8e-5 / 1.6e-3** of `D`, cell 9 at **3.7**. Head A's own
+`mu_rel` at these fixed points is 1e-4 to 9e-3, so the first three are *inside
+the head's error bar* — calling them invasions claims a precision the model does
+not have. **`--invade-rel` (default 1e-2)** is now the threshold for both the
+re-admission test and the `invadable` report, deliberately the same number for
+both so the loop never declines to chase a member it then calls an invader. At
+the default only cell 9 is a failure.
+
+**A bounded re-admission budget (`--readmits`, default 1) was built first and
+does not fix a tie.** It replaces the permanent ban — termination only needs
+re-admissions to be *finite*, not forbidden. On cell 1 it changes nothing: the
+member is re-admitted, the two-survivor Newton fails, the inconsistent-set branch
+drops it again, and the budget is spent reaching the identical state (11
+iterations, same residual). So at a genuine tie **there is no two-survivor fixed
+point the solver can reach**. Kept at 1 because it costs nothing where it does
+not fire and cell 9's margin is exactly what it is for.
+
+Whether cells 1/6/8 *actually* coexist is beyond this surrogate; that question
+needs `--roster`/`--mix-mu-rel`, and an equilibrium is one state so the LP is
+affordable. Read "one survivor at every size" as "one survivor, three too close
+to call".
+
+**Cell 9 and keystone, 2026-09-05.** `--readmits 1` fixes the one genuine
+invasion: cell 9's excluded member goes **+41.0 -> +3.2e-05** (3.7x`D` ->
+2.9e-6x`D`), `invadable` false, reproduced exactly. **Its residual gets *worse*,
+4.2e-3 -> 3.2e-2, and that is not a regression** — the old number was a
+well-solved *wrong* active set. So the two knobs divide the four invadable cells
+cleanly: the budget cannot manufacture a fixed point at a tie, the threshold does
+not excuse a real invasion.
+
+**Keystone leave-one-out needed one line of code, not none:** the feed is drawn
+over the **union** of the members' active subspaces, so dropping a member
+silently redraws the chemostat. `steady_state.npz` now records `feed`; every
+leave-one-out runs at the full community's own feed and `D` (`--medium`,
+`--dilution`).
+
+**Cell 7 (n=3) is textbook and gives the project its first coexistence.**
+Removing `CP001726.1` leaves `DACTBY01` + `GCA_000007325.1` both alive at
+2.14e-5 / 2.11e-5, converged (5e-7), not invadable; removing either extinct
+member changes `X` by nothing. So **the active-set loop can return a two-survivor
+fixed point** — "one survivor at every size" is about these communities under a
+dominant member, not about the solver, and cell 1's tie having no reachable
+two-survivor state is a stronger statement than it looked.
+
+**Cell 8 (n=5) is path-dependent, and that is the important one.** Three of its
+four *extinct* members change the answer when removed — `CP027002.1` into
+coexistence, `DACTBY01` and `GCA_000209935.1` into a different survivor — while
+`FNPN01` is inert to 3 s.f. An extinct member contributes `X_i z_i = 0` and
+satisfies its own growth row, so **it cannot change the fixed-point equations**;
+it only changes which member the inconsistent-set branch drops first. Cell 8
+therefore has **multiple fixed points** and the loop selects by history. P6, in
+the steady state rather than the posterior.
+
+**So report the inert-removal control with every keystone claim** — it is one
+extra solve per excluded member and it separates an ecological finding from a
+solver artifact. Cell 7 passes it; cell 8 fails it.
+
+**The multiplicity scan, and a retraction — 2026-09-05.** Reading the *signed*
+invasion margin instead of the `invadable` flag at `--invade-rel 1e-2` changes
+the previous section's conclusion. **RETRACTED: "three distinct converged
+non-invadable fixed points" on cell 8.** By sign only **one** is valid — the
+coexistence at −3.42e-05; the other two are invadable by +1.5e-05 and +2.8e-04.
+Multiple equilibria *at the surrogate's resolution* is still the operative
+problem (those margins are inside Head A's own 1e-4 to 9e-3 error); multiple
+equilibria as a claim about the system is **not established**.
+
+1. **The default warm start returns a strictly invadable state on 2 of the 4
+   converging cells.** Cell 1's default gives `GCA_000151225.1` at **+1.64e-03**
+   where the other member's basin gives `CR626927.1` at **−1.64e-03** — exactly
+   antisymmetric, as a two-member exclusion must be, and the default picks the
+   wrong side. Cell 8's default is `AAXE02` at +1.47e-05 where the valid state is
+   the coexistence.
+2. **Free selection rule: take the most negative margin.** `invasion_score` is
+   already in every report. It picks the valid state on cells 1 and 8 and is
+   inert where the answer is unique. **Rank scan states by margin; do not stop at
+   the first that converges.**
+3. **Cells 2 and 3 have fixed points — the failure was the basin, not
+   existence.** Seeded from a monoculture: cell 2 **9.8 -> 1.3e-05**
+   (`CP001820.1`, not the default's `CP001726.1`), cell 3 **10.0 -> 3.8e-05**
+   (`ABCC02`, not `AAXE02`), and cell 3's value agrees with the continuation
+   arm's 4.5e-05. **This closes the question §13.4 has carried since it was
+   written, and the answer is yes.**
+4. **Seed from the monocultures.** Every probe that mattered reported
+   `mono=False` — an unconverged monoculture is still a far better seed than the
+   bisection. `G` extra solves, trivially parallel, and the only thing that has
+   moved cells 2 and 3. Worth more than all three globalisation flags.
+5. **Uniqueness follows the margin's *sign*, not its size.** Cell 4 (−8.8e-01)
+   and cell 7 (−2.1e-04) are unique across every probe, four orders apart; cells
+   1 and 8, both positive, are not. A prediction from magnitude ("a near-tie
+   means alternative states") was made in advance and was **wrong on cell 7**.
+
+**Superseded detail below (kept for the mechanism).** `--warm-start` takes
+another solve's `steady_state.npz` as the starting `(c, X)`, with members it does
+not name entering **dead** so the loop's own re-admission test decides whether
+they can invade. Handing each cell-8 leave-one-out's answer back to the **full**
+five-member community at the same feed and `D` gives **three distinct, converged,
+non-invadable fixed points**: `AAXE02` alone (9.2e-08), `GCA_000209935.1` alone
+(1.7e-07), and `AAXE02 + DACTBY01` coexisting (2.8e-07). Two more warm starts
+land on a fourth, non-converged candidate (both at 4.6e-03, so the same point).
+
+1. **The coexistence is real and belongs to the full community** — restoring the
+   deleted `CP027002.1` does not destroy it, because it cannot invade. Cell 8's
+   keystone reading was an artifact only in *which* attractor the deletion moved
+   the solver to.
+2. **It is not `--readmits`** — the obvious suspect, being this session's own
+   change. `--readmits 0` returns `AAXE02` at 9.2e-08 exactly as before.
+3. **There is no such thing as *the* steady state of these communities.** Every
+   number quoted at one — coexistence, stability, invasion, `dy*/dc_feed`,
+   §13.5's interaction rate, §13.6's forward map — is conditional on the warm
+   start that selected it. P6 expected multiple equilibria to surface as
+   clustered HMC divergences; they surface for the price of three solves.
+4. **The instrument exists**: a multiplicity scan is `--warm-start` from a few
+   structured starts (each member's own monoculture equilibrium is the obvious
+   basis), counting distinct converged non-invadable states. No LP, no new code.
+   **Quote a steady-state result with the size of that set, or say it was not
+   measured.**
+
+**Monoculture seeding is now the default (`--seed-mode monoculture`;
+`bisect` reproduces every earlier number), 2026-09-05.** Solve from the
+bisection, then from each member's own monoculture equilibrium, keep the state
+with the most negative **signed** margin, stop at the first strictly valid one.
+Over 9 of 10 roster cells: **4 improved, 2 unchanged, 0 regressions**, both
+unique cells (4, 7) bit-identical including V4, and strictly valid states go
+**4 of 9 -> 8 of 9**. Cells 2 and 3 reach **1.1e-05 / 2.1e-05** from a
+collapsed-pool 9.8 / 10.0 (with the *other* member surviving), and cell 9 now
+**converges at 2.4e-07** from 4.2e-03.
+
+1. **It cannot find a coexistence.** Cell 8's only valid state is the two-member
+   `AAXE02 + DACTBY01` equilibrium and no single-member basin reaches it — that
+   came from the *leave-one-out* probe, which removes a member rather than
+   starting it dead. Monoculture seeding explores alternative **monoculture**
+   equilibria only; coexistence needs pairwise probes (`G^2`), and one cell is
+   not enough evidence to build them.
+2. **Cost: affordable to ~n=10, and n=21 is NOT measured.** Probes go
+   fastest-grower-at-the-feed first and stop at the first strictly valid state,
+   with `--seed-probes` (default 4) capping them. Cell 9 (n=10) took 28 min; cell
+   10 (n=21) exceeded a one-hour wall at uncapped, 2 **and** 1 probes, since the
+   bisection solve alone is ~15 min there. **`--seed-probes 0` is exactly the old
+   bisection behaviour** and is the escape hatch for a large community — re-run
+   the roster-scale cell there, or on better hardware, before quoting M12 at
+   n=21.
+3. **Two false starts, both instructive.** *Ranking on margin alone prefers the
+   degenerate state* — a collapsed pool has `c ~ 0`, so nobody can invade it and
+   it scores the most negative margin (−0.948); the key is
+   `(converged, margin, −residual)`. And *zeroing the other abundances is not a
+   monoculture* — the **bisection** must be per-sub-community, with `consumed`
+   from that member's own consumption and theta targeting *its* `mu = D`.
+   Reusing the full community's `c0` left cells 2 and 3 at 9.8.
+4. **Unexplained: cell 1's V4 is 8.5e-05 against 9.1e-07.** Different fixed
+   point, so not like-for-like, but two orders is not noise — do not call M12's
+   V4 half met on cell 1 until it is understood. Cells 4 and 7 are unmoved.
+
+**V4 was never established — 2026-09-05.** Chasing cell 1's apparent regression
+found something larger: **every V4 number in this file is a `median_rel_error` at
+5 or 10 components**, and `_fd_check` also reports a max. At 20 components:
+
+| cell | margin | V4 median | **V4 max** |
+| --- | --- | --- | --- |
+| 4 | **−8.83e-01** (decisive) | 3.1e-06 | **6.2e-05** |
+| 7 | −2.09e-04 (tie) | 5.6e-07 | **3.8e-01** |
+| 1 bisect / monoculture | ±1.64e-03 (tie) | 6.8e-07 / 8.5e-05 | 4.5e-02 / 9.1e-03 |
+
+1. **"V4 passes wherever the solve converges" is RETRACTED.** Only cell 4 passes
+   on the max, and it is the only cell with a decisive invasion margin. The
+   medians are 5.6e-07 to 8.5e-05 everywhere and say nothing.
+2. **The mechanism is the tie, not a solver defect.** A feed perturbation at a
+   near-tie crosses the survivor swap, so the difference quotient spans two
+   *branches*. `_fd_check` already skips components whose active set changed —
+   which is why the tie cells report `n=19` of 20 and cell 4 reports 20.
+2b. **"`J` is near-singular in the swap direction" is RETRACTED** — measured, and
+   it cost no solves because `J` and `S` are both in `steady_state.npz`
+   (`20hm_bands/jcond.py`). The analytic object is **well conditioned at every
+   converged fixed point, tie cells included**: `cond(J)` 8.7e+02–4.4e+04,
+   `max|S|` 1.0e+02–4.2e+03, neither tracking the margin — the smallest margin in
+   the set (cell 8, +1.5e-05) has the *best* conditioning — and the smallest
+   singular vector puts only 0.20–0.41 of its mass in the abundance block.
+2c. **So the derivative is fine and the *function* is not.** `y*(c_feed)` is
+   discontinuous across the survivor swap: `S` is usable within a branch, and a
+   step that crosses the swap lands somewhere the gradient never described. §8.4
+   and §13.6 can differentiate through `c*`; what they cannot do is step across a
+   tie. Same shape as P21 — a locally-correct gradient plus a step leaving the
+   region it was valid in — and the boundary is announced for free by the invasion
+   margin going to zero. **A steady-state optimiser or sampler should refuse or
+   shorten a step that changes the survivor set.** Not built.
+3. **The margin's magnitude predicts V4, though only its *sign* predicts
+   multiplicity.** Two free questions, two different readings of the same number.
+4. **Cell 1's regression was not one**: the new state is 125x worse on the median
+   and **5x better on the max**. I had compared a 5-component median against a
+   20-component one on a cell whose V4 is all tail. Monoculture seeding did not
+   degrade V4.
+
+**Quote V4 as a max at 20 components with the cell's margin beside it, or do not
+quote it.**
+
+**Multiple steady states are mostly not real: `k = 1` — 2026-09-05.** Counted
+from Head A's analytic gradient at `c*` (`20hm_bands/kres.py`, no solves),
+**one metabolite carries 100% of the growth gradient at every fixed point**
+measured, n=2 to n=10. Hsu, Hubbell & Waltman (1977): `n` species on one limiting
+resource admit exactly one survivor **globally** — no bistability — and it is the
+lowest R*. So the apparent multiplicity is one equilibrium the surrogate cannot
+resolve. The single coexistence state (cell 8) needs a second resource and has it
+at **2.8%** of that member's gradient.
+
+**R\* is the right ranking and `mu(feed)` is the wrong one** (`rstar.py`): one
+bisection per member, no steady-state solve. The two agree on 4 of 5 cells, and
+the **gap** grades the cell before any solve — 5x where the invasion margin is
+decisive, 0.02–0.15% on every near-tie cell. `--seed-mode monoculture` now orders
+probes by R*.
+
+**Walked back in the same session:** that R* "fixes cell 2". Its gap there is
+**0.02%** — R* resolves that cell no better than the margin's 7e-05 does. Re-run
+under R* order, cell 2 is **unchanged**: the R*-preferred member's basin gives a
+degenerate state (margin −1, unconverged) and selection correctly falls back.
+Stop treating cell 2 as a fixable failure.
+
+**Refuted before building, by `k = 1`:** deflation (Farrell et al. 2015), convex
+pre-screening of survivor sets, a Fischer–Burmeister/semismooth Newton rewrite
+(Qi & Sun 1993), and `2G` monoculture probing (R* replaces it with `G`
+bisections). **Pairwise probes were built and run first — 10 probes on cell 8,
+nothing the singles had not found** — and are removed.
+
+**What would reopen all of it:** `k = 1` is partly Head A's structure, since a
+max-affine gradient *is* one active plane. Separating "singly limited media" from
+"a head that reports one limiter" needs the LP (`--roster`, affordable at one
+state). If true `k` is 2–3, cell 8's coexistence is real and deflation becomes
+correct.
+
+**Making a solve cheap — 2026-09-05. The analytic Jacobian is NOT the small
+change it looked like**: `mu_and_z` interleaves numpy with JAX (`np.maximum`, and
+an active-set NNLS in `_element_balance`), so it is not traceable and `jacfwd`
+needs that projection rewritten first. Profiling found two cheaper wins.
+
+1. **27% of every rhs was an allocation storm.** `cProfile`: Head A `_mu` **54%**,
+   `_element_balance` **27%**, Head B flux (the assumed bottleneck) inside the
+   remaining 19% — and almost all of the 27% was **1100 `np.asarray` calls per
+   evaluation**, rebuilding per-organism operators that never change. Cached in
+   `__init__`: rhs **23.9 -> 17.1 ms**, `dc`/`mu` bit-identical, helps every
+   caller. Built in `__init__` rather than lazily because a lazy cache of
+   `_E`/`mask`/`z_scale` goes stale if they are reassigned — which the unit tests
+   do, and how the first version was caught.
+2. **Batched FD columns, 2.3x.** Head A costs **11.6 ms for one medium against
+   0.143 ms each for 64 at once (81x)** — evaluating one at a time is nearly all
+   JAX dispatch. `mu_and_z_batch` / `rhs_surrogate_batch` feed a `residual_b`
+   that `_jacobian` uses. Per Jacobian **3.96 -> 1.70 s**; end to end cell 1
+   **101 -> 37 s**, cell 4 **448 -> 104 s**, cell 7 **258 -> 49 s**, all states
+   unchanged.
+
+**The trap, which would have shipped as a 4.6x win: XLA does not compute a batch
+of `n` in float32 the way it computes a batch of 1.** `z` differs ~7e-5, `mu`
+~9e-7. Differencing batched perturbations against an `r0` from the *single* path
+put that in the numerator over a step of `1e-3 c` and made **the Jacobian wrong by
+a relative 7e+07** — larger than the derivative itself. The unperturbed medium now
+rides in the same batch. Same family as §13.4's FD-step bug: a small denominator
+manufacturing the error. After the fix, cosine **0.9999999999**; individual
+entries still differ up to 10% at the float32 noise floor, in both versions.
+
+**`k = 1` confirmed against the LP, and the fixed point is true to <1% —
+2026-09-05** (`20hm_bands/true_k.py`). The caveat that could have reopened
+everything — a max-affine gradient *is* one active plane, so `k` might be the
+model class — is settled: set §3.3's MM bounds from `c*`, solve, count exchanges
+binding with a non-dust **reduced cost**.
+
+| state | `mu_LP(c*)` | `D` | rel err | `k_LP` | limiter |
+| --- | --- | --- | --- | --- | --- |
+| cell 4 | 2.446 | 2.448 | **0.08%** | **1** | `EX_k_e` |
+| cell 7 | 1.066 | 1.068 | **0.19%** | **1** | `EX_trp__L_e` |
+| cell 1 | 0.1524 | 0.1538 | **0.9%** | **1** | `EX_k_e` |
+
+1. **`k = 1` is the medium, not the head** — two independent derivations agree,
+   the top limiter carries the whole dual. Competitive exclusion applies, and the
+   enumeration branch (deflation, convex pre-screen, semismooth rewrite) stays
+   closed on evidence rather than on an artefact.
+2. **The surrogate's fixed point is a fixed point of the true LP to 0.08–0.9%.**
+   This is §13.4's missing accuracy statement, measured where the use case
+   evaluates. §13.7 called the steady state the most exposed use case and `reach`
+   1.0–5.5 (held-out ~0.10) made it look severe; it is not. **`reach` is a proxy
+   for distance from the design — prefer this direct measurement wherever a fixed
+   point exists to solve.**
+3. **Trap that failed loudly, the good kind:** cobra's `shadow_prices` is indexed
+   by *metabolite*; sensitivity to an *exchange bound* is `reduced_costs`, by
+   reaction. The wrong one reported `k = 0` — visibly broken, not plausibly wrong.
+
+**Cell 10 (n=21) is measured, and it is a tie, not a size failure — 2026-09-05.**
+Three earlier attempts blew a one-hour wall; at ~4x cheaper per solve it finishes
+in **17 min**. `--seed-probes 0` (the old bisection) gives **9.9e+00**;
+R*-ordered monoculture seeding gives **3.87e-03**, survivor ABYJ02, margin
++2.26e-05, 4 probes. Three orders, same story as cells 2 and 3. It does not
+converge because **four members are tied in R* to within 0.015%**
+(`3.4771e-02, 3.4771e-02, 3.4772e-02, 3.4776e-02`) — the early stop never fires
+because no strictly valid state exists to find. **Every unconverged cell in the
+M12 gate now has one explanation: a sub-resolution R\* tie.**
+
+**Per-organism `Vmax` is a required future input — 2026-09-06.** The GEM gives
+the **yield**, never the **rate**: `mu = uptake x yield`, and the uptake bound is
+imposed, not predicted. Every exchange of every roster GEM has
+`|lower_bound| = 1000 mmol/gDW/h` (~100x physiological), so `mu_max` is **0.77 to
+57.6 /h** — doubling times down to **6 minutes** — and `--dilution-frac 0.2` puts
+`D` at **3.7 to 276 turnovers/day**. Absolute timescales are inflated ~30x. M5 is
+unaffected (it normalises by doublings), as are R* orderings and `k`.
+
+The absolute scale needs **no retraining** to fix: the LP sees the bound only as
+`Vmax * u`, so a uniform `Vmax` rescale is exactly a rescale of `u`, the head's
+input. Measured: 10x medium -> 9.9x `mu` in the scarce regime, reaching 2.5 /h at
+1e-4 of the feed.
+
+**But the uniform scale is the wrong knob.** Rescaling toward physiological rates
+moves the community into the supply-limited regime where members become **more**
+alike: cell 2's pair is 3.6% apart in `mu_max` at full scale and **0.04% apart at
+1e-4**. With identical `Vmax` everywhere, competition is decided only by internal
+yield, which nearly vanishes when scarce — that is where the 0.02–0.15% R* ties
+come from. **Realistic growth rates make the ties worse.**
+
+So **per-organism `Vmax` (ideally per organism x metabolite) must be supplied**;
+it is what changes *who wins* rather than how fast the clock runs, and the models
+cannot provide it. Until then: orderings, `k`, R* structure and steady-state
+accuracy are meaningful; absolute times, `D` in turnovers/day, and how close
+competitors are are **not**.
+
+**The chemostat transient works — `cfs simulate --stiff`, 2026-09-06.**
+`--dilution` was always there but on explicit Euler, and the transient is
+**stiff** (the pool equilibrates fast, biomass grows slowly, `mu` saturates at
+~0.2% of the feed). `--stiff` uses **BDF in `log X`**: abundances stay positive
+without a clip, five decades of biomass are O(1), washout is `w` drifting down
+rather than a root at `X = 0`. Two Jacobian blocks are exact
+(`d(dc/dt)/d(log X_i) = X_i z_i`; `d(mu−D)/d(log X) = 0`), the growth rows are
+Head A's analytic ones, and only `d(dc/dt)/dc` is finite-differenced — batched.
+
+Cell 4, its own feed, `D = 2.4477`, 40 h:
+
+| | Euler | **BDF** | `steady-state` |
+| --- | --- | --- | --- |
+| `X` survivor | 2.356e-02 (**480x**) | **4.891e-05** | 4.891e-05 |
+| pool `‖dc‖/‖c*‖` | 4.2e-01 | **1.3e-10** | — |
+| loser `mu` | −2.4473 | **0.2870** | margin −0.883 ✓ |
+
+The transient and the Newton solve **share no numerics**, so this validates both.
+
+**Euler's failure is the dangerous kind — it looks converged**: it ends at
+`mu = D` to four decimals (so `dX/dt = 0` and the run reads as settled) with
+biomass 480x wrong and the pool 42% off. **Never read `mu = D` as convergence.**
+
+**And it is the right instrument for the tied cells.** Where R* gaps are
+0.02–0.15% (cells 1/2/7) or four-way at 0.015% (cell 10), the equilibrium cannot
+say who wins — the surrogate cannot resolve it. In a tie the winner is set by
+initial abundances and the transient. For exactly the cells where `steady-state`
+is weakest, the time course is more informative.
+
+**M11's V6 failure is a synthetic-lethal set, and the LP repairs it —
+2026-09-06.** The recorded 0.436 was **the community, not the head**: `value_r1`
+on the same 3-member community gives numbers identical to `value_p4r2` (0.798,
+249->228). M11 is community-dependent and degrades with size — n=3 0.798, n=3
+0.500, n=5 0.567, **n=10 −0.000** (a member dead on all three draws).
+
+**The mechanism:** on n=10 the same member dies every draw — `GCA_000007325.1`,
+the slow one again — with `n_missed_essential = 0`, so the pin was working.
+Restoring singly shows why: **`EX_trp__L_e` and `EX_indole_e` each revive it
+alone**. Tryptophan and its precursor — neither essential *singly*, so a
+single-knockout audit finds neither, and zeroing **both** is lethal. A synthetic
+lethal pair, invisible to `--keep-essential` by construction.
+
+**`--lp-repair` (new, off by default)** solves the true LP after designing and
+raises components back until every member meets its floor — §13.4's economics
+again, a design is one state. **Order by effect, not by size of cut:** largest
+cuts first needed **29 of 46** components; most-growth-bought-first needs **2**,
+at 94 LP solves.
+
+| cell | n | before | after | restored | components |
+| --- | --- | --- | --- | --- | --- |
+| 7 | 3 | pass 0.798 | pass 0.798 | **0** | 228 -> 228 |
+| 8 | 5 | pass 0.567 | pass 0.567 | **0** | 298 -> 298 |
+| 6 | 3 | fail 0.500 | **pass 0.503** | 0-1 | 247 -> 247 |
+| 9 | 10 | **fail −0.000** | **pass 0.538** | 2-3 | 370 -> **372** |
+
+**V6 passes 4/4, it fires only where needed** (passing cells restore nothing and
+are unchanged), and the worst case costs **+2 components in 370**.
+
+**Not settled:** it is a certificate, not a design principle — the principled
+version pins synthetic-lethal *pairs* as `--keep-essential` pins singles
+(`O(n^2)` LPs, ~1000 here, affordable for a design). And it needs the models, so
+it is unavailable in the surrogate-only setting §13.3 targets.
+
+### The M12 roster re-run: <1% against the LP, and the ties are neutral — 2026-09-08
+
+All ten §8.1 communities re-solved on one code version (`20hm_bands/m12_jobs.sh`,
+default flags, `--fd-check 20`), then `true_k.py` on the converged cells and
+`cfs simulate --stiff` on the tied ones at that cell's own feed and `D`. It needed
+a bug fix first: **`cfs steady-state` passed a `box` argument the parser never
+defines** — a stray edit from the M16 commit into the wrong branch — so every
+invocation had raised `AttributeError` since 2026-09-07 and nothing ran it in
+between. Third instance of [[shipped-in-the-spec-is-not-running]].
+
+**5 of 10 converge** (cells 1/4/7/8/9, up from 4), none invadable; same bimodal
+failure on the rest. `mu_LP(c*)` against `D`:
+
+| cell | n | `mu_LP(c*)` | `D` | rel err | `k_LP` | limiter |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 2 | 0.1524 | 0.15379 | **0.90%** | 1 | `EX_k_e` |
+| 4 | 2 | 2.446 | 2.44772 | **0.07%** | 1 | `EX_k_e` |
+| 7 | 3 | 1.066 | 1.06842 | **0.23%** | 1 | `EX_trp__L_e` |
+| 8 | 5 | 3.830 | 3.83164 | **0.04%** | 1 | `EX_k_e` |
+| 9 | 10 | 11.10 | 11.100 | **0.00%** | 1 | `EX_ca2_e` |
+
+1. **The fixed point is true to 0.0-0.9%** on five cells to n=10 (was three to
+   n=3) and it **improves with size** — the pool sum averaging per-organism
+   errors, as §8.1 measured. §13.7 reads the steady state as the most exposed use
+   case; the direct measurement disagrees, again.
+2. **`k_LP = 1`, top share 1.000, on all five** — competitive exclusion is not a
+   property of the small cells. The enumeration branch stays closed.
+
+**The tied cells as transients** (cell 1, R* gap 0.02-0.15%, margin ±1.64e-03),
+200 h ≈ **31 dilution turnovers**, same feed and `D`: from 1:1, 9:1 and 1:9
+inocula **both members survive in all three**, both at exactly `mu = D`, nobody
+washed out, and the final ratio is whatever was inoculated (9:1 -> 9.5:1,
+1:9 -> 8.6:1). That drift is `d mu` ~ 2.6e-04/h = **0.17% of `D`**, so displacing
+the ratio 100-fold takes **~2700 turnovers**. So the equilibrium's "one survivor"
+is **not observable**, and for these cells the transient is the correct
+instrument, not a weaker one. Cells 2, 7 and 10 running.
+
+**Next:** (1) `filter_jit` on the heads, a further 30% and bit-identical;
+(4) re-run the flag grid on one code version — (2) and (3) are done above.
+
+### The two heads bracket the truth — and the bracket is not free — 2026-09-08
+
+`cfs.science.growth.mu_lower` is P20's missing half. The completion needs no
+separate feasibility solve: **restrict each exchange's uptake to Head B's
+prediction and hand the network back to the LP**, which completes the flux vector
+itself. Tightening a bound only shrinks the feasible set, so `mu_lower <= mu_true`
+**by construction** — validity is not a measurement, tightness is. Same LP size as
+a plain FBA, no QP; bounds tightened with `max`/`min` so a prediction beyond §3.3's
+MM bound cannot loosen anything. 98 (state, organism) points, `value_p4r2` +
+`behaviour_p4r2` (`20hm_bands/bracket.py`):
+
+| point set | n | `lo` valid | median width | lower half | upper half | p90 | `lo = 0` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| held-out design media | 72 | 1.000 | **0.069** | 0.069 | 0.00044 | 0.50 | 0.04 |
+| §4.3 community-regime draws | 26 | 1.000 | **0.0078** | 0.0077 | 4.0e-06 | 1.00 | 0.00 |
+
+1. **Tight where it is used** — 0.8% at community-regime media — and **99.4% of
+   the width is the lower half**, so it is an instrument for Head B, which is
+   where every remaining §8.6g residual sits.
+2. **Capping secretion too is worse and the ablation is cheap** (`--secretion`):
+   0.78% -> 1.4% and `mu_lower = 0` on **12%** of community points against 0%.
+   The network needs secretions Head B under-predicts. Uptake-only is the default.
+3. **It is NOT a free error bar, and `docs/hybrid-framing.md` §5's claim that it
+   replaces the three hand-rolled fallback triggers is retracted on cost.**
+   `mu_lower` is the *same* LP that returns `mu_true` exactly, so anywhere the
+   bracket is affordable the truth is. The asymmetry is between the halves:
+   **`mu_hat` is free and certified one-sided; the lower half costs a solve.**
+4. **Both free proxies for the width are refuted at P25's gate, measured on the
+   same 98 points before anything was built on them.** `reach` scores +0.367 on
+   held-out design media (where the bracket is already narrow) and **-0.054
+   (p=0.79) in the community regime** — the plan's own proposed calibration set.
+   Head B's used fraction of §3.3's uptake bound at Head A's limiting metabolite
+   is strongly predictive in *both* and **flips sign**: -0.587 (p=6e-08) on design
+   media, **+0.614** (p=9e-04) in the community regime. Neither is one calibrated
+   score. §13.6's error model stays open.
+
+### The repaired head IS a valid upper bound off-distribution — 2026-09-06
+
+`20hm_bands/bound_gap.py`. `--gm-repair` restores the max-affine validity invariant
+**on the training rows**; nothing had ever checked it anywhere else, and both design
+programs built today depend on it (`min(head, cuts)` is a valid upper bound only
+where the head is one). 182 (point, organism) pairs against the true LP:
+
+| point set | n | valid (`mu_hat >= mu_true`) | median gap | median rel | worst rel |
+| --- | --- | --- | --- | --- | --- |
+| held-out design media | 72 | 0.986 | 0.00226 | 4.2e-04 | **-8.3e-03** |
+| §4.3 community-regime draws | 26 | **1.000** | 2.3e-04 | 4.2e-06 | 1.6e-06 |
+| §13.2 designed optima | 20 | **1.000** | 3.7e-04 | 7.8e-06 | 1.3e-08 |
+| §13.3 minimal media | 63 | **1.000** | 0.464 | 1.3e-02 | 1.7e-05 |
+
+1. **109 of 109 off-distribution points are valid**, and the only violation in the
+   entire set is on *held-out design media* (ABCC02, -0.83%). **The bound is safer
+   away from the design, not less safe** — which is what a max-affine upper bound
+   must do, being loosest where no tangent is nearby.
+2. **It turns a premise into a measurement.** §13.2's bundle TRF and §13.3's cut
+   loop both need the model to be a valid upper bound; it is, at exactly the point
+   sets they generate.
+3. **One fact explains both use cases' error directions.** For §13.2's
+   *maximisation* an upper bound makes the reported optimum optimistic — measured
+   0.3-0.7%. For §13.3's *constraint* `mu >= target` it is the **unsafe** direction:
+   the model can be satisfied while the truth is not, which is V6's failure mode and
+   the reason `--lp-repair` and the cut loop exist at all. The gap grades it — the
+   minimal media are loosest (1.3% median, 14% on one member), exactly where the
+   design is most aggressive.
+4. **P20's error model now has a certified half.** `mu_hat` is a certified upper
+   bound with **no LP at all**; `mu_hat - mu_LP` is a certified *and tight* error bar
+   for one LP. The missing half is a lower bound, which needs a feasible primal
+   completion of Head B (§13.6, `docs/hybrid-framing.md` §5).
+
+### M11 with Kelley cutting planes: a second route to V6, and it does not replace the repair — 2026-09-06
+
+`cfs minimal-medium --cuts N` (`science.minimal.cut_loop`). §13.2's trust-region
+machinery does not transfer, because here the surrogate is in the **constraints**
+and the objective `cost . c` is exact. What transfers is the bundle: `mu_true_i` is
+concave, so an LP tangent at `c_j` satisfies
+`mu_true_i(c) <= mu_ij + g_ij . (c - c_j)` **everywhere**, and demanding that affine
+function clear the floor is *necessary* for the true constraint. Adding cuts can
+only remove points the truth does not admit — an outer approximation of the true
+feasible set, tightening monotonically — so the program stays convex and the cost
+rises toward the true minimum instead of wandering. Each round costs one FBA per
+member and excludes the design it just checked. `mu_and_grads` gained a `cuts`
+argument and applies the per-member min; `minimise`/`_descend`/`_prune`/`_restore`
+thread it through, so the greedy prune tests feasibility against the *cut* model too.
+
+4 communities x 3 draws, on the ruler the `--lp-repair` numbers were taken on
+(base and `--lp-repair` reproduce that table exactly):
+
+| cell | n | base | `--lp-repair` | `--cuts 6` | cuts + repair |
+| --- | --- | --- | --- | --- | --- |
+| 6 | 3 | **fail** 0.4999 | pass, 247/250/252 | **pass, 247/247/247** | pass, 247/247/247 |
+| 7 | 3 | pass, 228 | pass, 228 | pass, 228 | pass, 228 |
+| 8 | 5 | pass, 298 | pass, 298 | pass, 298 | pass, 298 |
+| 9 | 10 | **fail** -0.000 | **pass, 370/372/375** | fail, 402 | pass, 370/406/404 |
+
+1. **Cell 6 is the optimality claim landing.** V6 passes on cuts alone, with **no
+   LP repair**, at 247 components on all three draws where the repair needs 250 and
+   252. Putting the LP's tangent *inside* the convex program beats bolting a
+   correction on afterwards — which is the whole difference between an optimality
+   method and a feasibility one.
+2. **Cells 7 and 8 are the correct null**: one round, no change. A design that is
+   already feasible pays only for the check (~3 FBAs per member).
+3. **Cell 9 is a loss**: 406/404 components against the repair's 372/375. Cuts
+   tighten the constraint set, and where the head was not the binding problem that
+   tightening is paid for in components and buys nothing. **Off by default.**
+
+**The transferable pitfall: a cut carries no information at a dead member.** At
+`mu_true = 0` every dual is zero, so the tangent is the constraint `0 >= target` —
+flat and satisfiable nowhere. The model goes infeasible and the penalty walks the
+design back toward rich with no direction: cell 9 went 369 -> **402** components and
+still failed V6, and `_lp_restore` could not undo it either, because its
+single-component scan cannot revive a synthetically-lethal state. `cut_loop` now
+skips any member with `mu_true <= 0` or a zero gradient and stops when every
+violated member is dead, handing the case to the repair — which is what takes cell 9
+from fail to pass. **Anyone applying cutting planes to a constraint whose function
+can reach zero needs this guard.**
+
+**So M11's position is unchanged in pass/fail** (V6 4/4 with `--lp-repair`, as
+before) and improved in *what it costs where the members stay alive*. The two
+methods cover different failures: cuts for a feasible-but-marginal design, repair
+for one that kills a member.
+
+### The exact Hessian is free, diagonal, and not the LP's — 2026-09-06
+
+`solve.mu_curvature`. `mu_max` is piecewise **linear** in `u`, so `d2mu/du2 = 0`
+inside every critical region and the whole second derivative is the chain rule's
+remaining term:
+
+`d2mu/dc_m dc_n = delta_mn (dmu/du_m)(d2u_m/dc_m^2)`, i.e.
+**`H_mm = -2 (dmu/dc_m)/(Km_m + c_m)`** — diagonal, negative, and free wherever the
+gradient is. Verified against central differences of the true LP on **12/12**
+(organism, medium, limiting metabolite) cases across 2 organisms: agreement to
+**6 significant figures**, unchanged over a 10x range of step size.
+
+1. **Nothing needs to *estimate* a second derivative.** Where it exists it is
+   exact; where it does not (the kinks) it is a Dirac measure, not a function.
+2. **`master_jacobian`'s "rank 10-25 of 365" now has a mechanism.** The head's
+   Hessian is entirely smoothing artefact (curvature ~ 1/T) plus this diagonal MM
+   term. It is a **mollification of the kinks**, not an approximation of a
+   curvature that is there — consistent with the already-measured result that `T`
+   buys no conditioning in `J`.
+3. A **second-order** consistent trust-region method (Hameed et al., AIChE 2026) is
+   therefore possible here, which it usually is not. Not needed for convergence.
+
+### M10: bundle-corrected trust-region model management beats the single ascent on every axis — 2026-09-06
+
+`cfs maximise-growth --trf N [--trf-mode bundle|shift]` (`science.growth.trf`,
+`lp_value_and_grad`). Alexandrov/Dennis/Lewis/Torczon first-order consistency in
+Eason & Biegler's glass-box/black-box form: correct the head to the LP at the
+trust-region centre, solve the same convex subproblem, ratio-test the step, adapt
+the radius. Cheap and clean here because **the LP is a first-order oracle** (the
+dual *is* the gradient, so one FBA gives both halves of the consistency condition).
+Default `--trf 0` = the single-ascent behaviour every earlier number was measured
+with; `maximise` gained `grad_shift`/`c_ref`/`cuts`/`head_lift` and is otherwise
+unchanged.
+
+20 V5 cases, paired against the baseline:
+
+| | median true gain | max | better/eq/worse | max optimism | LPs |
+| --- | --- | --- | --- | --- | --- |
+| single ascent | +2.34% | 22.79x | — | 0.0730 | 0 |
+| `--trf-mode shift` | +2.12% | 6.79x | 7/10/3 | 0.00712 | 219 |
+| **`--trf-mode bundle`** | **+2.35%** | **23.15x** | **7/11/2** | **0.00686** | **70** |
+
+**The bundle dominates: same-or-better true gain on 18/20, better median and better
+max, a 10.6x tighter optimism bound, at a median of 3 LP solves per case.** V5
+passes. The two arms differ only in the model:
+
+* `shift` adds the affine term `(gt - g_h).(c - c_k)`;
+* `bundle` takes `min(head + lift, min_j [mu_j + g_j.(c - c_j)])` over the LP
+  tangents collected so far — **including from rejected steps**, which is the whole
+  point. Each tangent is a supporting hyperplane of a concave function, so the min
+  is concave, exact at every visited point, and the subproblem stays §13.0's convex
+  program.
+
+**Why `shift` fails, which is the more useful result.**
+
+1. **The LP's gradient at a kink is a subgradient *selection*.** With the model
+   matched to the LP in value *and* gradient at the centre, `rho -> 1` as the step
+   shrinks — unless the function is not differentiable there. Instrumented: the
+   radius shrank 16x, `predicted` tracked it exactly, `actual` stayed **pinned at
+   0.0046**. TRF correctly refuses and halts *at the kink* (`mu_true` 9.29 against
+   the ascent's 22.0). The smoothed head walks through because smoothing averages
+   both sides — **the same fact as `solve.mu_curvature`, as an optimiser failure:
+   what the surrogate offers over the exact oracle is not accuracy, it is a usable
+   direction at a corner.** The bundle is the textbook remedy and it works: that
+   case goes 6.79 -> **23.15**, and `CP027002.1` 0.0064 -> **0.0334**.
+2. **An additive correction is the wrong form at eight decades of gradient range.**
+   `dmu/dc` reaches 1e8 on the ions, so `shift` oscillates between norm ~1 and ~5e6
+   and swamps the concave head: `predicted` reaches **129** against an actual 1.2.
+   The bundle has no such term, which is why rejects fall from 6-18 per case to 0-1
+   and it needs 3x fewer LPs.
+
+**What still limits the bundle — the inner solver, not the model.** The two residual
+losses (`GCA_000164675.2` 0.0171 -> 0.0143) were blamed here on the head reading
+below the truth at a designed medium. **Refuted the same day** by
+`20hm_bands/bound_gap.py`: the head is a valid upper bound at all 20 bundle optima
+*and* all 20 baseline optima, both loss cases included (gap +2.2e-05, +1.9e-07). A
+cut is a valid upper bound too, so `min(head, cuts)` is one everywhere and its
+maximum over the region is at least the true maximum — the better point was **inside
+the model's feasible set**. So the subproblem solver did not find its own model's
+maximum: `maximise` is projected subgradient ascent with a backtracking line search,
+and with cuts the objective is a nonsmooth `min` that stalls at its own kinks. **The
+bundle fixes the outer kink and introduces an inner one** — which is exactly why
+bundle methods solve their subproblem as an LP/QP over the epigraph rather than by
+subgradient steps. A softmin over the cuts, what Head A already does internally, is
+the cheap fix in this codebase's idiom. Not built.
+
+**One transferable trap.** The textbook expansion rule grows the radius only when
+the step reaches the trust-region *face*. Here the binding constraint is usually the
+**budget**, so steps are interior, expansion never fires, and the radius ratchets
+down until the loop stops on `min_decades` with gains remaining — 9 of 20 cases
+ended at exactly six halvings, one losing 0.095 -> 0.069 of true gain. Expansion is
+now on the ratio test alone, capped at `max_decades` (the cap, not the face test, is
+what stops `10**decades` overflowing).
+
+**So §13.2's verdict changes.** P21 becomes the mechanism rather than a pitfall (a
+step that zeroes an essential has `mu_true = 0`, so `rho < 0`, so it is rejected and
+the radius shrinks), every reported optimum is LP-verified at *every* step rather
+than once at the end, and the M3 gate no longer constrains this use case: the model
+is exact at the centre by construction and the bundle keeps it honest away from it.
+
+### The QP is differentiable, and its derivative is Head A's — 2026-09-06
+
+Chapman et al. (Bioinformatics 2025, `DifferentiableMetabolism.jl`) implicitly
+differentiate a *pruned* GEM's KKT system for exact `d(flux)/d(param)`. Their
+pruning theorem exists to manufacture a unique optimum; **D4's elastic net already
+gives us one**, so the same derivative is available here without it. That reopened
+the one Head B arm never tried — **Sobolev training** — since reading-map Part 3d
+had ruled it out on "the argmin has no dual to supervise it", which is true of a
+plain LP and false of the elastic-net QP.
+
+**Built** (`solve.flux_sensitivity` / `solve.exchange_jacobian`,
+`tests/test_cfs_flux_sensitivity.py`). At the optimum each reaction is *at a bound*
+(`dv = dbound`), *at zero by the L1 term* (`dv = 0`, correct lasso behaviour), or
+*free*, where `eps*dv_F = S_F' dy`; with `S dv = 0` that is
+`dv_F = argmin ||d|| s.t. S_F d = -S_B dbound_B`, the minimum-norm restoration of
+mass balance — and **`eps` cancels**. Both concentration routes are in: the
+metabolite's own uptake bound, and the fixed biomass flux `alpha * mu_max` through
+the FBA dual (`data`'s sign convention and clamp).
+
+**Validated** against central FD that re-solves the QP, 3 organisms x 25 held-out
+media (`20hm_bands/dz_check.py`). Columns gated on the FD's *own* step-independence
+— a derivative is unchanged when the step triples, noise/step falls to a third —
+which is non-circular and rejects half of them:
+
+| organism | resolvable | median cosine | median magnitude ratio |
+| --- | --- | --- | --- |
+| AAXE02 | 6/6 | **0.999991** | 0.9998 |
+| CR626927.1 | 6/7 | **1.000000** | 0.9999 |
+| GCA_000007325.1 | 6/12 | **1.000000** | 1.0000 |
+
+**And then it is null.** Two measurements, and both are structural:
+
+1. **`dz/dc` is zero in nearly every direction** — nonzero only where an uptake
+   bound binds or the LP dual is nonzero: **1-3 live columns of 167-181**, median
+   2. Perturbing a slack bound cannot move the optimum. An independent
+   confirmation of `kres.py`'s `k = 1`, from the QP rather than from Head A.
+2. **In the live columns, 96-99% of it is a proportional rescale.** Split into
+   `(z/mu) * dmu/dc` — the flux vector scaling with growth rate, which Head A
+   supplies exactly — plus a residual, the residual share is median **0.037 /
+   0.011 / 0.024**. Head B's *composed* Jacobian therefore already matches the
+   labels at Frobenius cosine median **0.973 / 0.955 / 0.973**, magnitude ratio
+   0.95-1.00: it scores well because Head A carries it.
+
+So the argmin is differentiable and the derivative is not new supervision. Same
+fact as §8.6e's reparametrisation ("one constant per metabolite times `mu_max`
+explains a median 0.807 of the held-out `z` variance"), measured locally and far
+more sharply. It also re-derives §8.6g's conclusion without a composition run:
+Head B's residual is not a local-derivative deficit, it is the **level** of `z/mu`
+off-distribution.
+
+**`d(z/mu)/dc` is not computable at these media** — a ~9-digit cancellation between
+two terms of order 1e8 whose difference is order 1. An early version of this check
+scored the head against exactly that quantity and reported cosine ~0, which was the
+cancellation, not the head. Anything supervising Head B's derivative must use raw
+`dz/dc`, where Head A dominates, or nothing.
+
+**Open:** measured at *design* media only. The residual share at community-regime
+states is unmeasured and is the one thing that would reopen this. Two of 18
+gate-passing FD columns disagree (`EX_zn2_e`, `EX_bz_e`, both at `c ~ 1e-6`, the
+analytic 1e4-1e6 larger than FD) — unexplained.
+
+**Framing consequence, and the ranked plan that follows from it:
+`docs/hybrid-framing.md`.** The short version: do not frame this project as a
+Jacobian estimator — Chapman et al. compute those exactly, and at **7.48 s
+(yeastGEM) / 6.24 s (iML1515)** per full Jacobian against this repo's 1.70 s for a
+whole 21-member community, they are a *sensitivity-analysis* tool and this is a
+many-query one. Frame it as a **smooth, globally concave relaxation** of a
+piecewise-linear LP value function. The live imports are trust-region model
+management (Alexandrov; Eason & Biegler) for §13.2/§13.3, which would retire the
+unmet M3 gate for those use cases, and inexact-Newton forcing terms + JFNK for
+§13.4.
+
+### M15: `lambda` is identifiable from a chemostat log-ratio — the ratio, at least — 2026-09-06
+
+§13.10's smallest test, run. **`Surrogate.lam` is a per-organism rate scale**: the
+LP sees §3.3's bound only as `Vmax * u`, so scaling an organism's `Vmax` is exactly
+scaling its own saturation coordinate — nine lines (the heads' input, the MM clamp,
+and the same factor on `steady._head_mu_rows`), **no relabelling and no
+retraining**, and every existing checkpoint reads `lam = 1`.
+`20hm_bands/lambda_ident.py`, cell 1, `lam_true = (1.0, 0.4)`, chemostat at
+`D = 0.2 min(mu0)` over 5 turnovers, 21 points, BDF in `log X`, observation =
+log-ratio only. ~11 s per trajectory at n=2.
+
+| perturbation from the truth | sse | x the noise floor |
+| --- | --- | --- |
+| **integrator noise floor** (`rtol` 1e-6 vs 1e-9) | 7.6e-07 | 1 |
+| uniform x1.1 (global rate scale) | 2.4e-04 | 323 |
+| uniform x1.6 | 4.2e-03 | 5 537 |
+| **one organism x1.1** (the ratio) | **2.6e-01** | **308 674** |
+
+1. **The gate passes** — both directions clear the integrator's own noise by 2-5
+   orders, so the trajectory carries the signal and the adjoint is worth building.
+2. **The two directions differ ~1000x in curvature.** §13.10 predicted `D` would
+   pin the global scale, and it does — but weakly. Quote **ratios as identified
+   and the overall scale with a wide interval** unless a second data type (OD, or
+   the metabolomics route) is added.
+3. **Nelder-Mead recovers the ratio and crawls on the scale**: 72 evaluations from
+   a start 60%/-40% off give `lam_hat = (1.599, 0.647)` — **ratio 2.470 against
+   2.500 (-1.2%)** — with the scale still +60% out and the point sliding *along*
+   the valley (sse 1.7e-3 -> 1.5e-4). That is the argument for §13.10's blocker 1
+   (gradients) rather than for more evaluations.
+4. **Take the noise floor from the integrator, not from a repeat.** The same
+   `lambda` on the same solver path scores sse **exactly 0** — a circular floor.
+   Re-integrating the truth at a tighter `rtol` is the honest one.
+
+**And OD closes the fit, though it barely moves the anisotropy — 2026-09-06.**
+`lambda_ident.py --od` adds `log(sum X_i)` to the observation. The two channels
+are exactly orthogonal: OD sits *at* its own noise floor for the ratio direction
+(1.0x) and is the better channel for the scale (515x against the log-ratio's
+323x). Combined, the anisotropy goes 1073:1 -> **414:1**, only 2.6x — and yet the
+same Nelder-Mead, from the same start `(1.6, 0.24)` = +60%/-40%, in the same
+budget, goes from leaving the scale **+60% out** (`lam_hat` 1.599, 0.647) to
+recovering **both to 0.15%** (0.9986, 0.3994), at an `sse` *below* the truth's own
+noise floor.
+
+**A curvature ratio predicts how hard a direction is to see, not whether the fit
+closes.** What stalled the simplex was sliding *along* a valley; a second,
+differently-oriented residual gives it a direction to contract in even when that
+direction is only 2.6x steeper. Do not read a sensitivity table as a fit outcome —
+run the fit. So §13.10's "quote the scale with a wide interval" applies to
+relative-abundance-**only** series; with the OD a chemostat already produces, both
+are identified at n=2, and the adjoint (blocker 1) is needed for roster scale and
+for a posterior rather than to see the scale at all.
+
+**The window is the second lever, and it makes the same point harder
+(`--turnovers 20`).** The scale direction's *raw* sensitivity is **flat** in
+window length (2.45e-4 -> 2.52e-4 at +10%; 4.204e-3 -> 4.201e-3 at +60%) while the
+ratio's grows 16x — the uniform scale is only visible in the opening transient,
+because once the vessel reaches quasi-steady state the medium adjusts so `mu = D`
+whatever `lambda` is. So the anisotropy goes **1073:1 -> 16743:1, 15x worse**, and
+all a longer run buys the scale is a 6x lower noise floor (323x -> 1998x).
+
+**That is enough, which is the point.** Matched 80-eval fits from the same start:
+
+| | scale-dir signal | `lam_hat` | ratio | scale | final `sse` |
+| --- | --- | --- | --- | --- | --- |
+| 5 turnovers, log-ratio | 323x floor | (1.599, 0.647) | -1.2% | **+60%** | stalled |
+| **20 turnovers, log-ratio** | 1998x floor | (0.9769, 0.3907) | +0.01% | **-2.3%** | 46x above floor |
+| **5 turnovers, + OD** | 838x floor | (0.9986, 0.3994) | -0.01% | **-0.14%** | *below* floor |
+
+The 20-turnover arm succeeds with conditioning **15x worse** than the arm that
+failed. Across all three the outcome tracks the weak direction's
+**signal-to-noise** — 323x fails, 838x and 1998x succeed — and not the curvature
+ratio. **Prefer OD**: 16x better on the scale at a quarter of the vessel time, and
+the only arm to reach its own noise floor; the horizon arm is budget-limited, since
+the steeper ratio direction eats the simplex's contractions. They compose.
+
+
+**And under model error the scale is gone, while the ratio survives
+(`--lp`) — 2026-09-06.** All three arms above generated their data from the
+*same surrogate* that then fit it, so each measured identifiability against the
+**integrator's** noise and nothing else. `--lp` takes the truth from the real LP
+instead (`rhs_truth`, one FBA + elastic-net solve per member per rhs call, each
+model's exchange lower bounds scaled by `lam_i` — `apply_mm_bounds` reads Vmax
+off `|lower_bound|`, so that scaling *is* the rate scale on the LP side). That
+is §13.10's blockers 4 and 5, measured. The truth costs 1963 rhs calls / 573 s
+and is cached to an npz; the fit is unchanged.
+
+| | surrogate truth | **LP truth** |
+| --- | --- | --- |
+| floor, ratio / OD channel | 7.6e-07 / 1.3e-06 (integrator) | **4.2e-03 / 1.2e-02** (model discrepancy, **5484x / 9498x**) |
+| ratio direction, +10% on one | 346571x floor | **79x** |
+| scale direction, +10% on both | 323x / OD 515x | **0.65x** / OD **1.51x** |
+| `lam_hat` (truth 1.0, 0.4) | (0.9986, 0.3994) | **(0.7265, 0.2835)** |
+| ratio / scale error | -0.01% / -0.14% | **+2.5% / -28%** |
+| `sse_hat` / `sse` at `lam_true` | below its own floor | **0.06** |
+
+1. **The ratio survives, the global scale does not.** Both degrade in exactly
+   the ratio of their signal to the *discrepancy*. A 10% error in the common
+   factor moves the residual **less than the surrogate's own bias does**, in
+   both channels — it is not identifiable here at all.
+2. **The confound is explicit: the fit beats the truth 17-fold.** The simplex is
+   not recovering a parameter, it is spending `lambda` on Head A/B error.
+   **`sse` at the true parameter is the reference every misspecified fit needs**
+   — without it a converged, low-residual, badly biased fit looks like a good
+   one, and the evaluation budget is irrelevant to the conclusion.
+3. **OD does not rescue the scale once the floor is model error.** Its whole
+   advantage was 515x over an *integrator* floor; against a discrepancy floor
+   ~9500x higher it carries 1.51x. Same for the window lever, whose
+   scale-direction signal is flat in window length by construction.
+4. **So "prefer OD" and "both identified at n=2" are upper bounds on what a
+   perfect model would give**, not results about this one. Report per-organism
+   rate **ratios**; do not report the global scale at this model accuracy.
+   Fixing it needs the discrepancy reduced, not the data enriched —
+   `--fallback-depth`'s LP is the affordable correction, and a chemostat visits
+   few enough states to afford it.
+5. **The reusable half:** a self-consistent identifiability test cannot see any
+   of this — it reported the scale at 323-1998x its floor and the fit recovering
+   it to 0.15%. The floor it measured was the wrong one. **Any inverse problem
+   posed on a surrogate must quote its residual at the true parameter before it
+   quotes its estimate.**
+
+
+**And the discrepancy is Head B's `mu_floor`, which the chemostat sits under by
+construction — 2026-09-07.** `lambda_attrib.py` scores the surrogate against the
+cached LP truth *pointwise*, at the LP path's own 21 states. **No solves**: the
+cache already stores `mu(t)` and `dc(t)`. §8.6b's identity is why pointwise is
+enough — `d(log X)/dt = mu`, so the trajectory error is the relative `mu` error
+integrated along the path.
+
+| at the LP path's own states, `lam = lam_true` | |
+| --- | --- |
+| Head A signed `mu_rel`, median | **+0.024 / +0.048** (\|max\| 0.054 / 0.106) |
+| Head A signed `mu_rel` at **`lam_hat`** | **-0.250 / -0.245** |
+| Head B `dc_rel` median / max | **18.48 / 62.87** |
+| Head B `dc_cos` median / min | 0.825 / 0.658 |
+
+1. **`lambda` was not compensating Head A, and the obvious reading is refuted.**
+   Head A is within 2.4-4.8% along the whole path, so a fit correcting *it* would
+   have landed near -3%. Instead `lam_hat` **overshoots to -25%** on both members.
+   The prediction was made before the measurement and it failed — the -28% is
+   paying for something else.
+2. **It is paying for Head B, and the cause is one clamp.** All **21 of 21**
+   states are below `mu_floor` on **both** members: median `mu_hat` 0.060 / 0.025
+   against floors of **1.10 / 1.32**, i.e. the floor is 18x and 54x the actual
+   growth rate. Inference multiplies specific flux back by `max(mu, mu_floor)`,
+   so the *floor* sets every predicted flux. This is §8.6e's 3318x mechanism at
+   its operating point. Zeroing the floor (keeping the reparametrisation) takes
+   `dc_rel` **18.48 -> 0.209** and `dc_cos` 0.825 -> 0.978, an **88x** pointwise
+   improvement, which identifies it as the whole of Head B's error here.
+3. **The regime is structural, not an unlucky draw.** A chemostat holds
+   `mu = D` for its whole run, and `mu_floor` is 5% of the organism's *mean
+   training* `mu` — a distribution dominated by plateau media. Here the floor
+   exceeds `mu` even at the feed (`mu0` 0.769 / 0.308). **The floor bites whenever
+   `D < 0.05 x mean training mu`, which is the normal chemostat operating point**,
+   and it is checkable at runtime with no solves.
+4. **So §13.7's "the steady state is the most exposed use case" is now mechanised,
+   and the price is worse than §8.6g(4) implies.** `--fallback-depth 0.9` fires on
+   *every* step of a chemostat (depth = `D/mu(0)` = 0.083 here, and ends at 0.036),
+   not the 24.6% measured along a batch. Along a trajectory that is a full LP; at
+   a single equilibrium it is still one state and still cheap.
+
+
+**...and removing the floor is refuted: 88x better rhs, 8-15x worse trajectory
+— 2026-09-07.** §8.6e kept the `mu_floor` because dropping it made *batch*
+endpoints 30x worse by changing which metabolite empties first. A chemostat is
+continuously fed and has no such endpoint, so that objection was argued not to
+transfer. **It transfers.** `lambda_ident.py --no-mu-floor` (scoped to this use
+case, off by default), same cached LP truth, same 80-evaluation simplex:
+
+| | **floor on (shipped)** | floor off |
+| --- | --- | --- |
+| pointwise `dc_rel` median at the LP states | 18.48 | **0.209** (88x better) |
+| discrepancy floor, ratio / OD channel | **4.2e-03 / 1.2e-02** | 3.4e-02 / 1.9e-01 (**8.3x / 15.1x worse**) |
+| ratio direction, +10% on one | **79x** floor | **5x** floor |
+| `lam_hat` (truth 1.0, 0.4) | (0.7265, 0.2835) | (2.345, 0.960) |
+| ratio error | **+2.5%** | -2.3% |
+| **scale error** | **-28%** | **+137%** |
+| `sse_hat` / `sse` at `lam_true` | 0.06 | 0.91 |
+
+1. **The mechanism is the chemostat's own feedback, and it is why an absurd
+   pointwise error is the better one.** The vessel is a negative feedback loop on
+   `c`: whatever `z` is, the medium moves until `mu(c) = D`, which Head A sets
+   correctly. With the floor **on**, `z` is 20-50x too large, so the pool draws
+   down, the loop closes at roughly the right `c(t)`, and only the biomass *level*
+   is biased (`X z` must balance the dilution supply, so `X` comes out small). With
+   the floor **off**, `z ~ mu` is ~20x too *small*, the community barely consumes,
+   the pool never draws down, `mu` never falls to `D` — the trajectory is
+   qualitatively wrong, not quantitatively.
+2. **So this is the seventh instance of
+   [[rhs-accuracy-does-not-buy-the-endpoint]], and the first where the batch
+   mechanism was argued in advance not to apply.** The argument was specific and
+   plausible and still wrong: "no metabolite empties" is not the same as "the
+   pool's path does not matter".
+3. **The ratio survives both arms** (+2.5% / -2.3%) while the scale swings -28% to
+   +137%. That is a third, independent confirmation of the M15 reading: **report
+   per-organism rate ratios, refuse the global scale.**
+4. **`sse_hat` is 0.91 of the residual at `lam_true`** — the fit barely moves it.
+   Where the floor-on arm had `lambda` *absorbing* model error, here the
+   discrepancy simply dominates and the parameter can do nothing about it. Both
+   are failures; only the reference at `lam_true` distinguishes them.
+
+**Keep the floor.** The fix for §13.10's scale direction is not this knob.
+
+
+**Profiling the OD offset is free, right, and not enough — 2026-09-07.** The
+attribution says Head B's error here is a *level* bias: the vessel's feedback
+fixes `c(t)` through Head A, and `X z` balancing the dilution supply puts the
+whole `z` error into the biomass level. Measured on the residual, **88.4% of the
+OD channel's discrepancy is a constant offset in log** (the log-ratio channel:
+41.4%). A real OD instrument has an unknown biomass conversion anyway, so that
+constant is a nuisance parameter whether or not we want it. `--od-profile` fits
+`log(sum X) + b` with `b` at its least-squares optimum — the mean residual — so
+it costs **no simplex dimension**.
+
+| LP truth, floor on, 80 evals | OD offset fixed | **OD offset profiled** |
+| --- | --- | --- |
+| discrepancy, OD channel | 1.23e-02 | **1.42e-03** (8.6x lower) |
+| scale direction, +60% | 3.8x floor | **4.6x** floor |
+| `lam_hat` (truth 1.0, 0.4) | (0.7265, 0.2835) | (0.7811, 0.3058) |
+| ratio error | +2.49% | **+2.17%** |
+| **scale error** | -28.2% | **-22.7%** |
+| `sse_hat` / `sse` at `lam_true` | 0.06 | 0.14 |
+
+1. **Strictly better on every axis and it does not fix the scale.** Profiling
+   removes 8.6x of the floor and **8.0x of the signal with it** — a uniform
+   `lambda` shifts the OD level in nearly the same direction Head B's bias does,
+   so the two are close to collinear in the one channel that sees the scale at
+   all. That is the mechanism behind the -28%, stated as a geometry rather than a
+   magnitude. Keep the flag on for a chemostat: it is free, it is the honest
+   observation model, and it lowers the residual at `lam_true` 4x.
+2. **The sensitivity table predicted this fit, and that is not a contradiction of
+   [[sensitivity-is-not-a-fit-outcome]] — it is its boundary.** Signal-to-floor
+   went 3.81 -> 4.6 (1.21x) and the scale error fell 28.2% -> 22.7% (1.24x
+   lower), agreeing to 3%. A table predicts when the question is **collinearity**
+   — can these two directions be separated at all — and fails when the question
+   is whether an optimiser can navigate a valley it *can* see. The earlier OD and
+   window arms were the second kind; this one is the first.
+3. **So four cheap levers are now measured out for §13.10's scale direction** — a
+   second data channel (OD), a longer window, removing Head B's `mu_floor`, and
+   profiling the OD offset. What is left is reducing Head B's error at
+   chemostat-regime states, which is the same open item as §8.6g's stock-take,
+   or accepting the LP cost per trajectory. **The ratio is unaffected by all
+   four** (+2.5 / -2.3 / +2.2%), which is the result to carry.
+
+
+### M13/§13.5: interactions, and two ways the search trusts the head where it is being exploited — 2026-09-07
+
+`cfs interactions` (`src/cfs/science/interaction.py`, `tests/test_cfs_interaction.py`).
+Survey the metabolic handovers a community can reach, then design the media that
+facilitate them. `E(c, X) = sum_m min(total secretion, total uptake)`.
+
+**It cannot be posed at the §13.4 steady state, and that is arithmetic.** With
+one survivor every metabolite has either `z >= 0` or `z <= 0`, so one sum is zero
+and the min with it: `E = 0` exactly for a monoculture. §13.4 measured `k = 1`
+and one survivor on every roster cell bar one coexistence. So `E` is evaluated at
+a **fixed reference abundance**, making it a property of the *medium* — the
+exchange a medium can support per unit biomass, a capacity rather than a
+prediction of what an assembled community settles at.
+
+**Buffered species, and they are not a cleanup.** A chemostat is pH-controlled
+and aqueous, so H+ and H2O are held by the buffer and the solvent: they are
+**pinned** at saturation (`1e3*Km`), because an experimenter cannot dial pH as a
+design variable, and they are **not interactions**, because a proton one member
+secretes goes into the buffer rather than into another member. Without the
+second, `E` *is* proton exchange — `EX_h_e` alone was **871.8 of one community's
+true rate of 893.4 (97.6%)**. CO2/O2/NH4/Pi are deliberately not buffered:
+nothing buffers those and they are real cross-feeding currencies.
+
+| 5 communities x 64 draws x 3 starts | improved (true) | median true gain | `E_hat/E_true` |
+| --- | --- | --- | --- |
+| surrogate ascent alone | **2/5** | **0.00** | 1.6x to **infinite** |
+| + LP acceptance test | 5/5 | — | 1.71 |
+| + buffering + **LP-screened seeds** | **5/5** | **+43.6%** | 1.64 |
+
+1. **The model must not be the acceptance test.** §13.2's bundle TRF needs
+   concavity and a supporting hyperplane; `E` has neither. What transfers is
+   *propose with the model, accept with the truth*. Without it the ascent raises
+   `E_hat` 2-4x every time while the true rate is flat or worse on 3 of 5, and one
+   cell designed `E_hat = 2124` where the LP has **no interaction at all**. Head A
+   is a certified upper bound off-distribution so an optimistic `mu` is bounded;
+   `E` inherits Head B's magnitude, which has no such guarantee.
+2. **The model must not choose the starts either, and this is the sharper one.**
+   Seeding by `E_hat` seeds where the head is most optimistic. On AAXE02+ABCC02,
+   **Spearman(`E_hat`, `E_true`) over 64 draws is -0.053** and all three
+   `E_hat`-seeded starts have a true rate of **0**, while the best true draw
+   scores **529.9** at an `E_hat` ranked well down. With every start at zero the
+   acceptance test has nothing to discriminate against either — any positive step
+   "improves" it — so the region expanded around a worthless point and reported
+   `E_hat` 1426 at a true 4e-06. LP-screening the draws takes that cell to
+   **761.2**. Cheapest, highest-value LP in the run; now the default (`--no-screen`
+   to disable).
+**The seeding ablation, paired and at its honest size.** `--no-screen` on the
+identical code, objective, buffering and draws — 4 of 5 communities completed
+before the run was killed, and its first cell reproduces the earlier
+`E_hat`-seeded run's 163.6 exactly, so the two are the same configuration:
+
+| community | seeded by `E_hat` | **LP-screened seeds** |
+| --- | --- | --- |
+| CR626927.1 + GCA_000151225.1 | 163.6 | **463.6** |
+| AAXE02 + ABCC02 | **4.0e-06** | **761.2** |
+| CP048433.1 + CP070062.1 + CR626927.1 | **378.9** | 294.1 |
+| CP001726.1 + DACTBY01 + GCA_000007325.1 | 168.3 | **227.1** |
+
+**3 of 4 better, one worse.** The mechanism is not carried by this table — it is
+carried by the rank correlation of -0.053, by 27 of 64 draws having a genuinely
+nonzero true rate while all three `E_hat` seeds sat at zero, and by the 8-order
+move on AAXE02+ABCC02. The one regression is a community where the head ranks
+media *well* (draw Spearman +0.807), which is the case screening was never
+needed for.
+
+3. **Report the draw rank correlation first.** It says whether the head can order
+   media for this objective at all, and it swings by community: **-0.053 / +0.316
+   / +0.541 / +0.807 / +0.856**. Near zero, only the survey's *structure* is usable.
+4. **Structure yes, magnitude no — P22 quantified.** Median precision@n_true
+   **0.75**, recall **1.00**, rate Spearman 0.59; `E_hat/E_true` 0.45-1.88, so it
+   is **not one-sided**. Read a proposed link as a candidate and its rate as an
+   order of magnitude.
+
+**What it finds** (designed media, true rates, uniform abundance): nitrite
+GCA_000151225.1 -> CR626927.1 at 463.5; nitrite 454.6 **and acetaldehyde 306.6**
+AAXE02 -> ABCC02; a **reciprocal** glycerol/glyceraldehyde cycle between
+CP048433.1 and CP070062.1 at 142.1 each way; glycerol 179.6 + uracil 26.2 +
+glutamate 21.3 in one 3-member cell; and in the 5-member cell glycerol 968.0 from
+three donors into CP027002.1, glucose 785.7, O2 725.7, glycerol-3-P 206.6. The
+designs work by moving **trace metals** (Zn +5.8 decades, Cu/Mn/Co -1.8 to -5.7)
+far more than carbon — micronutrient limitation forcing a member to leak what it
+cannot use. A hypothesis the tool generates, not one it establishes.
+
+**Candidate seeding is the default (2026-09-07), and it needs no LP to build.**
+A random §4.3 draw contains a handover by luck: most candidate metabolites are
+secreted in **under 1% of the design's media**, and `E` needs the donor's half and
+the recipient's half at the *same* medium. `--seed-mode candidate` enumerates them
+from the label shards instead — `z > 0` for one member, `z < 0` for another —
+which is **11-13 metabolites for a pair**, 62 for the whole roster, against 444
+exchanges. Starts are per *metabolite*, not per link, because the design variable
+is the medium.
+
+1. **Both halves, and the secretion half is the one that gets missed.** Opening
+   only the recipient's §3.3 uptake bound realised **16 of 52** handovers over
+   five 2-member cells and improved 0/5. Adding the donor's own limitation — the
+   labelled medium where it secreted that metabolite hardest — took it to 24/52.
+2. **Sample the region, do not pin the point (`--box`, default 3).** The box of
+   media where a donor secretes `m`, over that donor's active dims, is 0.08-0.30
+   of the design range per dimension (**1e-5 to 1e-19** of the volume, so a draw
+   never lands there) and inside it the secretion rate is **1.1-1704x** the base
+   rate, largest on exactly the rare metabolites sampling misses. Best true start
+   rate: box **483.5 / 628.8** against 64 draws' 160.2 / 425.9 on two cells, and
+   it gives the most simultaneous links on 4 of 5.
+3. **Append, never substitute.** Candidate media realise 24/52 links and the draws
+   22, with **20 in common** — neither set contains the other, and appended it is
+   31/52. A candidate start fixes the donor's limitation to a medium that made it
+   secrete *in isolation*; a draw can find a joint condition neither member
+   reaches alone.
+4. **Combining single-link recipes is refuted, three ways.** *Last wins*: the
+   chain collapses (533 -> 1.0 -> **0.0** by combo7, the later candidate
+   overwriting the earlier one's donor settings). *Skip on clash*: nothing merges,
+   since candidates routinely share a donor. *First wins*: a null. Simultaneity
+   comes from the box, not from merging. `combine()` removed.
+5. **`--verify-steps` is now 8**, because ranking the *designs* by `E_hat` is the
+   seeding anti-pattern one level up: unverified the appended arm improves the
+   true rate on 2/5 cells at a median **-6.3%**, at 8 steps it is **5/5 at
+   +27.0%** with V5 passing and `E_hat/E_true` **2.40 -> 1.67**.
+
+**Two traps that both read as results.** `draws` is the per-community parameter
+and the appended count was written back to it, leaking into the *next* community's
+draw loop — cell 2 drew 130 media where cell 1 drew 64, which reads as the seeding
+improving with position, and cell 0 matching the control exactly is what caught
+it. And per-variant coverage first asked whether a medium's *last targeted*
+metabolite was realised, which is the wrong question for a start whose point is
+simultaneity; it reported the combination arm as a flat zero.
+
+**Two engineering notes.** A rejected ascent step costs a *value*, not a gradient
+— 0.022 s against 1.7 s for the batched FD Jacobian, and backtracking rejects ~19
+in 20, so taking the gradient only after acceptance turned 36 s into 4.5 s for an
+identical path. And do not cache cobra models across communities: holding every
+genome the run has touched OOM-killed a 5-community run with no traceback, and
+re-reading the SBML is seconds.
+
+### M16/§13.11: product inhibition, in the true LP only — 2026-09-07/08
+
+Built and measured. **Rescheduled next**, through §13.5 and **without a relabel**:
+Stage 0 refuted inhibition in the §4.3 *draws*, and Stage 1 was written as a
+relabel, so the two got tied together. They separate — §13.5 is the one use case
+whose ground truth is an LP solve at a medium the *search designs*, and it already
+proposes with the surrogate and accepts with the true LP, so the bound goes into
+the truth alone. Heads unchanged, `x_scale` unmoved, nothing on file invalidated,
+and the FBA arm is bit-identical to before.
+
+`solve.mm_upper_bound(vmax, c, ceq) = |vmax| * max(0, 1 - c/ceq)`;
+`apply_mm_bounds(..., ceq=None)` and `solve(..., ceq=None)`;
+`cfs interactions --inhibition <json>`. The JSON takes a **`"default"`** applied to
+every other *unbuffered* exchange, because P30 says an unparameterised exchange is
+modelled as infinitely tolerant of its own product and the LP routes flux through
+exactly those — a complete-but-approximate layer is the one an optimisation model
+can carry, and a 75%-coverage eQuilibrator table is the shape P30 warns about. That
+is also why the eQuilibrator/MetaNetX route is **deferred**: the decisive question
+is a threshold, and sweeping one `c^eq` over decades answers it with no ~1 GB
+compound cache.
+
+**The buffered species must be excluded from the default, and it is load-bearing.**
+§13.5 pins `EX_h_e`/`EX_h2o_e` at `1e3 * Km`, so any finite `c^eq` puts their
+secretion bound at exactly zero — a community that cannot excrete a proton. Not
+inhibition, an infeasible model, and it would have read as "inhibition kills every
+community". Naming one explicitly still works.
+
+**Stage 3', first half — the bound binds, and it cost no solves.**
+`20hm_bands/stage3_binding.py` reads the designed media already on disk: with
+`ub = 1000(1 - c/c^eq)`, a true secretion `z` is cut exactly when
+`c^eq < c/(1 - z/1000)`. Over 123 true-secreting (donor, metabolite) pairs the
+median threshold is **0.113 mM** — the bottom of Bennett et al.'s measured
+intracellular range — with **66/123** binding at 0.1 mM. **Stage 0's "inert"
+verdict does not carry over, and the reason is the question, not the media**:
+Stage 0 measured dynamic *accumulation* (median rise 4.6 uM), while §13.5 has no
+trajectory — `E` is a capacity at a fixed medium, so the bound sees the
+**standing** 0.1 mM concentration and nothing has to accumulate.
+
+**Stage 3', second half — 30 runs, 6 h 29 m, five 2-member cells x {FBA, `c^eq` in
+0.01/0.1/1/10/100 mM}, everything else identical. V5 passes 5/5 in every arm.**
+
+| `E_true` at each arm's own design | FBA | 0.01 | 0.1 | 1.0 | 10.0 | 100.0 |
+| --- | --- | --- | --- | --- | --- | --- |
+| cell 0 | 483.5 | 202.2 | 163.6 | 332.7 | 284.4 | 464.2 |
+| cell 1 | 896.0 | 692.7 | 876.5 | 792.4 | 708.5 | **896.0** |
+| cell 2 | 816.1 | 415.9 | 395.6 | **1326** | 811.6 | 804.9 |
+| cell 3 | 439.1 | 13.2 | 86.0 | **524.8** | 119.7 | 405.7 |
+| cell 4 | 371.1 | 268.3 | **702.6** | **551.8** | 377.3 | 371.7 |
+
+**That table cannot be read as "what inhibition does"** — each arm designed its own
+medium, so the acceptance test moved the optimum and the two causes are summed.
+`inhibition_crosseval.py` scores every design under *both* models (same medium,
+same abundances, only the bound differing) in **40 s of LP**, and it changes the
+reading:
+
+1. **The `c^eq` = 100 mM arm is the null control and passes on all five cells**
+   (0.92-1.00 at the FBA medium; cell 1 reproduces FBA exactly). Inert where
+   `stage3_binding.py` says nothing binds.
+2. **At a fixed medium inhibition usually destroys the interaction** — ratio to FBA
+   0.000 on three cells at 0.01 mM, 2.9e-06 on cell 3 at 0.1 mM.
+3. **But not always: cell 4 goes *up*, 371.1 -> 605 at 0.1 mM.** `E` is not the
+   LP's objective — closing an overflow route reroutes growth-optimal flux into a
+   metabolite a partner consumes. **Never predict the sign of a constraint's effect
+   on a non-objective quantity from the direction of the feasible-set change.**
+4. **The headline: the two models disagree about which medium to run.** Five
+   inhibited designs score `E_true` = **0.000 under plain FBA** and 86 to **1326**
+   under inhibition. The designer is not recovering lost handovers, it is finding
+   media where the handover exists *only because* secretion is inhibited — and the
+   converse holds, the inhibited designs being poor FBA media. An experiment
+   designed under FBA is the wrong experiment if inhibition is real at that `c^eq`.
+
+**Concavity in `c` is retracted even for the thermodynamic form** — the `max(0, .)`
+clip is a convex kink at `c = c^eq`, and `f'(c^eq-) < 0` exactly when the bound
+binds, so it fails precisely where the mechanism is active. Not removable (`ub < 0`
+forces uptake, an infeasible LP, `mu = 0` — worse than a kink). The form choice
+still stands, the hyperbolic bound being convex *everywhere* rather than at one
+known point per metabolite. The head is unaffected (its channel is `theta`, and
+`mu` is concave and non-decreasing in `(u, theta)` jointly); §13.2/§13.3 get the
+`(u, theta)` **relaxation**, whose optimum is an upper bound because `mu` is
+non-decreasing in both — which composes with the certified-upper-bound plus
+LP-round-trip discipline they already run under.
+
+**Neither head needs a new architecture.** Head A gains one per-metabolite input
+channel (444 -> 888) with monotonicity **uniform, not signed** — the change table's
+"signed per channel" is only true in `c` — and `init_from_tangents` transfers free,
+since the secretion duals come from the same LP. What is genuinely new is a
+`_kink_scale` analogue for `theta`. Head B gains a second inference clamp
+`z <= Vmax * theta`, aimed at the **48-69% of its error that sits on secretion**
+and is currently unconstrained; measure the violation rate first and make it a
+min-norm projection, not a shrink. The seven-instance "a better rhs is not a better
+trajectory" caution does **not** transfer — `E` is a static rate, so an rhs
+improvement is the deliverable rather than a proxy.
+
+**The interference observable — delivered 2026-09-08.** `E = min(secretion,
+uptake) >= 0`, so suppression can only show as a *smaller* `E`, never as a
+negative link. `interaction.interference` asks directly: step the designed medium
+by the pool derivative **with and without the partners**, re-solve each member's
+`mu`. `2G` FBAs, no QP, no search, no relabel — it runs on designs already on disk
+(`20hm_bands/interference.py`). Both arms carry the member's own depletion so it
+cancels; `dt` is `frac` of the time to the *first* depletion (`min`, not `median`)
+so nothing is exhausted inside the step, and the reported number is
+**`delta_rel / dt`**, a rate. With `median` the step exhausts a trace metabolite
+and members saturate at -1, unstable in `frac` — one member died in its **own** arm
+at 0.01 and lived at 0.001.
+
+**And the directional form — `spent_medium_assay`, 2026-09-08.** `interference`
+is simultaneous, so a suppressed community reads as "this community suppresses
+itself". This conditions the medium with **one donor at a time** and grows each
+other member in the filtrate (baseline: the *fresh* medium — the recipient is
+absent while it is made), which is the assay a bench would run. `2G(G-1) + G`
+FBAs, capped at 8 members. **The control is the load-bearing half**: a spent
+medium is depleted as well as conditioned, so re-supplement what the donor ate
+back to `c` (`max(spent, c)`, keeping what it secreted) and re-solve — what
+survives is conditioning only.
+
+Ten ordered pairs, same five cells: the conditioning term is **`>= 0` on 10/10
+under FBA** and **negative on 8/10 under `c^eq` = 0.1 mM** (-1396 to -4968/h).
+Four readings: (i) under plain FBA there is no chemical interference at all —
+every negative *total* is depletion, `ABCC02 -> AAXE02` being -137.7/h in total
+with a conditioning term of exactly 0; (ii) one-way relationships are now
+visible — `CR626927.1` conditions `GCA_000151225.1` **down** (-4060/h) while
+`GCA_000151225.1` conditions it **up** (+1.09e4/h); (iii) the two terms can
+cancel, `CP070062.1 -> CP040530.1` totalling -56/h from -1989 conditioning
+against +1933 restoration, so the raw spent-medium number says nothing is
+happening; (iv) **a positive restoration term is §13.11's predicted monotonicity
+loss, observed** — `max(spent, c)` raises a *secreted* metabolite too, tightening
+its own secretion bound, so under `ceq` read `depletion_per_h` as "the effect of
+restoring what the donor consumed", not as a depletion cost. Under FBA the
+decomposition is signed as designed on 10/10.
+
+**The candidate seeding was self-defeating under inhibition — fixed 2026-09-08.**
+`candidate_media` sets the targeted metabolite to `_BUFFER_SAT * Km` in **every**
+variant, `box` included — the *uptake* half of the handover. §13.11's secretion
+bound is `Vmax * max(0, 1 - c/c^eq)`, so that same level is what stops the donor
+making it: `Km` is 0.001-0.1 mM (median 0.01), so `c_m = 1000 Km` is 1-100 mM
+(median 10) and **`c_m >= c^eq` for 100% of exchanges at `c^eq <= 1 mM`**. At
+every `c^eq` stage 3' cared about, the donor's secretion of the targeted
+metabolite was pinned at **exactly zero at every candidate seed** — only the
+appended random draws could find anything, so **stage 3's inhibited `E_true` is a
+lower bound, not an estimate**. P29 one level deeper: there the model chose the
+starts, here the *uninhibited labels* did.
+
+The structural fact is a result, not a bug: **under inhibition the two halves of
+a handover want opposite concentrations of the same metabolite** — uptake
+`c/(Km+c)` rising, secretion `max(0, 1 - c/c^eq)` falling. **`E` is a min, so the
+best level is where they are equal, and that has a closed form**:
+`c* = (-Km + sqrt(Km^2 + 4 Km c^eq))/2`, which is `sqrt(Km c^eq)` when
+`Km << c^eq`. `interaction.target_level` returns `(c*, f)` with `f` the fraction
+of capacity both halves reach there; uninhibited it is the original `1000 Km` bit
+for bit.
+
+**RETRACTED, same day: "the window can be empty".** That required `c >= Km` for
+the uptake half, which is a preference, not a requirement — uptake below `Km` is
+weak, not forbidden. A handover is possible at **any** `c^eq > 0`: `f` is 0.905
+at `c^eq = 100 Km`, 0.730 at `10 Km`, **0.382 at `c^eq = Km`** and 0.0098 at
+`Km/100`. So "at 0.01 mM, 86.5% of exchanges cannot be handed over at any
+concentration" is wrong — they hand over at ~38% of both capacities. Report `f`;
+`_MIN_FEASIBLE = 1e-3` is a floor on whether a start is worth an LP screen, not a
+feasibility test.
+
+**`--extra-candidates N` (new)** is §13.11's option (ii): candidates from
+**capability** — any exchange two members both carry — instead of from the label
+shards, each seeded at `c*` (variant `analytic`, one start each). The labels are
+plain FBA, so they cannot contain a handover that exists *because of* inhibition.
+First measurement (AAXE02+ABCC02, `c^eq` 0.1 mM, 8 draws, 16 extras, V5 passes):
+`analytic` reaches `E_true` **194.8 from 16 one-shot starts against the draws'
+114.9 from 8**, three simultaneous links against two, and realises `EX_nh4_e` and
+`EX_val__L_e`, **both outside the label-derived candidate set** — but on this cell
+its links are a *subset* of the other variants' union, so capability seeding is
+supported in principle and not yet shown to reach anything exclusively. Default 0.
+**`--inhibited-links N` (new)** is option (i), and it is the one that works:
+re-solve `N` of the same labelled media per member with `ceq` on and fold them
+through the identical aggregation, so the candidate set, the donor's medium and
+its box all come from the inhibited model. No relabel, `x_scale` unmoved, ~2 min
+per 2-member cell at `N` = 200. Same cell/seed/draws, `c^eq` 0.1 mM, V5 passes
+throughout:
+
+| arm | `E_true` designed | candidates | handovers realised |
+| --- | --- | --- | --- |
+| control — FBA labels | **641.1** | 11 | 5 |
+| substituting, 200 / 800 media | 605.4 / **382.7** | 14 / 15 | 8 / 8 |
+| **union, 200 media (shipped)** | **641.1** | 17 | **9** |
+
+(a) The FBA enumeration is wrong in **both** directions: the inhibited pass drops
+`chol`/`lcts`/`mal__L` and adds `glc__D`/`glu__L`/`gua`/`lys__L`/`nh4`/`val__L`,
+three of which are realised under the true inhibited LP — handovers FBA labels
+cannot propose. (b) **Substituting costs the rate and more media makes it worse**
+(641 -> 605 -> 383, realised flat at 8), so it is not sample size: `best_donor` is
+picked by largest secretion seen and inhibition *caps* secretion at
+`Vmax(1-c/c^eq)`, so media pile up near the cap and "secreted hardest" stops
+discriminating. (c) **The union dominates** — the control's rate and nearly twice
+its handovers. "Append, never substitute", measured a second time. (d) It
+**subsumes (ii)** here: `--extra-candidates 16` left the rate at 641.1 with 5
+links, capability seeding supplying a level but no donor background. Both default
+0 on one cell of evidence.
+
+**The re-run is partial, and it retracts the caveat it was for.** Cell 0
+completed 5 of 6 arms before cancellation. The **FBA control reproduces 483.5
+exactly** (same candidates, same realised links), so `target_level` and
+`--inhibited-links` are inert without `ceq` as designed. But the fix moves the
+inhibited rate **-21% to +9% with no systematic direction** (0.01: 202->160,
+0.1: 164->168, 1.0: 333->362, 10: 284->228), so **"every inhibited number is a
+lower bound under broken seeding" is RETRACTED** — the appended random draws and
+the ascent compensated, and the spread is inside the stochastic-search noise this
+section already records. Stage 3's conclusions stand; the other 24 runs were
+cancelled on that basis.
+
+**What the re-run did pay for is the fixed-medium observable**: at `c^eq` 0.1 and
+1.0 the designed medium yields **3.6x and 4.4x more interaction under inhibition
+than the same medium under plain FBA** (168.2 vs 46.96; 362.3 vs 82.14), with
+`EX_nh4_e` and `EX_no2_e` handed over **only** because of inhibition and
+`EX_udcpp_e` suppressed by it — "the two models disagree about which medium to
+run", as named metabolites rather than an inference across per-arm optima. The
+inhibited enumeration is community-dependent (11 -> 11/12 candidates here against
+13 -> 19 on AAXE02+ABCC02).
+
+**How the standing product level should be set — (b) and (c) are recorded, not
+built** (design spec §13.11, "How the product concentration is set"). (b) close
+the chemostat on itself: at a §13.4 steady state `c_p = sum_i X_i z_ip / D`
+exactly, so a short fixed point over the product coordinates makes `--inhibition`
+self-consistent — but `D` is one number for the whole vessel (every product scales
+as `1/D`; per-metabolite removal is a *dialysis reactor*, written as a complete
+`k_m` layer with `k_m = D` by default, P30), it makes §13.5 design a feed and a
+`D` rather than a medium, and it decides who survives. (c) batch to exhaustion at
+realistic concentrations — the only version where products truly accumulate, and
+Stage 0 priced it at 100-1000x short, so it needs the costed **second label root**
+(concentrated, run to exhaustion), which would also serve §8.6f's deep-regime gap.
+
+`d(log mu)/dt`, 1/h, at each arm's own designed medium, five 2-member cells:
+FBA gives zero or **positive** on 6 of 10 members (facilitation, up to +2e4);
+`c^eq` = 0.1 mM gives **negative on 9 of 10**, one to two orders larger
+(-56 to -1.9e4). First expression of negative interaction in the project. It is
+**not redundant with `E`**: cell 4's inhibited design has the higher `E_true`
+(702.6 vs 371.1) *and* the more negative interference (-4572 vs -601/h).
+
+**Maximising *negative* interaction: `--objective interference` — built 2026-09-08,
+not yet run.** `E = min(secretion, uptake) >= 0` cannot express suppression, so
+this is a second objective, not a sign on the first: ascend
+`-sum_i (mu_i(joint) - mu_i(alone_i)) / (mu_i(alone_i) dt)`, the growth-rate cost
+the partners impose at the same medium, with self-depletion in both arms and
+therefore cancelling. Under plain FBA it designs **pure resource competition** —
+the conditioning term is `>= 0` on 10/10 ordered pairs, i.e. FBA has no chemical
+interference at all — and under `--inhibition` it designs **product inhibition**;
+`spent_medium_assay`'s depletion/conditioning split at the designed medium says
+which. Everything else is shared: the survey, the candidate enumeration, the
+buffering, the trust region and every `E_*` report key are untouched, and only the
+ascent, the LP screen's *ranking* of seeds and `verified_ascent`'s acceptance test
+switch — so a `--objective handover` run reproduces the old numbers exactly. The
+objective's own numbers are the `obj_*` keys, and V5/`passed` is stated on
+`obj_gain`. P29 applies harder here than for `E`: the objective is a difference of
+two Head A evaluations at *drawn-down* media, which is where the `z` the step is
+built from is least accurate, so keep the LP screen on and read
+`obj_rank_spearman`. Cost is `G+1` Head-A evaluations per medium and no Head B
+beyond that one `z` — hence `Surrogate.mu_batch`, split out of `mu_and_z_batch`
+because that method's per-state active-set projection is a Python loop over the
+batch. **Latent bug it found: `interference_media` was draining the buffered
+species**, which are ordinarily the fastest-draining entries in `dc` and therefore
+**set `dt`** — so every `*_per_h` reported before this was scaled by a species the
+vessel holds constant. `keep` now reaches it.
+
+**...and the objective is refuted as parametrised — 10 runs, 2026-09-08.** The
+five 2-member cells x {FBA, `c^eq` 0.1 mM}, matched to `inhibition_sweep.sh`
+(`interference_sweep.sh`, `interference_report.py`, ~4 min/run). **All ten land on
+`I = 2.105e6`, and there is a closed form for it.** `delta_rel` is exactly
+**-1/19** for both members of every cell, at growth rates from 0.607 to 14.44 /h:
+deep in the linear Monod regime `|z| = Vmax c/Km`, so the depletion time `c/|dc|`
+**cancels `c`** and becomes `Km/(G Vmax)`, giving `I -> (4/19) Vmax/Km` =
+2.105e6 at `Vmax` 1000 and the ion class's `Km` 1e-3. The whole `obj_gain`
+(<= 0.2%) is the last approach to that ceiling.
+
+1. **Not the `/dt` normalisation** — the dt-free analytic form saturates
+   identically (`(dmu/dc)(X_j z_j)/mu = -Vmax/Km`, `c` cancelling). **Relative**
+   suppression is capped at `Vmax/Km` and only starvation is needed to reach it.
+2. **The optimum is degenerate**: the designs starve trace metals (23 of the 26
+   most-starved entries across 30 designs are ions) and destroy the handover
+   (`E_true_designed` = 0.000 on 6 of 10). P21 in a new use case.
+3. **P15, sharpest instance on file**: the ceiling is maximised by the *smallest*
+   `Km`, so *which* metabolite gets starved is decided by `km_defaults.yaml`'s
+   unmeasured class constants (ion 0.001 < aa 0.005 < sugar 0.01 < gas 0.1) —
+   which that file's own header says makes a result unsupported.
+4. **Inhibition does not escape it**: at `c^eq` 0.1 the same ceiling is reached and
+   `spent_medium_assay` reports **conditioning 0, depletion -1e6 on every ordered
+   pair of every cell**. Starvation reaches the cap; inhibition cannot beat a cap.
+5. **`obj_rank_spearman` collapses under inhibition** — 0.59-0.88 under FBA (better
+   than handover's `draw_rank_spearman` on the same media), **0.075-0.437** under
+   `c^eq`, so the LP screen carries the whole search in the arm the mechanism was
+   for.
+6. **V5 passing 5/5 in both arms is the warning, not the result** —
+   `verified_ascent` makes it true by construction, so it is compatible with an
+   objective that measures nothing.
+
+**The fix is not a better normalisation** — it is to drop it.
+`interference_losses` = `X_i (mu_alone_i - mu_joint_i)/dt` keeps the numerator
+only, so the scarce limit goes to `a (G-1) Vmax c/Km -> 0` and **starving everyone
+scores zero**. `--objective interference` is now that; the refuted relative form
+is kept runnable as `--objective interference-rel`, and `interference()` reports
+both scalars so every design is scored on both.
+
+**Re-run, same ten runs, same everything else — it works.** FBA arm, `abs_loss` /
+`obj_gain` / `rank_rho` / `E_true` / hardest cut:
+
+| cell | 0 | 1 | 2 | 3 | 4 |
+| --- | --- | --- | --- | --- | --- |
+| `abs_loss` | 8.35e7 | 1.03e8 | 1.09e8 | 5.56e7 | 7.82e7 |
+| `obj_gain` | 8.5e4 | 1.16e7 | 4.83e6 | 2.28e7 | 3.35e6 |
+| `E_true` | 19.8 | 40.1 | **458.2** | 2.6 | 106.4 |
+| hardest cut | cobalt2 -2.4 | his -2.2 | **pi -0.0** | mg2 -3.7 | **ca2 -0.0** |
+
+against the relative form's 2.105e6 / <=476 / 0-13.3 / -3.0 to -7.2 on all five.
+
+1. **Degeneracy gone on every axis**: values cell-dependent, the search climbs
+   (0.1-41% of the objective against <=0.02%), two cells starve nothing, and the
+   handover **survives** — 458.2 against the handover objective's own 816.1 on
+   that cell, so the design keeps 56% of the achievable cross-feeding.
+2. **The relative rate at those media is 85-100% of its cap**, so it cannot
+   separate media differing 2x in absolute loss. "Near its ceiling" is not
+   evidence of a good design.
+3. **Chemical interference is recovered on 3/10 ordered pairs at `c^eq` 0.1, most
+   negative -4852/h, where the relative form found it on 0/10.** Under FBA both
+   are 0/10, correctly. The absolute form is the only one of the three objectives
+   that produces product inhibition at all.
+4. **Depletion still dominates ~200x** (1e6/h vs 5e3/h), so this is a
+   **competition** designer with inhibition as a minority component. Designing
+   inhibition specifically means maximising the *conditioning term*, not total
+   interference — `spent_medium_assay`'s decomposition inside the objective,
+   `2G(G-1)+G` FBAs per evaluation plus a surrogate analogue. Not built.
+5. **`obj_rank_spearman` still collapses under inhibition** (0.03-0.40 vs
+   0.67-0.88 under FBA) — a property of the head at drawn-down media, not of the
+   objective, so the LP screen carries the search there.
+6. **V5 passes 5/5 in both arms and now means something**, because the values
+   differ per cell; the identical 5/5 under the relative objective was compatible
+   with measuring nothing. **Read a construction-guaranteed gate together with the
+   spread of what it gates.**
+
+**`--objective conditioning`: product inhibition alone, and it cannot be ascended
+— 2026-09-08.** The absolute interference objective is ~200x more sensitive to
+depletion than to conditioning, so isolating the chemical half needs
+`spent_medium_assay`'s conditioning term as the objective
+(`total_abs_conditioning_per_h`). **Two premise checks, both before building, both
+changed the design.** (i) *The surrogate has no version of it*: resupplementation
+(`max(spent, c)`) only raises concentrations and Head A is monotone
+non-decreasing by construction, so its conditioning term is `<= 0` everywhere —
+measured **0 of 30 ordered pairs positive, 27 exactly 0** (`cond_premise.py`, no
+solves). §13.11 puts `ceq` in the true LP only, so no channel carries it; an
+ascent would climb *away* from the target. Representability, not accuracy — the
+fix is §13.11's `theta` channel plus a relabel. (ii) *It is a needle*: **1-2 of 40
+random draws**, median 0, over three cells and two thresholds, so no proxy's rank
+correlation can be estimated and P25 blocks that route too.
+
+**So the media are constructed, not searched.** The precondition is closed form:
+a product **two or more members both secrete** — raising it tightens
+`Vmax max(0, 1-c/c^eq)` for both, i.e. contention for *disposal* capacity rather
+than for a substrate — standing at `c^eq` scale. `shared_secretion` is that
+pairing (`S & S`, against `candidate_links`' `S & U`), read off the labels with no
+solve; `conditioning_media` places each product at 0.5/0.9/0.99 of its own `c^eq`
+on the donor's hardest-secreting labelled medium. `--seed-mode conditioning`,
+which requires `--inhibition` and says so.
+
+| cell | screened | built in top 3 | best | winning start |
+| --- | --- | --- | --- | --- |
+| CR626927.1+GCA_000151225.1 | 53 | 0 | **0** | draw |
+| CP001726.1+CP001820.1 | 56 | 2 | 1.79e5 | draw |
+| AAXE02+ABCC02 | 74 | **3** | **2.03e5** | `EX_glyc_e` @0.99 `c^eq` |
+| CR626927.1+GCA_000007325.1 | 53 | 0 | **0** | draw |
+| CP040530.1+CP070062.1 | 62 | **3** | **2.57e5** | `EX_co2_e` @0.5 `c^eq` |
+
+Standalone the construction is 37/132 = **28% against ~4% at random**, per cell
+53/40/25/0/0%. **Three of five cells have designable product inhibition**; the two
+zeros are a result — no contended disposal route, the construction returns nothing
+rather than a spurious optimum, and on one not a single pair is live. Both contain
+`CR626927.1` (n=2, suggestive only). **Quote the per-cell rate.** The level barely
+matters (`EX_glyc_e` identical at all three), so the work is putting the product
+on the `c^eq` scale, not straddling the threshold.
+
+**A latent V5 defect this exposed, present for every objective.** With no ascent
+the design *is* the top-ranked start, so V5 compares one medium against itself
+solved twice: exact arithmetic gives 0, the LP gave **-1.2e-05 on 2.03e+05**
+(relative 6e-11), and `obj_gain >= 0` failed the gate and exited 1. Now relative
+at 1e-6. **A "not worse" gate whose two sides can be the same computation needs a
+tolerance** — the ascent's guarantee of strict improvement was hiding it.
+
+**A bug this caught, worth more than the arm.** `obj_true_designed` reused
+`cell["interference"]["total_suppression_per_h"]` to save `2G` FBAs, duplicating
+the key `Objective.truth` already picks. It went stale the moment a second
+interference objective existed: V5 was stated on the *relative* rate while the
+search maximised the absolute loss, and the first cell exited 1. Removed — it
+calls `spec.truth` like the best-draw column. Full write-up: design spec §13.5.
+
+Scripts (`20hm_bands/`): `stage3_binding.py` (no solves), `inhibition_sweep.sh`
+(resume-safe, one invocation per cell), `inhibition_report.py`,
+`inhibition_crosseval.py`, `ceq_*.json`.
+
+### Stage 4': the inhibited *surrogate* — a second input channel, no redesign — 2026-09-08
+
+Stage 4' was specced as "the concentrated, run-to-exhaustion **second** label
+root, then Stages 1-2 as originally written". **The first half is refuted before
+building**, so it collapses to a relabel of the existing design with `ceq` on —
+still a second root (`x_scale` moves, P14), not a new design. Two premise checks
+on the labels already on disk:
+
+| premise, on `labels_p4` at `c^eq` = 0.1 mM | value |
+| --- | --- |
+| entries with `theta` strictly inside (0, 1), 6 organisms, **no solves** | **0.26-0.36** |
+| true secretions the inhibited bound would cut | **0.71-0.89** |
+| `mu` relative drop, 40 solves on AAXE02: median / p90 / max | **0.025 / 0.752 / 0.900** |
+| media losing >1% growth / media killed | **50%** / **0** |
+
+Stage 0's "inert" was about *accumulation along a trajectory*; the **standing**
+concentration binds, which is the same distinction that unblocked stage 3'. The
+design's rich level is `10^log10_hi * Km ~ 0.1 mM` — i.e. exactly `c^eq` — so the
+background is pinned at `theta = 0` while the banded metabolites sweep the range.
+
+**A third measurement set the coordinate.** At interior `theta` the secretion
+bound binds on only **20 of 1807** (row, exchange) pairs; at `theta = 0`, on 3270
+of 3485. `Vmax = 1000` is ~100x physiological (M15), so 1% residual capacity is
+still 10 mmol/gDW/h. **The channel is a near-step at `theta -> 0`**, the same shape
+as `u`'s ramp ending at `u* ~ 1.4e-4`, handled by the same `_kink_scale` map
+(which returns 1.0 here — correct, `theta` is already O(1) and its structure is a
+step *at* 0, which a plane resolves directly). It is also why the channel is
+**necessary**: a head fed `u` alone cannot know secretion was switched off.
+
+**What was built.** `data.theta` / `load_ceq` and the second input block —
+`x`/`g`/`mask`/`x_scale` go 444 -> 888 and `exchanges` gains `theta:`-prefixed
+names, so every per-metabolite diagnostic says which channel it means.
+`cfs generate --inhibition <json> [--buffered ...]` (reusing
+`interaction.ceq_map`, so the default/buffered rules are stage 2''s) writes
+`inhibition.json` beside the shards. `n_metabolites` + `ceq` in the checkpoint;
+`_trial_points` builds both halves of a Level 1 trial point from the medium. In
+`dfba`: `_head_in` (the one place the head's input is built), `_clamp_z` (§3.3's
+uptake bound **and** §13.11's secretion bound `z <= Vmax * theta`) and
+`chain_to_c`, which `science/{growth,minimal,steady}.py` all now route through.
+**Head B keeps the `u` half alone** — §13.11 says it needs no architectural
+change, and taking that literally leaves its output width, `z_scale` and the P14
+check unchanged.
+
+**No new label column, because the labels already contain it.** `theta` is a
+function of the `medium` the row stores, and its dual is the **same `shadow`
+column** read on the other side. Verified against central differences of the true
+LP at 20 binding cases: `d(mu)/d(secretion ub)` = the metabolite shadow price at
+ratio **1.0000** on every one, while cobra's `reduced_costs` came out at exactly
+**2x** — the convention scaling `solve.solve` already warns about. **Use the
+metabolite dual on both sides, never the reaction one.**
+
+**The clamp that cost a run.** At `theta = 0` the bound is `ub = 0`, so **every
+metabolite the organism does not produce sits at `z = 0 = ub` and reads as
+binding** — with a positive `shadow` for the ordinary reason a nutrient has one.
+That selects **7.7%** of AAXE02's entries, **99.9% of them at `theta = 0`**, over
+157 of 181 exchanges the network never secretes:
+
+| AAXE02, frozen head (`--epochs 0 --gm-init labels --gm-repair`, T=1e-4) | cos | p05 | value R2 |
+| --- | --- | --- | --- |
+| plain FBA (control) | 0.9882 | 1.0000 | **1.0000** |
+| inhibition, sign + binding clamp only | 0.9137 | 0.5611 | **-0.0136** |
+| **+ capability test** | **0.9923** | **0.9600** | **0.9526** |
+
+The third condition is that the organism secretes that metabolite *somewhere* in
+the shard (24 of 181 on AAXE02) — free, and the right condition rather than a
+threshold: **a bound on a flux the network never carries cannot be a
+sensitivity.** 34 of 54 nonzero duals at a binding secretion bound also
+finite-difference to exactly 0 (LP degeneracy), the mirror of the uptake side's
+12% wrong-signed duals. Note the *gradient* cosine still read 0.91 while R2 was
+negative — **the value diagnostic is the one that saw it.** Regression test:
+`tests/test_cfs_inhibition.py`.
+
+**And the ground truth has to run the same model.** `rhs_truth` had no `ceq`
+(stage 1' put inhibition into §13.5's truth alone), so the first inhibited
+`cfs community` scored an inhibited head against a **plain-FBA** truth and it read
+as a broken head. Same checkpoints, same community, only the truth's model
+differing:
+
+| truth | log-X err | `mu_rel` median | `dc_rel` median | `dc` cosine |
+| --- | --- | --- | --- | --- |
+| plain FBA (mismatched) | 1.596 | **0.594** | 3.149 | 0.456 |
+| **inhibited (matched)** | **0.354** | **0.059** | **1.091** | **0.917** |
+
+`ceq` is now threaded into `rhs_truth`, `_cross_feeding` and `rhs_hybrid`, and all
+three take it from **`sur.ceq`** — the surrogate's own checkpoint — rather than a
+flag, so the two cannot be set differently. The LP fallback especially:
+substituting a *different model* mid-trajectory would add a discontinuity on top
+of the one §8.6g(4) already warns about.
+
+**Reference numbers**, 300 media x 2 organisms (AAXE02 + ABCC02), both arms
+identical except for `--inhibition`:
+
+| arm | Head A worst cos / R2 | community log-X | `mu_rel` med | `dc` cos |
+| --- | --- | --- | --- | --- |
+| plain FBA | 0.933 / 1.000 | 0.021 | 9.3e-07 | 0.879 |
+| inhibition, `c^eq` 0.1 mM | 0.914 / 0.915 | 0.354 | 0.059 | 0.917 |
+
+**Read these as "it composes", not as a gate.** 300 media is 1/13 of the laptop
+label set and 1/67 of D10, and the inhibited head fits a function with 444 extra
+coordinates whose structure is a step on the same budget — a 10x `mu_rel` gap
+against a control that is essentially exact is what a starved fit looks like. A
+gate statement needs the roster-scale relabel.
+
+**Not built, deliberately** — ~~no secretion band in `sampling/design.py`, since
+the premise check says the existing design already spans the channel~~
+**RETRACTED 2026-09-09, see the next section: the design spans `theta` but not
+the window where the secretion bound is *active*, which gets 0.6% of entries.**
+And no
+secretion term in `steady._lp_mu_rows`: `rhs_truth`'s `ceq` does not reach the
+hybrid Jacobian yet, and the code carries a `ponytail:` note saying what to add
+(`+ pi * Vmax / c^eq` where the bound binds and `c < c^eq`) when it does.
+
+**What is still open for M16.** `--inhibition` for `cfs simulate` /
+`steady-state` / the two convex design programs, which get the `(u, theta)`
+*relaxation* rather than exact convexity in `c` (§13.11's corrected concavity
+note); and stage 3'b's per-metabolite `c^eq` from eQuilibrator, still deferred
+because the sweep answers the threshold question without it.
+
+### The inhibited relabel ran: the theta channel is supervised at a corner — 2026-09-09
+
+`labels_i1` = the `labels_p4` design with `--inhibition ceq_0.1.json`. 21
+organisms, 63/63 base + 63/63 round-1, 100% optimal, one `index_hash`, ~4.5 h.
+Frozen level-1 Head A + repair at `--gm-eval-temp 1e-4`, Head B 600/1e-3, 3
+medium draws on the same 10 communities against the **matched** inhibited truth.
+
+| | worst | median | plain-FBA control, same head config |
+| --- | --- | --- | --- |
+| held-out grad cosine | **0.067** | 0.948 | 0.952 / 0.981 |
+| held-out value R2 | 0.697 | 0.979 | — |
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 |
+| --- | --- | --- | --- | --- | --- |
+| inhibited | 0.077 | 0.074 | 0.150 | 1.284 | 0.923 |
+| plain FBA | 0.007 | 0.007 | 0.009 | 0.060 | 0.175 |
+
+13 of 21 organisms are at 0.95-0.99. Part of the composition gap is the benchmark,
+not the head: `max mu_true_initial` at n=2 is **19.3** inhibited against **60.4**
+under FBA, i.e. inhibition pushes members into the `mu0/mu_scale < 2` regime.
+
+**Five checks, full detail in design spec §13.11. The first two are retractions.**
+
+1. **The `theta = 0` duals are half wrong, and dropping them is much worse.**
+   `fd_theta.py` (no new labels) finite-differences the true LP against the stored
+   `shadow`. `binds` is per row while the capability test is a shard-level OR, so
+   a metabolite secreted *somewhere* but not here has `z = 0 = ub` and reads as
+   binding. Over 8 organisms the dual is **exact / degenerate / partial
+   (0.16-0.54)** — three groups, the third a one-sided-kink signature. Two
+   DACTBY01 rows identical in `(theta = 0, z = 0, pi = 10000)` difference to 10000
+   and to 0. Adding `& (ub > _BOUND_TOL)` is **refuted**: median value R2 0.979 ->
+   **-7.6**, worst -60.2, cosine 0.948 -> 0.610. Those tangents are load-bearing.
+2. **Nothing about them predicts the cosine.** `GCA_000151225.1` scores **0.981**
+   with 58% of rows selected, median `|pi|` 839 and 16/16 degenerate;
+   `CP048433.1` scores **0.688** at median `|pi|` 0.009. Degeneracy rate, dual
+   magnitude and selection rate all fail as separators.
+3. **The error is in the theta half, on all 21** (`theta_split.py`, no solves):
+   Spearman(cosine, `cos_theta`) = **+0.978**, against +0.781 for `cos_u`.
+   `GCA_000209935.1` is `cos_u` **0.856** / `cos_theta` **0.025**. The theta half
+   carries **29-97%** of the target gradient norm (median ~90% on the failing
+   organisms), and the head allocates between halves correctly — it gets the
+   direction wrong *within* theta.
+4. **Interior theta duals are exact**: `theta > 0` gives **16/16 at ratio 1.000,
+   0 degenerate** on `GCA_000007325.1`, and on the other 7 organisms **no
+   interior binding rows exist at all**.
+5. **Why: `theta = 1 - c/c^eq` is linear in `c`; the design samples `c`
+   logarithmically.** The bound binds only where `theta <= z/Vmax`, and measured
+   `z/Vmax` is **0.016-0.25**, so the window is `theta in (0.02, 0.5)`:
+
+   | `theta` | 0 | (0, 0.02) | **(0.02, 0.5)** | (0.5, 0.99) | >= 0.99 |
+   | --- | --- | --- | --- | --- | --- |
+   | share of entries | **60.1%** | 0.0% | **0.6%** | 24.1% | 15.1% |
+
+   60% pinned at the degenerate corner, 39% slack, **0.6%** where the constraint
+   is active and the dual is a real derivative. This **re-reads stage 4's own
+   third measurement** — "binds on 20 of 1807 pairs at interior theta, 3270 of
+   3485 at `theta = 0`" was read as *a near-step, handled by `_kink_scale`*; the
+   same numbers say *the supervision is 99% degenerate corner*. A fact about
+   where a constraint is **active** is not a fact about the function's **shape**.
+
+**The fix: sample `theta`, not `c`** — a stratum at `c = c^eq (1 - theta)` with
+`theta` over (0.02, 0.5). No change to the head, the clamp or `Vmax`; it is a
+relabel (P14 rebuilds both heads). The structural alternative is a physiological
+`Vmax` (then `z/Vmax ~ 1` and the bound binds across the sampled range) — M15's
+already-recorded missing input, which rescales every growth rate on file.
+
+**The pre-check does NOT support that fix** (`theta_window.py`, no solves).
+Binning held-out rows by the `theta` of their own leading theta-limiter:
+**99.4%** sit at `theta == 0` (median `cos_theta` **0.934**) and only **11 rows**
+land in the window, at **0.934** — indistinguishable. n=11 is too small to be
+decisive, but there is no evidence the window is the easy regime, and the
+per-organism spread is decided entirely at the corner: at `theta == 0`,
+`GCA_000151225.1` scores **0.996** and `GCA_000209935.1` **0.005**. Whatever
+separates them is not which `theta` band the rows are in. **Do not spend the
+relabel on this yet** ([[held-out-cannot-see-a-design-change]] cuts the other way
+here: the design change is cheap to reason about and the evidence for it is 11
+rows). **Still unexplained:** the per-organism spread (check 2), now localised to
+`theta == 0` rows specifically.
+
+**6. The sparsity lead is refuted; a label-side predictor appears**
+(`plane_theta.py`, no solves). The 2.2%/2.3% selection rates were per
+*metabolite*, an artefact of which one led the error — globally the nonzero-theta
+share is **0.21-1.86% on every organism** (Spearman +0.162, p=0.48). The planes
+are theta-**saturated**, not starved: median plane 100% theta norm, 93-98% of
+planes >50% theta. Scale imbalance is out too (ratio spans 6e-5 to 5e4, -0.252,
+p=0.27). What does predict the gate is **the share of held-out rows whose
+gradient is pure uptake — no theta entry at all: Spearman +0.711 (p=0.0003)**,
+and it separates the roster: **1.4-5.9%** on the seven organisms below 0.9,
+**36.8-64.1%** on the nine above 0.95. With the FD result that is one mechanism —
+on the failing organisms nearly every row's target is contaminated by
+degenerate-corner theta entries. Two exceptions (`GCA_000151225.1` 2.9% at 0.981,
+`GCA_000007325.1` 5.9% at 0.948) are genuine fits, not cheap cosines
+(`top1_share` 0.796/0.648, p05 0.974/0.829). **This re-aims the fix**: not
+"sample the binding window" but "stop the corner writing a theta entry into every
+row" — a rich level *below* `c^eq` leaves theta slack, so those rows become
+`u`-only. Not acted on: two hypotheses on this tail are already refuted.
+
+Scripts (`20hm_bands/`, none solve more than ~16 LPs): `fd_theta.py`
+(`--interior`), `fd_batch.sh`, `fd_interior.sh`, `theta_split.py`, `then_i1.sh`.
+
+### The inhibited tail was label starvation: `c^eq` 0.1 mM kills 13 of 21 — 2026-09-09
+
+Pre-check on the two worst organisms, matched controls, only `c^eq` differing
+(`labels_i1_base` = base shards only, same media count):
+
+| | cosine | value R2 | `%` rows u-only |
+| --- | --- | --- | --- |
+| `DACTBY01` @ 0.1 -> **1.0 mM** | 0.167 -> **0.990** | 0.800 -> **0.9989** | 4.0 -> **64.0** |
+| `GCA_000209935.1` @ 0.1 -> **1.0 mM** | 0.065 -> **0.970** | 0.982 -> **0.9997** | 2.8 -> **67.6** |
+
+**The cause is that at `c^eq` = 0.1 mM these organisms do not grow** — median
+`mu_max` over the whole design is **0.000**, only 8-9% of media grow, and
+`gvalid = (mu > 0) & optimal` drops a dead row from the Sobolev term, so the head
+was fitting ~360 usable rows instead of ~4000. Roster-wide from `labels_i1`, no
+new labels: **8 organisms at 99.5-99.7% growing score 0.952-0.986**; the other
+**13 sit at 4.6-42.1% with median `mu` = 0.000**. Spearman(cosine, % growing)
+**+0.640** (p=0.0018), (cosine, median `mu`) **+0.705** (p=0.00036).
+
+So the 0.067 is **label starvation**, and every earlier reading of this tail —
+degenerate duals, plane composition, theta share, `u`-only share — was its
+shadow. **Raising `c^eq` gains mechanism rather than trading it away**: interior
+(non-corner) binding **0.012% -> 0.398%** and rows secreting at their cap
+**72 -> 2484**, because a dead organism secretes nothing and can only bind at the
+degenerate corner.
+
+**This refutes stage 4's premise 2 by generalisation.** "No medium killed" was
+measured on **AAXE02** — one of the eight immune organisms. Fourth time a
+one-or-three-organism frontier has failed the roster here, and the cheapest to
+have caught: the labels' own growth rate is free to check on all 21.
+
+**Do: regenerate the inhibited root at `c^eq` = 1.0 mM** (inside Bennett et al.'s
+0.1-10 mM range, plain relabel, no code change). **Caveat:** every stage 3'
+number was taken at 0.1 mM. **Still unexplained:** `GCA_000151225.1` (8.2%
+growing, 0.981) and `GCA_000007325.1` (14.3%, 0.948) fit well despite starvation.
+
+### ...and at `c^eq` = 1.0 mM the inhibited head beats the plain-FBA control — 2026-09-09
+
+`value_i3_base` (`labels_i3` base shards, round 1 still generating; symlink farm
+so the glob cannot read half-written round-1 files). Only `c^eq` differs from
+`value_i1`.
+
+| held out, 21 organisms | `c^eq` 0.1 | **`c^eq` 1.0** | plain-FBA control |
+| --- | --- | --- | --- |
+| worst grad cosine | 0.067 | **0.896** | 0.952 |
+| median grad cosine | 0.948 | **0.986** | 0.981 |
+| median value R2 | 0.979 | **0.9997** | — |
+| median p05 | 0.748 | **0.943** | — |
+
+**20/21 organisms >= 0.95, 7/21 clear M3's 0.99 gate**, and the inhibited median
+**beats** the plain-FBA control — inhibition is not intrinsically harder to
+learn. `GCA_000209935.1` **+0.903**, `DACTBY01` **+0.785**, four more +0.21 to
++0.36; three healthy organisms drift -0.007 to -0.011, inside the 0.015 seed sd.
+
+**The confound's disappearance is the confirmation.** Every organism now grows on
+**99.5-99.8%** of media (was 4.6-42.1% on thirteen), so
+Spearman(cosine, % growing) goes **+0.640 -> -0.163 (p=0.48)** — the predictor
+stops predicting because its variable stops varying.
+
+**One organism left, and it is a different failure**: `CP000139.1` at cosine
+0.896 with **value R2 0.312** (every other organism >= 0.9967) and p05 0.000,
+**not starved** (99.8% growing, median `mu` 4.56). It was already the one
+organism whose predicted theta share (91.9%) missed its target (74.8%) in
+`theta_split`, so it predates the relabel. One organism, not a tail.
+
+**Round 1 then changed Head A by nothing**, as it should: worst 0.8955 ->
+0.8955, median 0.9857 -> 0.9859. **And the composition gap closes** — 3 draws x
+the same 10 communities, matched inhibited truth:
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max | `mu_rel` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `c^eq` 0.1 | 0.077 | 0.074 | 0.150 | 1.284 | 0.923 | 0.091 | 3.279 | 0.0008 |
+| **`c^eq` 1.0** | **0.011** | **0.011** | **0.002** | 0.277 | **0.127** | **0.011** | 0.696 | **0.0001** |
+| plain FBA | 0.006 | 0.007 | 0.009 | 0.060 | 0.175 | 0.013 | 0.508 | 0.0020 |
+
+`overall` **beats the plain-FBA control** (0.011 vs 0.013) at `mu_rel` 20x better,
+sizes 2/3/5 are at or under M5's 1% gate, and n=21 beats the control too. Median
+`max mu_true_initial` at n=2 goes **19.15 -> 45.10** (control 55.65), so
+inhibition stops forcing members into the `mu0/mu_scale < 2` regime.
+
+**The residual is the medium draw, not the size** — draw 0 gives **0.0008 (n=10)
+and 0.0088 (n=21)**, while draws 100/200 carry `mu_rel` 0.089-0.169, three orders
+above the median. That is Head A **off-distribution** (§8.5's class), not Head B.
+Quote paired draws.
+
+**Head B is the one regression**: worst R2 **0.791** / median 0.922 against
+`behaviour_p4r2`'s 0.935 / 0.964. Expected — §13.11 keeps its input as `u` alone
+and gives it only the inference clamp, so the secretion regime is not in its
+input. Untested whether adding the `theta` block helps.
+
+**`CP000139.1` traced (2026-09-09, no solves): it is `--gm-repair`'s per-plane
+lift.** The failure is **one band** — true `mu` in [0.80, 1.30), 180 of 800
+held-out rows, predicted 2.85 against a true 0.98 (**+1.87**), **89% `EX_o2_e`-
+limited** — with every other band exact to 1e-4. Not coverage (741 training rows,
+18.5%, sit in it). **E1 says the labels are sufficient**: the cutting-plane model
+over its own 3981 tangents is **exact there (-0.0000, 93% within 1%)**. **Cut
+selection is not it** either — the min over the head's own top-1000-by-territory
+is also exact, and switching the trial set moves this organism by 0.000 (while
+lifting the roster median 0.9859 -> 0.9908 and `n>=0.99` 7 -> 11). **Plane
+installation is exact** (100% of 2927 nonzero slopes within 1%). What differs is
+the **intercepts**: same 1000 planes, cut model **0.9845**, hard min over the
+installed planes **2.8485**. Ablation confirms — dropping `--gm-repair` gives
+`CP000139.1` **0.895 -> 0.970** and roster worst **0.8955 -> 0.9604**.
+
+**The ablation is not the fix**: median `value_under_rate` goes **0.000 -> 0.970**,
+the validity failure [[under-prediction-is-a-validity-failure]] exists to prevent.
+Mechanism: `repair_intercepts` lifts each plane above **every** training label, so
+a plane anchored at `mu ~ 1` must clear labels at `mu ~ 4.4` and is lifted out of
+its own regime — the repair is *global* where the cut is *local*. **The logged "median drop" is what hid it**: 0.0005 on this
+organism, same as everyone; its **mean is 0.59**, 299 of 1000 planes move >0.1,
+max 2.86. `repair_intercepts` now logs median/mean/max.
+
+**`--gm-repair-local` built and REFUTED** (2026-09-09): repair each plane over its
+own territory, global rule for empty ones, test in `test_cfs_value_head.py`.
+
+| 21 organisms | worst cos | med cos | worst R2 | med R2 | med under |
+| --- | --- | --- | --- | --- | --- |
+| global (shipped) | 0.8955 | **0.9859** | 0.3177 | **0.9997** | **0.0000** |
+| no repair | **0.9604** | 0.9859 | 0.4798 | 0.9996 | 0.9700 |
+| territory | 0.3612 | 0.7764 | **-3.4482** | **-0.6650** | 0.0000 |
+
+It does what it was built for — `CP000139.1` **0.895 -> 0.964** — and wrecks the
+roster. **Structural, not an implementation bug:** training-row validity is
+restored by the *uniform* lift, so a locally repaired plane that dips below the
+truth off its territory is paid for by raising **every** plane. The lift goes
+**0.00047 -> 1.49 median / 2.54 max** (3000x) and that is the whole regression.
+A global correction cannot preserve a local repair. Default off, negative result
+on file. `CP000139.1` stays open — its unrepaired R2 of 0.48 says the repair was
+never its whole story.
+
+**`CP000139.1` was M17, and it closed the same day — the cause was `W_CAP`, not
+the repair.** See "M17 is closed, and it was `W_CAP`" below. Its unrepaired R2 of
+0.48 was the same clip: two media above `w = 300` share an input and differ in
+`mu`, so its label tangents were not upper bounds and `--gm-repair` had to lift
+239 planes to make them one. At `W_CAP = 1e5` it reads grad cosine **0.9950** /
+value R2 **0.9994** with the repair on and the under-rate still 0.000, and the
+roster worst goes **0.8955 -> 0.9593** / R2 **0.3177 -> 0.9967**. Directions (a)
+and (b) above were both answered on the way and neither was it: the installed
+slopes *are* the label tangents, and the band's cut count never mattered.
+
+**Also open:** Head B's 0.791; and re-reading stage 3''s §13.5 conclusions, all
+taken at `c^eq` = 0.1 mM.
+
+### M17 is closed, and it was `W_CAP` — 2026-09-09
+
+`to_diag` maps `w = min(u/s, W_CAP)` with `W_CAP = 300`. **Clipping is
+many-to-one**, so two media above the cap share a `w` and differ in `mu`, and a
+label tangent taken at one is then *not* a valid upper bound at the other — the
+affine `w` <-> LP-RHS relation the whole max-affine class rests on. On
+`CP000139.1`/`labels_i3` **239 407 entries clip**, 34% of its 3981 tangents are
+invalid, and `--gm-repair` lifts 239 planes to restore validity, which is what
+took its mid-`mu` band from a true 0.98 to 2.85.
+
+Cut model over its own tangents, median relative error by `mu/max` band
+(`20hm_bands/m17_cap_bands.py`, no solves):
+
+| cap | <= 0.25 | 0.25-0.50 | 0.50-0.75 | > 0.75 | valid tangents |
+| --- | --- | --- | --- | --- | --- |
+| 300 (was) | -0.0000 | -0.1235 | **-0.6707** | -0.5130 | 0.652 |
+| 1e4 | -0.0000 | -0.0000 | -0.4896 | -0.3304 | 0.658 |
+| **1e5 (now)** | -0.0000 | -0.0000 | **+0.0000** | +0.0048 | **0.833** |
+| 1e6 .. 1e12 | identical to 1e5 | | | | 0.833 |
+
+The knee is at **1e5** and nothing above it differs (the largest finite `w` is
+8.4e6, set by float32 `1 - x`). `W_CAP` is now 1e5; `picnn_u`'s scale-aware init
+keeps its measured **150**, which was only incidentally `W_CAP/2`.
+
+| held out, 21 organisms, `labels_i3` | worst cos | median | `n >= 0.99` | worst R2 | med R2 | under |
+| --- | --- | --- | --- | --- | --- | --- |
+| `value_i3` (cap 300) | 0.8955 | 0.9859 | 7 | **0.3177** | 0.9997 | 0.000 |
+| **`value_i3_cap`** | **0.9593** | 0.9863 | **8** | **0.9967** | 0.9997 | 0.000 |
+
+`CP000139.1` itself: grad cosine 0.8955 -> **0.9950**, value R2 0.3177 ->
+**0.9994**, p05 0.000 -> 0.9994 — it now clears M3's own 0.99 gate.
+
+**The plain-FBA control is unchanged**, which is why this went unseen for so
+long: on `labels_p4` the raise moves worst cosine 0.9522 -> 0.9519, median 0.9805
+-> 0.9764 (inside the 0.015 seed sd) and value R2 not at all. The module
+docstring's original table ("300 costs <= 0.001 against uncapped") was right *on
+those labels*; the inhibited root doubles the input width and puts `EX_o2_e`'s
+band above the cap.
+
+**And it buys the composition's tail, not its bulk.** 3 medium draws x the same
+10 communities, matched inhibited truth, only Head A differing (Head B's input is
+`x`, so `behaviour_i3` is unchanged and P14 passes):
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `value_i3` (cap 300) | 0.011 | 0.011 | 0.002 | 0.277 | 0.127 | 0.011 | 0.696 |
+| **`value_i3_cap`** | 0.011 | 0.011 | 0.002 | **0.105** | **0.017** | 0.011 | **0.306** |
+
+Paired per draw, which is the only way to read this file's community numbers:
+n=10 draw 200 **0.6961 -> 0.1048**, n=21 draw 100 **0.1269 -> 0.0170**, n=21
+draw 200 0.3760 -> 0.3057; every other draw moves by <= 0.001. Over all 30 cells
+it is 10 better / 20 worse with the median going 0.0110 -> 0.0114 — the losses
+are noise and the gains are the two cells that carried the error, which is what a
+one-organism fix should look like: `CP000139.1` is in the large communities and
+in few of the small ones. `mu_rel_median` is 1e-4 to 2.5e-4 in both arms.
+
+**Three things this retracts, all from earlier the same day.**
+
+1. **"The labels are insufficient" / "the duals are wrong" is wrong.** The 25
+   training rows that force the repair's lift **re-solve to their stored `mu` to
+   machine precision** (`m17_forcing_true.py`, 25 solves), and the LP's own
+   `reduced_costs` reproduce `_organism_arrays`' edited metabolite dual **exactly
+   at x0.5** — the documented convention scaling — so the per-coordinate clamps
+   were already recovering the LP's bound sensitivities
+   (`m17_rc_precheck.py`, 200 solves). Nothing about the labels, the duals or the
+   clamps was at fault; the head's *input coordinate* was lossy.
+2. **`--gm-valid-cuts` is refuted as a fix and kept as the diagnostic that found
+   this.** Selecting only valid tangents removes the per-plane lift entirely
+   (drop uniform 0.000489-0.000494 against a mean of 0.59) and moves the band by
+   **0.0001**, at roster worst cosine 0.8955 -> 0.8234. Under the old cap the
+   invalid planes were *load-bearing* — the only reason anything was tight at
+   high `mu`.
+3. **Neither the violation rate nor its size predicts the gate** (Spearman +0.18
+   / -0.24 over the roster, p >= 0.29; `DACTBY01` violates by 1.71 at cosine
+   0.9896). Ninth refuted proxy. What separates `CP000139.1` is how many of its
+   *limiting* cells sit above the cap, not how invalid its tangent set looks.
+
+**The transferable rule: a clip in the input map is a modelling assumption, not
+a numerical guard.** `min(w, cap)` preserves concavity, which is what the
+original note checked, and destroys injectivity, which nothing checked — and an
+upper-bound invariant needs the second. Anything that clips, floors or saturates
+an input has the same failure available to it; check it against the cut model
+per band, which costs no solves.
+
+Also: `train.load` now warns when a checkpoint's recorded `input_transform`
+differs from the current one — an old head is still loadable, its numbers are
+just not the ones its own `diagnostics.json` records.
+
+Scripts (`20hm_bands/`): `m17_cap.py`, `m17_cap_bands.py`, `m17_valid.py`,
+`m17_bands.py`, `m17_force.py` (which rows force the lift — 25, top 5 carry
+87.3%), `m17_rebuild.py` (rebuilds the frozen head from scratch and reproduces
+the checkpoint bit for bit), `m17_forcing_true.py`, `m17_rc_precheck.py`.
+
+### with Head A exact, M5's residual is Head B's coverage (2026-09-02)
+
+After §8.6c, `mu_rel_median` is <= 0.0005 on **all 30 cells** (10 communities x 3
+medium draws). §8.6b's identity `logX = |mu_rel| x growth` is therefore retired:
+the term it was built from has gone to zero, and what remains tracks `dc_rel` /
+`dc_cosine`. Per-member flux cosine is 0.9998 on the best cell and **0.74-0.96** on
+the failing ones (`20hm_bands/dc_decompose.py`, which reconstructs the pool sum
+from one FBA per member per state).
+
+**A free predictor, and a refuted fix built on it.** `compose.dfba` projects onto
+§3.3's uptake bound `z_m >= -Vmax_m * u_m` at inference. How hard that projection
+works (`clamp_bite.py`, no LP) ranks the ten communities by trajectory error:
+
+| cell | 4 | 2 | 5 | 7 | 1 | 0 | 6 | 3 | **8** | **9** |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| logX | 0.0001 | 0.0030 | 0.0007 | 0.0005 | 0.0109 | 0.0126 | 0.0258 | 0.0336 | **0.0533** | **0.3181** |
+| `\|dz\|/\|z\|` | 0.000 | 0.000 | 0.004 | 0.011 | 0.011 | 0.033 | 0.082 | 0.237 | **0.412** | **0.279** |
+
+Individual predictions sit **13x** outside a bound every label satisfies, so
+`--w-mm` adds the one-sided hinge on it — same shape and same justification as Head
+A's `--w-under` (`behaviour.mm_floor`; `VMAX` now has one definition, in
+`behaviour`, which `dfba` reads, so the training bound and the inference projection
+cannot drift). **It is refuted, twice over:**
+
+| median log-X | n=2 | n=3 | n=5 | n=10 | n=21 | overall | Head B worst cos / sign |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `behaviour_p4` | 0.003 | 0.004 | 0.000 | **0.025** | **0.009** | **0.004** | **0.9853 / 0.9629** |
+| `--w-mm 1` | 0.003 | 0.004 | 0.001 | 0.041 | 0.009 | 0.004 | 0.9845 / 0.9613 |
+| `--w-mm 10` | 0.004 | 0.006 | 0.001 | 0.055 | 0.015 | 0.005 | 0.9827 / 0.9557 |
+
+1. **The violation is off-distribution and the loss cannot reach it.** On its own
+   *training* rows Head B violates the bound on **0.053%** of entries (labels
+   0.000%); `--w-mm 1` moves that to 0.046% and `10` to 0.037%. The 13x violations
+   exist only at community-regime media the head never saw.
+2. **Where the hinge did work, the composition did not follow.** At `w=10`, cells
+   0/1/3/6 go bite 0.033 -> 0.0085 and worst ratio 0.12 -> 1.000, with their
+   trajectory error unchanged. That refutes causation independently of (1): the
+   bite is a **symptom of being off-distribution**, which is why it predicts so
+   well, and not a cause.
+
+Kept in the code, default 0, with the negative result on file — the discipline that
+`--w-prox` and `--gm-temp-final` are kept under.
+
+**The coverage proxy passes P25's gate, which none of the seven refuted ones did.**
+`nn_proxy.py`, no LP, on the 30 cells already on disk: Spearman(median NN distance
+in `x` to the member's own training media, `dc_rel`) = **+0.673** (p=4.6e-5), and
+`+0.515` against `logX` itself. The six worst cells are the six farthest (median NN
+1.33-2.63) and the best sit at 0.11. So the fix is coverage of the media §8.1
+actually visits — `make_traj_pool.py` already extracts those states from any
+`cfs community` run, and unlike the Level 1 trial pool, labelling them costs real
+solves. **`cfs generate --media <npz> --round N` takes that pool directly** — it
+skips the design, the probe and the sidecars and labels exactly those states.
+
+### Round 2 labels the trajectory: coverage transfers in the bulk, not in the tail — 2026-09-02
+
+`cfs generate --media` (this session) labels an explicit medium list, so §8.6d's
+fix is runnable: `label_pool_n15.npz` is 672 forward-pass states, taken from the
+**16 n=15 communities x 2 medium draws** and strided 5. Deliberately *not* the 10
+benchmark communities — `make_traj_pool.py`'s Level 1 selection pool may reuse
+them because no label is involved, but labelling them would train on the M5
+benchmark. `--round 2` into `labels_p4`: 63/63 shards, 158 256 rows, **100%
+optimal**, one `index_hash`, ~8.5 min/organism. Both heads retrained (P14 —
+`x_scale` moves with a round), frozen level-1 + repair at `--gm-eval-temp 1e-4`.
+
+| held out, same 800 round-0 media | base | + round 2 |
+| --- | --- | --- |
+| Head A worst grad cosine | 0.9522 | 0.9522 |
+| Head B worst R2 / median | 0.9307 / 0.9630 | **0.9354 / 0.9638** |
+| Head B worst flux cosine / sign | 0.9853 / 0.9629 | 0.9826 / 0.9631 |
+
+| median log-X, 3 draws x 10 communities | n=2 | n=3 | n=5 | n=10 | n=21 | overall | max |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| frozen l1 + repair, T=1e-4 | 0.003 | 0.004 | 0.000 | 0.025 | **0.009** | 0.004 | 0.318 |
+| **+ round 2** | **0.002** | **0.002** | 0.000 | 0.026 | 0.013 | **0.002** | 0.318 |
+
+1. **It is a bulk win and a tail null, and the NN distance says why.** `nn_proxy.py`
+   measures the distance at **`t = 0` only** — the one state a design draw already
+   covers — so it barely moves (median 0.717 -> 0.670 as a correlation, distances
+   within 4%). Measured over *every* step instead (`nn_delta.py`, no solves), the
+   round **halves the typical distance and leaves the tail exactly where it was**:
+   median over 30 cells **0.252 -> 0.119**, p90 2.108 -> 2.129, max 2.315 -> 2.312.
+   The composition has the same shape: paired per draw, **21 of 30 cells improve**
+   and `dc_rel` falls on 21 of 30, sizes 2 and 3 halve, and the far cells do not
+   move.
+2. **One community's forward path does not reach another's.** That is the finding,
+   and it is what makes the clean-benchmark version of this fix weak: the n=15
+   trajectories are the same *regime* but not the same neighbourhood. Covering the
+   tail needs either many more communities in the pool (so the manifold is covered
+   generally) or a benchmark on fresh communities so the visited states may be
+   labelled directly.
+3. **The 0.318 cell is untouched, as predicted.** n=21 draw 200 goes 0.3181 ->
+   0.3180 with `mu_rel_median` **0.0388 in both** — §8.5's mid-`mu`
+   over-prediction, not §8.6d's coverage failure. Head B coverage was never its
+   problem, and this is the cheapest confirmation of that on file.
+4. **Two cells regress and both are near-boundary**: n=21 draw 0 (0.0091 -> 0.0129,
+   `dc_rel` 0.663 -> 0.818) and n=10 draw 100 (0.0249 -> 0.0518, though its
+   `dc_rel` *improves* 1.482 -> 1.168). Same rhs-vs-trajectory decoupling the MM
+   clamp showed: a better right-hand side changes which metabolite empties first.
+5. **Held-out cannot see it (P24, again).** Head A's worst cosine is unchanged to
+   four decimals and Head B moves +0.005 R2, against an overall composition halving.
+   Score a coverage round on the composition, never on round-0 media.
+
+Reproduce: `make_label_pool.py label_pool_n15.npz 5 community_n15_s0
+community_n15_s100`, then `cfs generate --media label_pool_n15.npz --round 2`
+per organism (`one_organism_media.sh`), then `r2.sh`.
+
+### Head B, attributed: the metabolite axis reproduces, the genome axis is biomass — 2026-09-02
+
+`titrate_n1.py` attributed Head A's error to (organism, limiter). The Head B
+analogue is `attribute_b.py` + `attrib_report.py`: every cell of every run given,
+at 5 states along the **true** path, one FBA per (cell, state, member), aggregating
+the pool-derivative error `X_i (z_hat - z_true)` by organism and by exchange. Two
+independent community sets — the 10 benchmark communities x 3 draws (780
+member-states) and the 16 n=15 communities x 2 draws (2400) — so every claim below
+is a cross-set reproduction, not one run. ~90 s and ~6 min respectively.
+
+| axis, benchmark set vs n=15 set | Spearman |
+| --- | --- |
+| per-**metabolite** share of squared pool error | **+0.879** (p=3e-144) |
+| per-**genome** median relative flux error | **+0.719** (p=2.4e-4) |
+| per-**genome** share of squared pool error | +0.413 (p=0.06) |
+
+1. **Attribute by metabolite; do not attribute by genome share.** A member's share
+   of the pool error is its difficulty *times* how much biomass it happened to
+   reach in that community, so it barely reproduces — `CP001820.1` is 54% of the
+   benchmark set's error and 15% of the n=15 set's, and `GCA_000151225.1` is 7%
+   and 35%. Genome *difficulty* (median relative error) does reproduce. This is
+   the same confound as "n=21 is medium scarcity, not size", one level down.
+2. **The metabolites are not Head A's.** `EX_h2o_e`, `EX_h_e`, `EX_akg_e`,
+   `EX_succ_e`, `EX_acald_e`, `EX_nh4_e`, `EX_glyc_e`, `EX_glyald_e` — central
+   carbon and by-product exchanges, where Head A's error has always been led by
+   `EX_mg2_e` / `EX_cl_e` / `EX_ca2_e`. The two heads fail on **different
+   metabolites**, so a shared coverage fix aimed at Head A's ions would not have
+   touched this. Concentration is moderate: top 3 exchanges 25%, top 10 62%,
+   top 20 81%.
+3. **The regime is the same as Head A's, though: a starved member.** Unweighted,
+   by that member's own `mu_true` at that state — <0.5: median relative flux error
+   **0.78** (n=33); 0.5-5: 0.31; 5-20: 0.48; >20: **0.077** (n=491). 86% of the
+   *weighted* error sits at the final integration step, but unweighted the step
+   effect is mild (0.154 -> 0.278): the end of a batch is simply where biomass is
+   largest, so a starved member's error is weighted most exactly where it is worst.
+4. **Part of it is the specific-flux reparametrisation's own floor.** Head B emits
+   `z / mu_max` and `dfba` multiplies `mu` back, floored at `data._MU_FLOOR_FRAC`
+   = 5% of the organism's mean `mu` (roster range 0.46-1.66). Below half that
+   floor the median relative error is **1.61**; at 0.5-5x it is ~0.32; above 5x,
+   0.117. So the floor region is the worst, but the degradation starts well above
+   it — the floor is part of the story, not all of it.
+5. **What this does NOT support: an n=1 titration for Head B.** Head A's worked
+   because `mu` is a scalar min over limiters, so "one metabolite scarce, rest
+   replete" is a complete parametrisation of the failure. Head B's failing states
+   are end-of-batch media with much of the pool drawn down **at once**, which that
+   design cannot construct. The analogue that would work is a *depletion sweep* —
+   one organism walked down a true trajectory direction, `z` scored against the LP
+   at each point — which needs no community and no design.
+
+### The depletion sweep: the `mu_floor` is a 3300x flux error, and removing it makes M5 worse — 2026-09-02
+
+The Head B analogue of `titrate_n1`. A **monoculture batch is the depletion sweep**:
+the medium walks down that organism's own consumption direction with the true LP
+defining the path, producing the end-of-batch co-depleted states no n=1 titration
+can construct — and it is `cfs community` with 21 single-member communities, so it
+needed no new code. `monocultures.txt`, `mono.sh` (4 doublings) and `monodeep.sh`
+(8), 3 medium draws each; `attribute_b.py` then scores Head B at 11 states per
+trajectory. Depth = that member's `mu_true` over its own `mu_true` at t=0.
+
+| depth | n | med flux cosine | p05 cosine | med `\|z_hat\|/\|z_true\|` |
+| --- | --- | --- | --- | --- |
+| 0.90-1.0 | 366 | 0.991 | 0.781 | 1.00 |
+| 0.50-0.90 | 135 | 0.903 | 0.519 | 1.01 |
+| 0.10-0.50 | 46 | 0.843 | -0.065 | 1.24 |
+| 0.01-0.10 | 18 | 0.863 | **-0.440** | **3318** |
+
+1. **The cause is arithmetic and it is `dfba.Surrogate.mu_and_z`.** Head B emits
+   specific flux and inference multiplies back by `max(mu, mu_floor)`,
+   `mu_floor = _MU_FLOOR_FRAC * mean mu` (roster 0.46-1.66). At those states median
+   `mu_true` is **1.9e-4** against a floor of 0.77, and **89% of them have `mu_hat`
+   below the floor** — so the *floor*, not the growth rate, sets the predicted
+   flux. Median `max(mu_hat, floor)/mu_true` = **4172**, which is the observed 3318
+   to within the spread; `mu_hat/mu_true` alone is only **52**. The floor is the
+   dominant term and Head A's residual is the smaller one.
+2. **Direction fails too, and only the tail shows it.** 13 of 15 organisms lose
+   cosine going deep and `CP002109.1` reaches **-0.42** — reversed. The median
+   barely moves (0.99 -> 0.86); the p05 goes 0.78 -> -0.44. Score this regime on a
+   quantile, never a median.
+3. **Removing the floor at inference fixes the right-hand side and makes the
+   trajectory worse.** Same 10 communities x 3 draws, one-line change: `dc_rel`
+   **2.047 -> 0.747** on the worst cell and 0.594 -> 0.428 on another, while their
+   `x_log_err_final` goes **0.0041 -> 0.1241** and 0.0676 -> 0.1124. 25 of 30 cells
+   are bit-identical, and the size medians do not move at all. **Third instance of
+   "a strictly better rhs is not a better trajectory"** (the MM clamp gave two);
+   this is the starkest — 2.7x better rhs, 30x worse endpoint. The over-predicted
+   uptake makes the surrogate empty the pool at roughly the right *time*; take it
+   away and a starving member keeps the pool alive too long, which changes **which
+   metabolite empties first**, and a batch endpoint turns on that.
+4. **So the floor stays, and it is not the M5 lever** — the reverted experiment is
+   on file so nobody re-runs it. What the sweep did establish is where Head B is
+   actually wrong, and that the benchmark under-samples it: only **42 of 780**
+   benchmark member-states are below depth 0.1, against 18 of 668 in a monoculture
+   at 4 doublings and far more at 8. A gate that never visits the regime cannot
+   reward fixing it.
+5. **Normalise a depleting trajectory by a fixed scale and drop dead states.** The
+   first pass reported a median relative error of **3e31** in the deepest bin:
+   `|z_true| -> 0` is the same divide-by-a-dead-culture trap `dfba` already guards
+   against. `mono_report.py` normalises by `|z|` at t=0 and drops `mu_true == 0`.
+   Cosine is the scale-free companion — quote both, since a fixed denominator
+   flatters the deep end exactly as a local one explodes.
+
+### M11: the minimal medium is blocked on essentiality, not on the program — 2026-08-30
+
+`cfs minimal-medium` (`src/cfs/science/minimal.py`) is §13.3: minimise `cost . c`
+subject to `mu_i(c) >= target_i` for every member and a box. Each floor is a
+concave function >= a constant, so the feasible set is convex and the objective is
+linear. Solved as a smooth quadratic penalty with `rho` continuation, a feasibility
+restoration step, then a greedy **cardinality prune** — the convex program
+minimises `cost . c` and V6 counts *components*, and a metabolite already pushed to
+1% of its rich level still costs nothing to keep. The prune is what makes the count
+mean anything.
+
+**Head A does not know that removing an essential metabolite stops growth, and the
+optimiser finds that immediately.** Single knockouts from a §4.3 rich medium,
+3-member community, 37 free metabolites (`knockout_audit`, in the report):
+
+| KO | `mu_hat` | `mu_true` |
+| --- | --- | --- |
+| `EX_cobalt2_e`, `EX_cu2_e`, `EX_mn2_e`, `EX_zn2_e` | 54.5 / 69.2 / 38.2 (rich: 54.5 / 69.2 / 38.2) | **0 / 0 / 0** |
+| `EX_abg4_e`, `EX_bz_e` | unchanged | 55.1 / 70.2 / **0** |
+| `EX_ca2_e`, `EX_cl_e` (one organism) | 1.33, 1.08 (rich 1.91) | **0**, **0** |
+
+6 of 37 are lethal knockouts the head misses outright. Left free, the program plus
+the prune takes 273 components to **41** with every surrogate floor satisfied and
+the true LP growing **none** of the three members. That is P21 in a use case where
+`growth.trust_box` cannot help: the region there is *multiplicative* precisely so
+nothing reaches zero, and reaching zero is this program's job.
+
+**The cause is `SamplingConfig.log10_lo = -4.0`, and the sidecar already names the
+victims.** Measured by sweeping one metabolite with the rest held at the draw
+(CP070062.1): `EX_cobalt2_e`'s true ramp lives between `c/Km` **1e-9 and 1e-6** —
+`mu_true` is 0 at zero, 0.039 at `c/Km = 4e-9` and fully recovered by `4e-7`. The
+probe brackets `log10(c/Km)` in `[lo, hi] = [-4, 1]`, sees `mu_lo == mu_hi`, and
+by its own contract omits the metabolite ("never limits inside the band"); the
+fallback chain then hands it scale **1.0**. The band's lower end is the *same*
+parameter (`design.sample_media`, and the focus stratum is clamped at
+`max(log10_lo, a - 1.5)`), so no sampled medium is ever cobalt-limited either.
+
+Three consequences, in order:
+
+1. **The dual is exactly 0 on every training row**, so `_kink_scale` takes its
+   documented "never limits — nothing to resolve" fallback, `x_scale = 1.0`.
+2. **The head's input then has no resolution there.** Across the entire design
+   `w = u/x_scale` for cobalt spans `[0, 3.9e-3]`; separating `mu = 0` from
+   `mu = 1.386` inside that needs a plane of slope ~350, and the only evidence for
+   one is the single all-but-one-depleted corner row (23 such rows in 32 000).
+3. **The four missed essentials are exactly the four with `"source": "default"` in
+   `<id>.subspace.json`.** `EX_ca2_e`/`EX_cl_e` got `"probe"` at 1.1e-4 — itself
+   the bracket floor — and the head *does* respond to them (1.91 -> 0.79 at zero).
+   §4.7's promise that "a band anchored at the default is a known blind spot, not a
+   silent one" held; nothing was reading it.
+
+So this is a *label* defect, not a loss or architecture one, and restricting the
+design to the active subspaces cannot help — the misses are active metabolites.
+
+**So the support is pinned from the models** (`--keep-essential`, default off with
+`--no-keep-essential`): one FBA per free metabolite per member, a static property of
+the GEM that no medium search has to discover. 3 draws, 3-member community, floor at
+0.5 of each member's `mu` on the rich medium, `value_r1`:
+
+| | components | free / pinned / dropped | members clearing the floor under the LP | worst |
+| --- | --- | --- | --- | --- |
+| all metabolites free | 273 -> **41** | 273 / 0 / 232 | **0/3** | 0.000 |
+| active subspace only | 273 -> 244 | 37 / 0 / 29 | 0/3 | 0.000 |
+| **+ essentials pinned** | 273 -> **251** | 37 / 13 / 22 | **2/3** | 0.489 / 0.485 / **0.334** |
+
+1. **V6 does not pass, and two of the three misses are ~2%** (0.489 and 0.485
+   against 0.5). The real failure is the third, at 0.334, on the draw where a member
+   starts at `mu_true` **3.5** against the others' 55 and 70 — the slow-member axis
+   M5 found, in a new use case.
+2. **The calibration belongs in the constraint.** §13.2 evaluates the head raw
+   because an increasing map cannot move an argmax; here the constraint is on the
+   *level*, so `calibrate.apply` and its derivative `g' = a + (d0/beta)e^{-m/beta}`
+   are in both the value and the chain rule. Adding them moved the worst case
+   0.190 -> **0.334** and dropped 7 more components.
+3. **The MILP reference is not comparable and is off by default in spirit.**
+   `cobra.medium.minimal_medium` is free over every exchange while the design is
+   restricted to the active subspace with essentials pinned, and it is per organism,
+   so the union is an upper bound on the joint optimum and `max_i` a lower one.
+
+**What unblocked it: `probe_lo`, not the loss — done 2026-08-31.** Reweighting the
+corner rows would teach a step at exactly zero and still leave the ramp unsampled
+and unresolvable in the input coordinate; `--w-rel` was the wrong knob. The band
+floor was the knob, and after the relabel `n_missed_essential` is **0** — see "The
+band floor was hiding a fifth of the design" below for the numbers and for the
+composition regression it cost. Count `"source": "default"` bands in the sidecars
+to check any future label root: 100 of 496 before, **0 of 496** after.
+
+### The conditioning bill is not §8's — measured, 2026-08-26
 >
 > `cfs train-value` reports `hessian_cond_median` from `train._hessian_cond`: **one
 > organism's** Hessian, on its own dims, in the head's own coordinate. §8.4 inverts
@@ -749,6 +4681,14 @@ tests, per-process container ternary.
   `params.xla_devices` are the only two. Worked example plus generator:
   `examples/hpc_run/`. Stub: `tests/sweep.nf.test`.
 - **`train`** — the legacy sweep below.
+
+M4/M5 are CLI-only (no Nextflow stage yet): `cfs train-behaviour` trains Head B on
+the same shards and the *same* held-out media split as `cfs train-value`
+(`cfs.surrogate.data._stack` is shared, so the two heads cannot silently disagree
+on `x_scale` or on which media are held out — `Surrogate.__init__` re-checks both),
+and `cfs community` composes a value + behaviour checkpoint pair into §8.1's dFBA
+and scores it against per-organism FBA. `cfs community` needs the `data` extra
+(cobra) *and* the `jax` extra, the only subcommand that needs both.
 
 DAG (`workflows/surrogate_training.nf`):
 

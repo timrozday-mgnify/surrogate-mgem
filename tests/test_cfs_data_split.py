@@ -139,3 +139,26 @@ def test_one_organism_per_stack_sees_the_same_media(labels):
 
     with pytest.raises(ValueError, match="no shards"):
         load_value_dataset(root, index_path, eps=1e-3, organisms=["nope"])
+
+
+def test_x_scale_can_be_pinned(labels):
+    # §8.6f trap 1: `x_scale` is read off the *training rows*, so adding rows moves
+    # the input coordinate and no incremental loop is comparable to the checkpoint
+    # it started from. Pinning it is the prerequisite for the fallback's
+    # self-labelling half.
+    root, index_path, _ = labels
+    base = load_value_dataset(root, index_path, eps=1e-3, seed=0)
+    pin = np.full_like(base.x_scale, 0.5)
+    pinned = load_value_dataset(root, index_path, eps=1e-3, seed=0, x_scale=pin)
+
+    assert np.allclose(pinned.x_scale, 0.5)
+    assert not np.allclose(base.x_scale, pinned.x_scale)
+    # The pin has to reach the coordinate, not just the metadata.
+    assert not np.allclose(base.x_train, pinned.x_train)
+    # Round-tripping its own scale reproduces the unpinned load exactly.
+    again = load_value_dataset(root, index_path, eps=1e-3, seed=0, x_scale=base.x_scale)
+    assert np.allclose(again.x_train, base.x_train)
+    assert np.allclose(again.g_train, base.g_train)
+
+    with pytest.raises(ValueError, match="pinned x_scale"):
+        load_value_dataset(root, index_path, eps=1e-3, seed=0, x_scale=np.ones((1, 1)))

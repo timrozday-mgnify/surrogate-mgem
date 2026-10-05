@@ -32,3 +32,18 @@ tasks:
       - task: report
         vars: {RUN_DIR: '{{.RUN_DIR}}', OUT: '{{.OUT}}'}
       - open rendered_reports/{{.OUT}}
+
+  pair:report:
+    desc: Render the pair-interactions report for a pipeline outdir (task pair:report RUN_DIR=/path/to/outdir)
+    vars:
+      PAIR_ABS:
+        sh: cd "{{.RUN_DIR}}" && pwd
+      # the kernel the qmd names lives in this env; quarto must find its jupyter
+      KERNEL_PY: '{{.KERNEL_PY | default "~/.local/share/mamba/envs/basicpython/bin/python"}}'
+    preconditions:
+      - sh: test -d "{{.RUN_DIR}}/runs"
+        msg: '"{{.RUN_DIR}}/runs" missing — is this a pair-interactions outdir?'
+    cmds:
+      - mkdir -p rendered_reports
+      - cd reports && QUARTO_PYTHON={{.KERNEL_PY}} quarto render pair_interactions.qmd -P run_dir:"{{.PAIR_ABS}}" --output "{{.OUT}}"
+      - mv reports/{{.OUT}} rendered_reports/{{.OUT}}

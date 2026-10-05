@@ -205,3 +205,179 @@ def test_topup_round_appends_a_shard_and_both_rounds_load(tmp_path):
     both = pd.concat([pd.read_parquet(p) for p in base.paths + topup.paths])
     # Media ids stay disjoint: the train/val split is by medium_id.
     assert both["medium_id"].nunique() == len(both)
+
+
+def test_background_is_perturbed_over_a_random_share():
+    """The background regime must be a spectrum, not all-or-nothing.
+
+    A community pool takes an organism's *background* metabolites off their rich
+    level in whatever share the other members happen to consume — 20% of it for a
+    pair, most of it for the whole roster. Perturbing every held metabolite at once
+    (the pre-2026-08-30 behaviour) left the design bimodal, with no medium anywhere
+    between, and that hole is where every failing M5 community medium sits.
+    """
+    import numpy as np
+
+    bg = [f"EX_b{i}_e" for i in range(40)]
+    sub = ActiveSubspace("g", ["EX_a_e"], bg, {"EX_a_e": 1.0}, 10.0)
+    cfg = SamplingConfig(n_media=400, seed=3, frac_bg_perturb=1.0)
+    media = sample_media(sub, load_km_defaults(), cfg)
+
+    rich = max(m["EX_b0_e"] for m in media)
+    n_off = np.array([sum(m[ex] < rich for ex in bg) for m in media])
+    assert n_off.max() > 30  # the "whole roster" end is still reachable
+    assert ((n_off > 3) & (n_off < 30)).mean() > 0.5  # and so is everything between
+
+
+def test_low_mu_stratum_starves_a_few_metabolites_below_their_own_anchor():
+    """Deliberately slow media, co-limited and anchor-relative.
+
+    The focus strata straddle each metabolite's onset and the unfocused ones sit
+    near Km, which puts 76% of held-out media on the growth plateau — the band
+    Head A fits well and §8.1's slow members are not in. This stratum is the only
+    part of the design aimed below it, and it has to be *relative* to each
+    metabolite's own anchor: an absolute band leaves a metabolite whose onset is
+    at ``c/Km = 1e-6`` replete at ``1e-3``.
+    """
+    import numpy as np
+
+    ex = [f"EX_a{i}_e" for i in range(8)]
+    sub = ActiveSubspace("g", ex, [], dict.fromkeys(ex, 1.0), 10.0)
+    scales = dict.fromkeys(ex, 1e-6)  # onset 6 decades below Km
+    # The unfocused "below Km" stratum also goes under Km, so it is switched off:
+    # what is under test is the anchor-relative window, not that stratum.
+    cfg = SamplingConfig(
+        n_media=600, seed=5, frac_low_mu=0.3, frac_focus=0.0, frac_below_km=0.0, frac_mid_mu=0.0
+    )
+    media = sample_media(sub, load_km_defaults(), cfg, scales)
+
+    rich = max(m[ex[0]] for m in media)
+    # Scarce == within the stratum's window around the anchor, not merely below Km.
+    n_scarce = np.array([sum(m[e] < rich * 1e-4 for e in ex) for m in media])
+    lo, hi = cfg.low_mu_subset
+    assert ((n_scarce >= lo) & (n_scarce <= hi)).sum() > 0.15 * len(media)
+    assert n_scarce.max() <= hi  # never the whole medium: that starves on everything
+
+
+def test_focus_background_is_replete_relative_to_its_own_anchor():
+    """ "Replete" must mean replete *for that metabolite*, not "above Km".
+
+    A community pool puts many of a member's metabolites near their own onsets at
+    once. With the focus strata's background band absolute and `probe_lo` having
+    moved onsets 2-6 decades below Km, the design stopped producing that regime at
+    all -- training media with a metabolite within +-0.5 decades of its anchor went
+    from a median of 15 (of 32) to 0, while the failing 21-member community medium
+    has 10. Neither the stratum budget nor the co-limitation count explains the
+    §8.1 size-21 regression; this does.
+    """
+    import numpy as np
+
+    ex = [f"EX_a{i}_e" for i in range(6)]
+    sub = ActiveSubspace("g", ex, [], dict.fromkeys(ex, 1.0), 10.0)
+    scales = dict.fromkeys(ex, 1e-6)  # onset 6 decades below Km
+    cfg = SamplingConfig(n_media=400, seed=7, frac_focus=1.0, frac_low_mu=0.0)
+    media = sample_media(sub, load_km_defaults(), cfg, scales)
+
+    km = load_km_defaults_km(ex[0])
+    off = np.array(
+        [[np.log10(m[e] / km) + 6.0 for e in ex] for m in media if all(m[e] > 0 for e in ex)]
+    )
+    near = ((off >= -0.5) & (off <= 0.5)).sum(1)
+    assert np.median(near) >= 1  # several metabolites sit near their own onsets
+    assert np.percentile(near, 90) >= 3  # and the many-at-once regime is reached
+    # The background never drops below its own anchor; only the focused one does.
+    assert (np.sort(off, axis=1)[:, 1] >= cfg.focus_bg_decades[0] - 1e-9).all()
+
+
+def test_probe_floor_is_separate_from_the_unfocused_band():
+    """A focus stratum must reach its metabolite's onset however low that is.
+
+    Clamping it at ``log10_lo`` is what left 100 of 496 roster bands anchored at
+    the default and sampled replete in every medium — the M11 blocker.
+    """
+    sub = ActiveSubspace("g", ["EX_a_e"], [], {"EX_a_e": 1.0}, 10.0)
+    cfg = SamplingConfig(n_media=200, seed=1, frac_low_mu=0.0, frac_focus=1.0)
+    media = sample_media(sub, load_km_defaults(), cfg, {"EX_a_e": 1e-7})
+
+    km = load_km_defaults_km("EX_a_e")
+    assert min(m["EX_a_e"] for m in media) < km * 10 ** (cfg.log10_lo - 1)
+
+
+def load_km_defaults_km(ex):
+    from cfs.groundtruth.solve import km_for_exchange
+
+    return km_for_exchange(ex, load_km_defaults())
+
+
+def test_mid_mu_stratum_puts_many_metabolites_just_above_their_50pc_point():
+    """B2 (§8.5): several metabolites mildly limiting at once, none starving.
+
+    The low-`mu` stratum drives 1-3 metabolites *below* onset and the focus strata
+    move one at a time, so the design had nothing in the middle of the organism's
+    growth range — which is where §8.1's communities run and where E1 located the
+    size-21 regression (`p4`'s binding tangent anchored at `mu = 50.6` against a
+    truth of 17.6).
+
+    The band sits **above** each metabolite's 50%-recovery point, not between that
+    and onset: co-limitation compounds downward, so a share of `A_i` each
+    individually at 50% lands the joint `mu` far *below* the target band. Measured
+    on three organisms (|A| = 16/20/30), this window puts 0.64-0.68 of media in
+    `mu/mu_max` [0.3, 0.8] with none below 0.2; drawing between onset and the 50%
+    point instead moved AAXE02's [0.3, 0.8] rows 29 -> 13.
+    """
+    import numpy as np
+
+    ex = [f"EX_a{i}_e" for i in range(10)]
+    sub = ActiveSubspace("g", ex, [], dict.fromkeys(ex, 1.0), 10.0)
+    onset = dict.fromkeys(ex, 1e-6)  # 10% recovery, 6 decades below Km
+    mid = dict.fromkeys(ex, 1e-4)  # 50% recovery, 4 decades below
+    cfg = SamplingConfig(
+        n_media=400,
+        seed=11,
+        frac_mid_mu=1.0,
+        frac_focus=0.0,
+        frac_low_mu=0.0,
+        frac_below_km=0.0,
+        focus_bg_decades=(0.0, 3.0),  # so "replete" is clear of the mid band
+    )
+    media = sample_media(sub, load_km_defaults(), cfg, onset, mid_scales=mid)
+
+    from cfs.groundtruth.solve import km_for_exchange
+
+    km = km_for_exchange(ex[0], load_km_defaults())
+    # skip the all-but-one-depleted corners `sample_media` always emits first
+    r = np.array([[m[e] / km for e in ex] for m in media[len(ex) :]])  # c/Km
+    # `mid_mu_decades` = (0, 1) above the 50% point at c/Km = 1e-4.
+    band = (r >= 1e-4) & (r <= 1e-3)
+    n_in = band.sum(1)
+    assert n_in.min() >= 1 and n_in.max() == len(ex)  # a pair's share, and the roster's
+    assert n_in.mean() > 2  # not a one-at-a-time stratum
+    # Nothing is driven below its own 50% point: going lower is what made the
+    # joint `mu` collapse, and starving is the low-`mu` stratum's job anyway.
+    assert r.min() >= 1e-4
+
+
+def test_explicit_media_are_labelled_verbatim_and_leave_the_sidecars_alone(tmp_path):
+    """`--media`: label the states §8.1 visits, which no design produces."""
+    pytest.importorskip("highspy")
+    pytest.importorskip("pyarrow")
+    import pandas as pd
+
+    from cfs.sampling.generate import generate_organism
+
+    model = _toy_two_uptakes()
+    cfg = SamplingConfig(n_media=4, alphas=(1.0,), eps_levels=(1e-3,), eps_primary_idx=0, seed=0)
+    base = generate_organism(model, "toy2", "deadbeef", tmp_path, cfg)
+    sidecar = (tmp_path / "toy2.subspace.json").read_text()
+
+    given = [{"EX_a_e": 0.5, "EX_b_e": 1.5}, {"EX_a_e": 2.5, "EX_b_e": 0.25}]
+    round1 = generate_organism(model, "toy2", "deadbeef", tmp_path, cfg, round_idx=1, media=given)
+
+    assert round1.n_media == 2
+    df = pd.read_parquet(round1.paths[0])
+    ex_order = [ex.id for ex in model.exchanges]
+    got = [dict(zip(ex_order, row, strict=True)) for row in df["medium"]]
+    assert [{k: v for k, v in m.items() if k in given[0]} for m in got] == given
+    # The design chose none of this, so it must not rewrite what the base run recorded.
+    assert (tmp_path / "toy2.subspace.json").read_text() == sidecar
+    assert base.paths[0].exists()

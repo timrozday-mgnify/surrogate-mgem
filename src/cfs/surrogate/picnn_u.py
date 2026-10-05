@@ -54,11 +54,31 @@ class with no optimiser in the way) on the 20000-media labels:
 | 1000 | 0.9690 | 0.9817 | 0.9722 |
 | none | 0.9690 | 0.9817 | 0.9722 |
 
-300 is where clipping stops costing anything (<=0.001 against uncapped, p05
-marginally better) while still shrinking the input range 25x. Capping *low* is
+300 is where clipping stops costing anything **on those labels** (<=0.001
+against uncapped) while still shrinking the input range 25x. Capping *low* is
 actively harmful: a limiting cell above the cap gets zero predicted gradient on
 the one metabolite that matters, which is why ABCC02 collapses at 30 — 4.1% of
 its limiting cells sit above it.
+
+**Raised to 1e5 on 2026-09-09: 300 is not enough under §13.11's inhibition, and
+it is the whole of M17.** Clipping is many-to-one, so two media above the cap
+share a ``w`` and differ in ``mu``, and a label tangent taken at one is then not
+a valid upper bound at the other — the invariant ``--gm-repair`` exists to
+restore. On ``CP000139.1``/``labels_i3``, 239 407 entries clip and **34% of its
+3981 label tangents are invalid**; the repair lifts 239 planes to fix that and
+its mid-`mu` band goes from a true 0.98 to 2.85. The parameter-free cut model
+over its own tangents, median relative error by ``mu/max`` band:
+
+| cap | <= 0.25 | 0.25-0.50 | 0.50-0.75 | > 0.75 | valid tangents |
+| --- | --- | --- | --- | --- | --- |
+| 300 | -0.0000 | -0.1235 | **-0.6707** | -0.5130 | 0.652 |
+| 1e4 | -0.0000 | -0.0000 | -0.4896 | -0.3304 | 0.658 |
+| **1e5** | **-0.0000** | **-0.0000** | **+0.0000** | **+0.0048** | **0.833** |
+| 1e6 .. 1e12 | identical to 1e5 | | | | 0.833 |
+
+The knee is at 1e5 and nothing above it differs (the largest finite ``w`` here
+is 8.4e6, set by float32 ``1 - x``). The init scale below stays at its measured
+150 rather than following the cap.
 
 The diagnostics have to move with the constraint. :func:`to_diag`,
 :func:`batched_value_diag` and :func:`head_in_diag` tell
@@ -77,10 +97,11 @@ from jax import Array
 from cfs.surrogate.picnn import ValueHead, _softplus_inv, organism  # noqa: F401
 
 # Measured, see the module docstring. Not a flag: no sweep axis has asked for it.
-W_CAP = 300.0
+W_CAP = 1.0e5
+_INIT_SCALE = 150.0  # calibrated at the old cap of 300; not tied to W_CAP
 
 INPUT_TRANSFORM = (
-    "u = c / (Km + c), w = min(u / x_scale, 300) = min(x / (1 - x), 300); "
+    "u = c / (Km + c), w = min(u / x_scale, 1e5) = min(x / (1 - x), 1e5); "
     "Km from km_defaults.yaml. Concavity is imposed in w, which is affine in u."
 )
 
@@ -119,7 +140,7 @@ class ValueHeadU(ValueHead):
         # the run walking the bias back instead of fitting. Divide by the typical
         # `w` a row carries -- half the cells clipped at the cap -- which is a
         # pure reparameterisation of the initial point, not of the class.
-        scale = W_CAP / 2.0
+        scale = _INIT_SCALE
         rescale = lambda p: _softplus_inv(jax.nn.softplus(p) / scale)  # noqa: E731
         self.wx = [rescale(p) for p in self.wx]
         self.out_x = rescale(self.out_x)

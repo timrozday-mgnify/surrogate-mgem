@@ -32,6 +32,9 @@ from cfs.sampling.design import SamplingConfig, band_scales, sample_media
 # two different media into one unit).
 _ROUND_STRIDE = 1_000_000
 
+# §13.11 stage 4': the label root records the `c^eq` it was solved with.
+_INHIBITION_FILE = "inhibition.json"
+
 LOGGER = logging.getLogger("cfs.generate")
 
 
@@ -70,6 +73,8 @@ def generate_organism(
     focus_weights: dict[str, float] | None = None,
     roster_median: dict[str, float] | None = None,
     round_idx: int = 0,
+    media: list[dict] | None = None,
+    ceq: dict[str, float] | None = None,
 ) -> OrganismShards:
     """Generate all label shards for one organism (plan §4.5).
 
@@ -86,34 +91,71 @@ def generate_organism(
     run got measurably wrong (:func:`~cfs.sampling.design.topup_weights`).
     ``round_idx`` > 0 writes a top-up shard alongside the base run's rather than
     over it (§4.6).
+
+    ``ceq`` turns on §13.11's thermodynamic product inhibition in the ground truth
+    (stage 4'): secretion of a metabolite stops as its external concentration
+    reaches ``c^eq``. It changes no column of the label schema -- ``theta`` is a
+    function of the ``medium`` already stored and its dual is the same ``shadow``
+    column read on the other side -- but it makes a *different label root*, so it
+    is recorded in an ``inhibition.json`` sidecar beside the shards and
+    :func:`cfs.surrogate.data.load_ceq` reads it back. ``None`` is plain FBA, bit
+    for bit.
+
+    ``media`` bypasses the whole design: label exactly these media instead of
+    sampling them. That is how the media §8.1 actually visits get labelled — the
+    dFBA states are a point set no design produces, and Head B's residual is
+    coverage of them. The subspace, the probe and the sidecars are then skipped
+    (nothing here chose the media, so there is no band to record, and the base
+    run's sidecars must not be overwritten by a round).
     """
     from cfs.groundtruth.solve import load_km_defaults, solve
 
     cfg = cfg if cfg is not None else SamplingConfig()
     km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
-    subspace = subspace if subspace is not None else active_subspace(model, genome_id, km_cfg)
+    designed = media is None
 
-    sampled = subspace.active or subspace.background
-    probe = (
-        demand_probe(
-            model, sampled, km_cfg, lo=cfg.log10_lo, hi=cfg.log10_hi, steps=cfg.probe_steps
+    if designed:
+        subspace = subspace if subspace is not None else active_subspace(model, genome_id, km_cfg)
+        sampled = subspace.active or subspace.background
+        probe = (
+            demand_probe(
+                model, sampled, km_cfg, lo=cfg.probe_lo, hi=cfg.log10_hi, steps=cfg.probe_steps
+            )
+            if cfg.probe
+            else {}
         )
-        if cfg.probe
-        else {}
-    )
-    scales, sources = band_scales(probe, scales, roster_median, sampled)
-    media = sample_media(subspace, km_cfg, cfg, scales, focus_weights)
+        scales, sources = band_scales(probe, scales, roster_median, sampled)
+        # B2 (§8.5): a second bisection at a higher recovery target bounds the mid-`mu`
+        # stratum's band from above. Same ~350 LPs and ~2 s as the first probe, and it
+        # is the only way to place that band without labels; there is no fallback
+        # chain because a metabolite with no probe result never limits in the band at
+        # all, and `sample_media` stands in with half a decade above its own anchor.
+        mid_scales = (
+            demand_probe(
+                model,
+                sampled,
+                km_cfg,
+                lo=cfg.probe_lo,
+                hi=cfg.log10_hi,
+                steps=cfg.probe_steps,
+                target_frac=cfg.mid_target_frac,
+            )
+            if cfg.probe and cfg.frac_mid_mu > 0
+            else {}
+        )
+        media = sample_media(subspace, km_cfg, cfg, scales, focus_weights, mid_scales)
     ex_order = [ex.id for ex in model.exchanges]
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    (outdir / f"{genome_id}.exchanges.json").write_text(
-        json.dumps({"index_hash": index_hash, "exchanges": ex_order}, indent=2)
-    )
-    # The design's own record: which metabolites were sampled vs. held rich, and
-    # where each band was anchored (§4.7). Needed to audit |A_i| after a bulk run
-    # and to target the §4.6 active-learning reserve.
-    bands = {ex: {"scale": scales[ex], "source": sources[ex]} for ex in sampled}
-    write_subspaces([subspace], outdir / f"{genome_id}.subspace.json", {genome_id: bands})
+    if designed:
+        (outdir / f"{genome_id}.exchanges.json").write_text(
+            json.dumps({"index_hash": index_hash, "exchanges": ex_order}, indent=2)
+        )
+        # The design's own record: which metabolites were sampled vs. held rich, and
+        # where each band was anchored (§4.7). Needed to audit |A_i| after a bulk run
+        # and to target the §4.6 active-learning reserve.
+        bands = {ex: {"scale": scales[ex], "source": sources[ex]} for ex in sampled}
+        write_subspaces([subspace], outdir / f"{genome_id}.subspace.json", {genome_id: bands})
 
     primary = cfg.eps_levels[cfg.eps_primary_idx]
     step = max(1, round(1.0 / cfg.subset_frac))
@@ -130,7 +172,7 @@ def generate_organism(
                 index_hash,
                 mid0 + mid,
                 medium,
-                solve(model, medium, alpha, eps, km_cfg),
+                solve(model, medium, alpha, eps, km_cfg, ceq),
                 ex_order,
             )
             for mid, medium in enumerate(media_e)
@@ -152,6 +194,8 @@ def generate_roster(
     scales: dict[str, dict[str, float]] | None = None,
     focus_weights: dict[str, dict[str, float]] | None = None,
     round_idx: int = 0,
+    media: list[dict] | None = None,
+    ceq: dict[str, float] | None = None,
 ) -> list[OrganismShards]:
     """Run :func:`generate_organism` for every roster model (serial; see module doc).
 
@@ -160,6 +204,10 @@ def generate_roster(
     for ``EX_arg__L_e``). Its per-exchange median over the roster is the third
     link of the §4.7 chain, derived here rather than asked for: it is only ever a
     prior for a metabolite this organism's probe could not measure.
+
+    ``media`` is the same explicit medium list for every organism — the point of
+    it is a shared point set (the §8.1 trajectory states), and each organism's
+    row keeps only its own exchanges anyway.
     """
     import numpy as np
     from cobra.io import read_sbml_model
@@ -192,6 +240,14 @@ def generate_roster(
                 focus_weights=focus_weights.get(gm.genome_id),
                 roster_median=roster_median,
                 round_idx=round_idx,
+                media=media,
+                ceq=ceq,
             )
         )
+    if ceq is not None:
+        # The root's own record of which model made it. Read by
+        # `cfs.surrogate.data.load_ceq`, which is what gives Head A its second
+        # input channel -- so a root and a checkpoint cannot silently disagree
+        # about whether inhibition was on.
+        (Path(outdir) / _INHIBITION_FILE).write_text(json.dumps({"ceq": ceq}, indent=2))
     return shards

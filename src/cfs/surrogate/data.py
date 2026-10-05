@@ -42,6 +42,33 @@ LOGGER = logging.getLogger("cfs.surrogate.data")
 # in the `<id>.exchanges.json` sidecar if a future roster breaks the assumption.
 _VMAX_DEFAULT = 1000.0
 _DUAL_TOL = 1e-9  # below this a dual is solver dust, not a sensitivity
+_BOUND_TOL = 1e-6  # a flux this close to its bound is *at* it (same tol as solve._FLUX_EPS)
+# §13.11 stage 4': the label root records the c^eq it was solved with. Absent =
+# plain FBA, and then nothing below fires and every array keeps its old width.
+INHIBITION_FILE = "inhibition.json"
+
+
+def load_ceq(labels_dir: Path | str) -> dict[str, float] | None:
+    """The ``c^eq`` map a label root was generated with, or ``None`` for plain FBA."""
+    path = Path(labels_dir) / INHIBITION_FILE
+    if not path.is_file():
+        return None
+    return {k: float(v) for k, v in json.loads(path.read_text())["ceq"].items()}
+
+
+def theta(c: np.ndarray, ceq: np.ndarray) -> np.ndarray:
+    """§13.11's inhibition factor ``max(0, 1 - c/c^eq)``; ``nan`` c^eq -> 1 (uninhibited).
+
+    This is Head A's *second* input channel, and it has to be a channel rather
+    than a transform of ``c``: ``mu_max`` is concave and non-decreasing in the LP's
+    bound vector, the secretion bound ``Vmax * theta`` is affine in ``theta``, so
+    ``mu`` is concave and non-decreasing in ``(u, theta)`` jointly -- which is the
+    coordinate the head is built for. In ``c`` it is neither (the ``max(0, .)``
+    clip is a convex kink at ``c = c^eq``), so a head fed ``c`` directly would be
+    the [[concavity-imposed-in-the-wrong-coordinate]] mistake a third time.
+    """
+    out = np.clip(1.0 - c / np.where(np.isfinite(ceq), ceq, np.inf), 0.0, None)
+    return np.where(np.isfinite(ceq), out, 1.0)
 
 
 @dataclass
@@ -63,6 +90,42 @@ class ValueDataset:
     x_scale: np.ndarray  # (G, M) per-metabolite saturation constant s; x is already x/(x+s)
     index_hash: str
     rounds_present: list[int]  # §4.6 top-up rounds in the training set; val is always round 0
+    # M, the number of *metabolites*. Equals ``len(exchanges)`` under plain FBA and
+    # half of it once §13.11's inhibition channel is appended (§13.11 stage 4').
+    n_metabolites: int = 0
+    # §13.11 stage 4': the c^eq map the labels were solved with, or None (plain FBA).
+    ceq: dict[str, float] | None = None
+
+
+@dataclass
+class BehaviourDataset:
+    """Stacked Head B training data (§6.3). One row is one (medium, alpha) pair."""
+
+    genome_ids: list[str]
+    exchanges: list[str]
+    mask: np.ndarray  # (G, M) bool
+    alphas: np.ndarray  # (A,) the §4.4 grid the labels were solved on
+    x_train: np.ndarray  # (G, N*A, M) saturation, same transform as Head A
+    a_train: np.ndarray  # (G, N*A) normalised growth rate
+    z_train: np.ndarray  # (G, N*A, M) net exchange flux per unit biomass
+    x_val: np.ndarray
+    a_val: np.ndarray
+    z_val: np.ndarray
+    mu_train: np.ndarray  # (G, N*A) the *floored* mu_max of each row's medium
+    mu_val: np.ndarray
+    mu_floor: np.ndarray  # (G,) the floor itself, so the head can be composed
+    z_scale: np.ndarray  # (G, M) per-metabolite flux scale; loss is dimensionless
+    x_scale: np.ndarray  # (G, M) the Head A kink scale, so the heads compose
+    index_hash: str
+    rounds_present: list[int]
+    n_metabolites: int = 0
+    # §13.11 stage 4': the c^eq map the labels were solved with, or None (plain FBA).
+    ceq: dict[str, float] | None = None
+
+
+# Head B divides its target by the medium's `mu_max`; below this fraction of the
+# organism's mean the division amplifies noise instead of removing a scale.
+_MU_FLOOR_FRAC = 0.05
 
 
 def _saturation(c: np.ndarray, km: np.ndarray) -> np.ndarray:
@@ -81,9 +144,21 @@ def _shard_dir(labels_dir: Path, gid: str, eps: float) -> Path:
 
 
 def _organism_arrays(
-    labels_dir: Path, gid: str, eps: float, col: dict[str, int], km_cfg: dict, n_shared: int
+    labels_dir: Path,
+    gid: str,
+    eps: float,
+    col: dict[str, int],
+    km_cfg: dict,
+    n_shared: int,
+    with_z: bool = False,
+    ceq: dict[str, float] | None = None,
 ):
-    """Read one organism's primary-eps shard into shared-index arrays."""
+    """Read one organism's primary-eps shard into shared-index arrays.
+
+    ``with_z`` additionally returns Head B's targets: the elastic-net exchange
+    fluxes at every ``alpha`` on the §4.4 grid, shaped ``(n_alpha, n_media, M)``
+    and in the same ``medium_id`` order as the value arrays, plus the alpha grid.
+    """
     from cfs.groundtruth.solve import km_for_exchange
 
     side = json.loads((labels_dir / f"{gid}.exchanges.json").read_text())
@@ -102,8 +177,8 @@ def _organism_arrays(
     parts = sorted(shard_dir.glob("*.parquet"))
     if not parts:
         raise FileNotFoundError(f"{gid}: no label shards under {shard_dir}")
-    df = pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True)
-    df = df[df["alpha"] == 1.0].sort_values("medium_id").reset_index(drop=True)
+    full = pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True)
+    df = full[full["alpha"] == 1.0].sort_values("medium_id").reset_index(drop=True)
 
     km = np.array([km_for_exchange(ex, km_cfg) for ex in ex_order])
     vmax = np.array([float(vmax_side.get(ex, _VMAX_DEFAULT)) for ex in ex_order])
@@ -138,6 +213,99 @@ def _organism_arrays(
 
     mask = np.zeros(n_shared, dtype=bool)
     mask[pos] = True
+    mid = df["medium_id"].to_numpy(dtype=np.int64)
+
+    # §13.11 stage 4': the inhibition channel. It needs **no new label column** --
+    # `theta` is a function of the medium the row already stores, and its dual is
+    # the *same* `shadow` column read on the other side.
+    #
+    # `shadow` is the metabolite's mass-balance dual, so it is `d(mu)/d(secretion
+    # upper bound)` exactly where that bound binds. Verified against central
+    # differences on 20 binding (medium, exchange) cases: ratio 1.0000 on every
+    # one, while cobra's `reduced_costs` came out at exactly 2x -- the convention
+    # scaling `solve.solve` already warns about, and the reason this reads the
+    # metabolite dual and not the reaction one.
+    #
+    # The clamp mirrors the uptake side's and is needed for the same reason: 34 of
+    # 54 nonzero duals at a binding secretion bound gave a finite difference of
+    # exactly 0 (LP degeneracy -- the bound is active but not *strictly*), so a
+    # dual is only a sensitivity where the flux actually sits on the bound and the
+    # sign is the one an enlarged feasible set can produce.
+    th = gth = mask_th = None
+    if ceq is not None:
+        ceq_vec = np.array([ceq.get(ex, np.nan) for ex in ex_order])
+        ub = vmax * theta(c, ceq_vec)  # (N, M_i) secretion capacity
+        zq = np.stack(df["z"].to_numpy())
+        th = np.zeros((n, n_shared), dtype=np.float32)
+        gth = np.zeros((n, n_shared), dtype=np.float32)
+        th[:, pos] = theta(c, ceq_vec)
+        # Three conditions, and the third is the one that costs a run to find.
+        # At `theta = 0` the bound is `ub = 0`, so *every* metabolite the organism
+        # simply does not produce sits at `z = 0 = ub` and reads as binding, while
+        # its `shadow` is positive for the ordinary reason a nutrient's is: it has
+        # value in the network. That selects 7.7% of entries on AAXE02, 99.9% of
+        # them at `theta = 0`, and seeding a max-affine head from those tangents
+        # takes held-out value R2 from 1.000 to **-0.014** -- the planes rise
+        # steeply in a direction the truth is flat in, so the min over them
+        # over-predicts everywhere `theta > 0`.
+        #
+        # Requiring the organism to secrete the metabolite *somewhere* in the shard
+        # is a free capability test (24 of 181 exchanges on AAXE02) and it is the
+        # right one: a bound on a flux the network never carries cannot be a
+        # sensitivity. Same shape of correction as the uptake side's sign clamp,
+        # and for the same reason -- a dual is only a derivative where it binds.
+        #
+        # **Dropping the `theta == 0` rows is measured and REFUTED** (2026-09-09).
+        # The capability test is a shard-level OR while `binds` is per row, so a
+        # metabolite the organism secretes *somewhere* but not here has `z = 0`
+        # against `ub = 0` and reads as binding too, and finite differences of the
+        # true LP say those duals are unreliable there. Over **8 organisms**
+        # (`20hm_bands/fd_theta.py`, no new labels) essentially every selected
+        # entry is at `theta == 0` -- the design's rich level is `10**log10_hi *
+        # Km ~ c^eq`, so the channel is supervised almost entirely at the corner
+        # of its own domain -- and the dual falls into three groups: exact
+        # (ratio 1.000), degenerate (exactly 0), and a **partial** 0.16-0.54,
+        # which is the one-sided-kink signature a binary reading misses. Two
+        # DACTBY01 rows identical in `(theta = 0, z = 0, pi = 10000)` difference
+        # to 10000 and to 0, so the label is not a function of the head's input.
+        #
+        # **No measured quantity here predicts the held-out cosine.** Selection
+        # covers 2-58% of rows; GCA_000151225.1 scores 0.981 with 58% selected,
+        # median |pi| 839 and 16/16 degenerate, while CP048433.1 scores 0.688
+        # with median |pi| 0.009 -- so neither the degeneracy rate, the dual's
+        # magnitude nor the selection rate separates the failing organisms.
+        #
+        # Adding `& (ub > _BOUND_TOL)` to drop them makes the roster **much
+        # worse**: median held-out value R2 0.979 -> **-7.6**, worst -60.2, median
+        # cosine 0.948 -> 0.610, low-`mu` bias 0.0003 -> 0.054 on AAXE02. The
+        # design's rich level is `10**log10_hi * Km ~ c^eq`, so `theta = 0` is the
+        # *modal* value and those tangents carry nearly all the channel's
+        # supervision; without a slope in `theta` the seeded planes are flat in a
+        # direction the truth rises in, they violate the max-affine upper bound,
+        # and `--gm-repair`'s uniform lift then has to raise everything.
+        #
+        # So the 0.067 worst cosine is a **label design** problem, not a clamp
+        # one: the fix is to move the design's rich level below `c^eq` so `theta`
+        # is strictly positive and the derivative stops being one-sided at the
+        # corner of its own domain. That is a relabel, not a condition here.
+        secretes = (zq > _BOUND_TOL).any(axis=0)
+        binds = (zq >= ub - _BOUND_TOL) & np.isfinite(ceq_vec) & secretes
+        gth[:, pos] = np.where(binds & (pi > _DUAL_TOL), pi * vmax, 0.0)
+        gth[~gvalid] = 0.0
+        mask_th = np.zeros(n_shared, dtype=bool)
+        mask_th[pos] = np.isfinite(ceq_vec)
+
+    z = alphas = None
+    if with_z:
+        # Keep the stored float64 values for the `==` selection; cast only on return.
+        alphas = np.sort(full["alpha"].unique())
+        z = np.zeros((len(alphas), n, n_shared), dtype=np.float32)
+        for k, a in enumerate(alphas):
+            sub = full[full["alpha"] == a].sort_values("medium_id")
+            if not np.array_equal(sub["medium_id"].to_numpy(dtype=np.int64), mid):
+                raise ValueError(f"{gid}: alpha={a} covers different media than alpha=1")
+            z[k][:, pos] = np.stack(sub["z"].to_numpy())
+
     return (
         x,
         mu.astype(np.float32),
@@ -145,7 +313,12 @@ def _organism_arrays(
         gvalid,
         mask,
         df["index_hash"].iloc[0],
-        df["medium_id"].to_numpy(dtype=np.int64),
+        mid,
+        z,
+        None if alphas is None else alphas.astype(np.float32),
+        th,
+        gth,
+        mask_th,
     )
 
 
@@ -178,34 +351,21 @@ def _kink_scale(x: np.ndarray, g: np.ndarray) -> np.ndarray:
     return scale
 
 
-def load_value_dataset(
+def _stack(
     labels_dir: Path | str,
     index_path: Path | str,
-    eps: float = 1e-3,
-    val_frac: float = 0.2,
-    seed: int = 0,
-    organisms: list[str] | None = None,
-) -> ValueDataset:
-    """Load the labels of ``organisms`` (default: all) into stacked train/val arrays.
+    eps: float,
+    val_frac: float,
+    seed: int,
+    organisms: list[str] | None,
+    with_z: bool = False,
+    x_scale_pin: np.ndarray | None = None,
+):
+    """Everything both heads share: read, check (P13), split by medium, rescale.
 
-    Any number of organisms stacks, one included: the stack is a vmap axis, not a
-    modelling choice, and only the shared-trunk ``deepset`` pools anything across
-    it. Stacking one organism per job is what the sweep does — the split is by
-    ``medium_id`` and the media are identical across organisms, so the held-out
-    set of a one-organism stack is the same media as the full stack's.
-
-    The split is by ``medium_id``, never by row: media are the independent unit.
-    Every shard must carry the same ``index_hash`` (P13) or this raises.
-
-    **The held-out set is drawn from the base design only** — round-0 media, never
-    a §4.6 top-up round. Top-up rounds deliberately sample where the model is
-    worst, so letting them into the validation set makes the *test* harder every
-    round and the gate stops being comparable to its own previous value: the
-    probe-band runs went 491 -> 595 -> 781 usable held-out rows over two rounds,
-    and the cosine they reported fell accordingly. Permuting the round-0 media
-    alone keeps the held-out set byte-identical whether the run has 0 rounds or 3,
-    which is what makes a round-over-round number mean anything. Top-up media all
-    go to training, which is what they were generated for.
+    Returns the stacked arrays plus the train/val medium indices. Head A and Head
+    B must see the *same* input transform and the same held-out media, so this
+    lives in one place rather than in two loaders that can drift apart.
     """
     from cfs.groundtruth.index import index_hash, load_index
     from cfs.groundtruth.solve import load_km_defaults
@@ -230,7 +390,11 @@ def load_value_dataset(
             raise ValueError(f"requested organisms have no shards: {missing}")
         gids = [g for g in gids if g in set(organisms)]
 
-    parts = [_organism_arrays(labels_dir, g, eps, col, km_cfg, len(exchanges)) for g in gids]
+    ceq = load_ceq(labels_dir)
+    parts = [
+        _organism_arrays(labels_dir, g, eps, col, km_cfg, len(exchanges), with_z=with_z, ceq=ceq)
+        for g in gids
+    ]
     hashes = {p[5] for p in parts} | {index_hash(index_path)}
     if len(hashes) != 1:
         raise ValueError(f"labels and index disagree on index_hash: {hashes} (P13)")
@@ -246,6 +410,20 @@ def load_value_dataset(
     frozen_mask = frozen.mask[[frozen.genome_ids.index(g) for g in gids]]
     if not (mask == frozen_mask).all():
         raise ValueError("sidecar exchange lists disagree with the frozen index mask (P13)")
+
+    # §13.11 stage 4': widen 444 -> 888 by appending the inhibition channel. A
+    # max-affine plane is affine over the *whole* input vector, so a second block
+    # of metabolite coordinates is native to the head and `init_from_tangents`
+    # transfers for free -- the secretion duals come out of the same LP as the
+    # uptake ones, so a label tangent already carries components in both halves.
+    # Everything downstream is generic in the width; only `exchanges` needs the
+    # names, and those are prefixed so a diagnostic says which channel it means.
+    n_met = len(exchanges)
+    if ceq is not None:
+        exchanges = list(exchanges) + [f"theta:{e}" for e in exchanges]
+        x = np.concatenate([x, np.stack([p[9] for p in parts])], axis=-1)
+        g = np.concatenate([g, np.stack([p[10] for p in parts])], axis=-1)
+        mask = np.concatenate([mask, np.stack([p[11] for p in parts])], axis=-1)
 
     # Round-0 media are the base design; `_organism_arrays` sorts by `medium_id`
     # and round N is offset by N * _ROUND_STRIDE, so they are the leading block and
@@ -277,7 +455,22 @@ def load_value_dataset(
     # non-decreasing for the composition to stay concave. `picnn.ValueHead`
     # enforces that, and it is true of the target anyway: relaxing an uptake bound
     # can only enlarge the LP's feasible set.
-    x_scale = np.stack([_kink_scale(x[i], g[i]) for i in range(x.shape[0])])
+    # `x_scale` is read off the *training rows*, so every relabel silently moves
+    # the input coordinate and two label roots are never strictly comparable --
+    # which is also why a round forces both heads to be rebuilt (P14). Pinning it
+    # is the prerequisite for any incremental loop that adds rows to an existing
+    # checkpoint (§8.6f trap 1): pass the scale the checkpoint was trained with and
+    # the coordinate stops moving under it.
+    if x_scale_pin is not None:
+        x_scale = np.asarray(x_scale_pin, dtype=float)
+        if x_scale.shape != (x.shape[0], x.shape[2]):
+            raise ValueError(
+                f"pinned x_scale has shape {x_scale.shape}, expected "
+                f"{(x.shape[0], x.shape[2])} (G, M) -- a different organism set or index (P13)"
+            )
+        LOGGER.info("x_scale pinned from a checkpoint; not recomputed from these rows")
+    else:
+        x_scale = np.stack([_kink_scale(x[i], g[i]) for i in range(x.shape[0])])
     s = x_scale[:, None, :]
     # Chain rule: dx'/dx = s / (x + s)^2. A few depletion-corner rows (x = 0 with
     # a huge dual on a metabolite that never limits elsewhere, so s = 1) stay
@@ -285,8 +478,6 @@ def load_value_dataset(
     g = g * (x + s) ** 2 / s
     x = x / (x + s)
 
-    mu_scale = mu.std(axis=1)
-    mu_scale[mu_scale <= 0] = 1.0
     present = sorted(int(r) for r in np.unique(rounds))
     LOGGER.info(
         "%d organisms x %d media (%d train / %d held out, base design only), "
@@ -300,20 +491,175 @@ def load_value_dataset(
         mask.sum(1).min(),
         mask.sum(1).max(),
     )
+    return {
+        "gids": gids,
+        "exchanges": exchanges,
+        "mask": mask,
+        "x": x,
+        "mu": mu,
+        "g": g,
+        "gvalid": gvalid,
+        "z": np.stack([p[7] for p in parts]) if with_z else None,  # (G, A, N, M)
+        "alphas": parts[0][8],
+        "x_scale": x_scale,
+        "ti": ti,
+        "vi": vi,
+        "index_hash": hashes.pop(),
+        "rounds_present": present,
+        "n_metabolites": n_met,
+        "ceq": ceq,
+    }
+
+
+def load_value_dataset(
+    labels_dir: Path | str,
+    index_path: Path | str,
+    eps: float = 1e-3,
+    val_frac: float = 0.2,
+    seed: int = 0,
+    organisms: list[str] | None = None,
+    x_scale: np.ndarray | None = None,
+) -> ValueDataset:
+    """Load the labels of ``organisms`` (default: all) into stacked train/val arrays.
+
+    Any number of organisms stacks, one included: the stack is a vmap axis, not a
+    modelling choice, and only the shared-trunk ``deepset`` pools anything across
+    it. Stacking one organism per job is what the sweep does — the split is by
+    ``medium_id`` and the media are identical across organisms, so the held-out
+    set of a one-organism stack is the same media as the full stack's.
+
+    The split is by ``medium_id``, never by row: media are the independent unit.
+    Every shard must carry the same ``index_hash`` (P13) or this raises.
+
+    **The held-out set is drawn from the base design only** — round-0 media, never
+    a §4.6 top-up round. Top-up rounds deliberately sample where the model is
+    worst, so letting them into the validation set makes the *test* harder every
+    round and the gate stops being comparable to its own previous value: the
+    probe-band runs went 491 -> 595 -> 781 usable held-out rows over two rounds,
+    and the cosine they reported fell accordingly. Permuting the round-0 media
+    alone keeps the held-out set byte-identical whether the run has 0 rounds or 3,
+    which is what makes a round-over-round number mean anything. Top-up media all
+    go to training, which is what they were generated for.
+    """
+    d = _stack(labels_dir, index_path, eps, val_frac, seed, organisms, x_scale_pin=x_scale)
+    ti, vi = d["ti"], d["vi"]
+    mu_scale = d["mu"].std(axis=1)
+    mu_scale[mu_scale <= 0] = 1.0
     return ValueDataset(
-        genome_ids=gids,
-        exchanges=exchanges,
-        mask=mask,
-        x_train=x[:, ti],
-        mu_train=mu[:, ti],
-        g_train=g[:, ti],
-        gvalid_train=gvalid[:, ti],
-        x_val=x[:, vi],
-        mu_val=mu[:, vi],
-        g_val=g[:, vi],
-        gvalid_val=gvalid[:, vi],
+        genome_ids=d["gids"],
+        exchanges=d["exchanges"],
+        mask=d["mask"],
+        x_train=d["x"][:, ti],
+        mu_train=d["mu"][:, ti],
+        g_train=d["g"][:, ti],
+        gvalid_train=d["gvalid"][:, ti],
+        x_val=d["x"][:, vi],
+        mu_val=d["mu"][:, vi],
+        g_val=d["g"][:, vi],
+        gvalid_val=d["gvalid"][:, vi],
         mu_scale=mu_scale.astype(np.float32),
-        x_scale=x_scale,
-        index_hash=hashes.pop(),
-        rounds_present=present,
+        x_scale=d["x_scale"],
+        index_hash=d["index_hash"],
+        rounds_present=d["rounds_present"],
+        n_metabolites=d["n_metabolites"],
+        ceq=d["ceq"],
+    )
+
+
+def load_behaviour_dataset(
+    labels_dir: Path | str,
+    index_path: Path | str,
+    eps: float = 1e-3,
+    val_frac: float = 0.2,
+    seed: int = 0,
+    organisms: list[str] | None = None,
+    x_scale: np.ndarray | None = None,
+) -> BehaviourDataset:
+    """Head B labels: ``z_i(c, alpha)`` over the §4.4 alpha grid.
+
+    Same media split and same input transform as :func:`load_value_dataset` — the
+    two heads are evaluated at one medium in §8, so a Head B trained on a different
+    held-out set or a different ``x_scale`` cannot be composed with a Head A.
+
+    The (medium, alpha) pairs are flattened into one row axis. Alpha is a *model
+    input*, not a batch axis: §8.2 evaluates ``z`` at an ``alpha`` off the grid.
+    """
+    d = _stack(
+        labels_dir, index_path, eps, val_frac, seed, organisms, with_z=True, x_scale_pin=x_scale
+    )
+    ti, vi, a = d["ti"], d["vi"], d["alphas"]
+    n_met = d["n_metabolites"]
+    # Head B takes the uptake channel only. §13.11: it needs no architectural
+    # change -- what inhibition adds for it is the *inference* clamp
+    # `z <= Vmax * theta`, beside §3.3's existing `z >= -Vmax * u`. Slicing keeps
+    # its input, its output width and its `x_scale` bit-identical to a plain-FBA
+    # checkpoint, so the P14 composition check compares like with like.
+    x, z = d["x"][:, :, :n_met], d["z"]  # (G, N, M), (G, A, N, M)
+    g, n_a, _, m = z.shape
+
+    # Exchange flux is very nearly proportional to how fast the organism is
+    # growing, and Head A already predicts that accurately. Measured on these
+    # labels: one constant per (metabolite, alpha) times `mu_max` explains a
+    # median 0.807 of the held-out z variance (0.63-0.86 over the 21 organisms),
+    # against the trained head's 0.921 -- i.e. most of what Head B currently
+    # learns is a magnitude Head A knows. Leaving it in the net is what produced
+    # M5's failing cells: at a scarce community medium the head predicted a
+    # replete organism's fluxes (|z| 2780 against a true 1040, cosine 0.40, on an
+    # organism whose held-out p05 is 0.93). So the head predicts *specific* flux
+    # z / mu_max and the magnitude is put back at composition time.
+    #
+    # Floored, because 1% of media have mu_max below 1% of the organism's median
+    # and dividing by those turns the target into noise -- the same trade
+    # `calibrate._W_FLOOR` makes.
+    mu_floor = _MU_FLOOR_FRAC * d["mu"].mean(axis=1)
+    mus = np.maximum(d["mu"], mu_floor[:, None])  # (G, N)
+
+    def flat(idx):
+        # (G, A, |idx|, M) -> (G, A*|idx|, M); alpha and mu broadcast to match.
+        xa = np.broadcast_to(x[:, None, idx, :], (g, n_a, len(idx), m))
+        aa = np.broadcast_to(a[None, :, None], (g, n_a, len(idx)))
+        mm = np.broadcast_to(mus[:, None, idx], (g, n_a, len(idx)))
+        return (
+            xa.reshape(g, -1, m),
+            aa.reshape(g, -1).astype(np.float32),
+            z[:, :, idx, :].reshape(g, -1, m),
+            mm.reshape(g, -1).astype(np.float32),
+        )
+
+    xt, at, zt, mt = flat(ti)
+    xv, av, zv, mv = flat(vi)
+    # Per-(organism, metabolite) scale so the loss is dimensionless and one
+    # high-flux exchange (usually O2 or CO2, O(10) against an ion's O(1e-3)) does
+    # not own the objective. Robust to the ~63% exact zeros: std over the rows
+    # where the organism can exchange it at all, floored. Taken on the *specific*
+    # flux, which is what the head emits.
+    z_scale = (zt / mt[:, :, None]).std(axis=1)
+    z_scale[z_scale <= 0] = 1.0
+    LOGGER.info(
+        "Head B: %d alphas %s, %d train / %d held-out rows per organism",
+        n_a,
+        np.round(a, 3).tolist(),
+        xt.shape[1],
+        xv.shape[1],
+    )
+    return BehaviourDataset(
+        genome_ids=d["gids"],
+        exchanges=list(d["exchanges"])[:n_met],
+        mask=d["mask"][:, :n_met],
+        alphas=a,
+        x_train=xt,
+        a_train=at,
+        z_train=zt,
+        x_val=xv,
+        a_val=av,
+        z_val=zv,
+        mu_train=mt,
+        mu_val=mv,
+        mu_floor=mu_floor.astype(np.float32),
+        z_scale=z_scale.astype(np.float32),
+        x_scale=d["x_scale"][:, :n_met],
+        index_hash=d["index_hash"],
+        rounds_present=d["rounds_present"],
+        n_metabolites=n_met,
+        ceq=d["ceq"],
     )
