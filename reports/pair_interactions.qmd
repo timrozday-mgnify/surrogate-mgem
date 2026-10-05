@@ -1,0 +1,315 @@
+---
+title: "Pair interactions"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    embed-resources: true
+    theme: cosmo
+jupyter: basicpython
+params:
+  run_dir: "."
+---
+
+```{python}
+# | tags: [parameters]
+# | echo: false
+# Overridden by `quarto render ... -P run_dir:/path/to/outdir`.
+run_dir = "."
+```
+
+```{python}
+# | echo: false
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from IPython.display import HTML, Markdown, display
+from plotly.offline import get_plotlyjs
+
+display(HTML(f"<script>{get_plotlyjs()}</script>"))  # once, not per figure
+RUN = Path(run_dir).expanduser().resolve()
+PAL = px.colors.qualitative.Safe
+
+
+def show(fig, height=450, **kw):
+    fig.update_layout(height=height, margin=dict(l=60, r=20, t=50, b=50),
+                      legend=dict(orientation="h", y=-0.2), **kw)
+    display(HTML(fig.to_html(include_plotlyjs=False, full_html=False, default_width="100%")))
+
+
+def md(text):
+    display(Markdown(text))
+
+
+def table(df, **kw):
+    display(HTML(df.to_html(index=False, float_format=lambda v: f"{v:.4g}", **kw)))
+
+
+runs = {}
+for d in sorted((RUN / "runs").glob("*/")):
+    if (d / "interactions.json").stat().st_size:
+        runs[d.name] = dict(meta=json.loads((d / "run.json").read_text()),
+                            cell=json.loads((d / "interactions.json").read_text())["cells"][0])
+gids = next(iter(runs.values()))["cell"]["community"]
+own = {r: ("fba" if v["meta"]["ceq"] is None else f"ceq={v['meta']['ceq']}") for r, v in runs.items()}
+cx = {k: pd.read_csv(RUN / "crosseval" / f"{k}.csv") if (RUN / "crosseval" / f"{k}.csv").stat().st_size > 1
+      else pd.DataFrame() for k in ("media", "links", "spent")}
+md(f"Pair **{gids[0]} + {gids[1]}**, {len(runs)} runs from `{RUN}`.")
+```
+
+## How to read this
+
+Each run is one `cfs interactions` search (design spec §13.5) for one **arm** (the
+model: plain FBA, or FBA with thermodynamic product inhibition at a given `c^eq`),
+one **objective**, and one medium-draw **seed**:
+
+- **handover** maximises `E = Σ_m min(secretion, uptake)`: mass one member makes
+  and the other takes up. Positive interaction only.
+- **interference** maximises the growth-rate loss each member suffers from its
+  partner at the same medium: competition plus product inhibition.
+- **conditioning** (inhibited arms only) looks for media where a partner's
+  *products* hurt growth, with what it consumed put back.
+
+The search proposes with the surrogate and accepts with the true LP, so every
+"true" number is an LP solve; every "hat" number is the surrogate. Abundances are
+uniform (`X = 1` each), so rates are per unit biomass and are capacities of the
+medium, not predictions of an assembled community. Growth rates use the GEMs'
+`|Vmax| = 1000` uptake bounds and are ~30× physiological (CLAUDE.md, "Per-organism
+`Vmax`"); compare them with each other, not with a stopwatch.
+
+## Run overview
+
+```{python}
+rows = []
+for r, v in runs.items():
+    c, m = v["cell"], v["meta"]
+    rows.append(dict(run=r, arm=m["arm"], objective=m["objective"], seed=m["seed"],
+                     E_true_designed=c.get("E_true_designed"), E_true_best_draw=c.get("E_true_best_draw"),
+                     gain_rel=c.get("true_gain_rel"), obj_gain=c.get("obj_gain"),
+                     links_true=c.get("n_links_true"), links_hat=c.get("n_links_hat"),
+                     magnitude_ratio=c.get("magnitude_ratio"),
+                     draw_rank_rho=c.get("draw_rank_spearman"), obj_rank_rho=c.get("obj_rank_spearman")))
+ov = pd.DataFrame(rows)
+trace = RUN / "trace.tsv"
+if trace.exists():
+    tr = pd.read_csv(trace, sep="\t")
+    ov = ov.merge(tr[["tag", "realtime", "peak_rss"]].rename(columns={"tag": "run"}), on="run", how="left")
+table(ov)
+```
+
+```{python}
+fig = px.strip(ov, x="objective", y="E_true_designed", color="arm", hover_data=["seed", "run"],
+               color_discrete_sequence=PAL, stripmode="overlay",
+               labels={"E_true_designed": "E at the designed medium (true LP)"},
+               title="Designed handover rate per run: the spread across seeds is the search noise")
+show(fig)
+```
+
+## What the pair can exchange
+
+The survey: over every random medium a run drew, which metabolites the
+**surrogate** says one member secretes and the other takes up, and how fast. It
+is a map of candidates, not of facts — the surrogate orders media for `E` with the
+rank correlation in the overview's `draw_rank_rho` column, and the LP-checked
+links are in the next sections.
+
+```{python}
+surv = pd.DataFrame([dict(arm=v["meta"]["arm"], run=r, **x)
+                     for r, v in runs.items() for x in v["cell"]["reachable"]])
+agg = (surv.groupby(["arm", "metabolite"])
+       .agg(max_rate=("max_rate", "max"), frac_media=("frac_media", "mean"),
+            median_rate=("median_rate_when_present", "median")).reset_index())
+top = agg.groupby("metabolite")["max_rate"].max().nlargest(30).index
+fig = px.bar(agg[agg.metabolite.isin(top)], x="metabolite", y="max_rate", color="arm", barmode="group",
+             hover_data=["frac_media", "median_rate"], log_y=True, color_discrete_sequence=PAL,
+             category_orders={"metabolite": list(top)},
+             title="Top 30 reachable handovers (surrogate, max over drawn media)")
+show(fig, height=500)
+```
+
+```{python}
+cand = []
+for r, v in runs.items():
+    ci = v["cell"]["candidates_true_interactive"]
+    cand += [dict(run=r, metabolite=m, realised=1) for m in ci["interactive"]]
+    cand += [dict(run=r, metabolite=m, realised=0) for m in ci["missed"]]
+cand = pd.DataFrame(cand).pivot_table(index="run", columns="metabolite", values="realised")
+fig = px.imshow(cand, color_continuous_scale=["#dddddd", "#117733"], aspect="auto",
+                title="Candidate handovers from the labels: realised by the true LP at any start (green) or not")
+fig.update_coloraxes(showscale=False)
+show(fig, height=120 + 25 * len(cand))
+```
+
+## The interactions at the designed media (true LP)
+
+Every run's best designed medium, re-solved with its own model. A link is a
+metabolite secreted by one member and taken up by the other; its rate is
+`min(secretion, uptake)` in mmol/gDW/h at unit biomass.
+
+```{python}
+L = cx["links"]
+if L.empty:
+    md("_No cross-evaluation tables in this run dir._")
+else:
+    L = L[L.medium.eq("design")].copy()
+    L["own"] = [own.get(r) == m for r, m in zip(L.run, L.model, strict=True)]
+    a, b = (f"z:{g}" for g in gids)
+    L["direction"] = np.where(L[a] > 0, f"{gids[0]} → {gids[1]}", f"{gids[1]} → {gids[0]}")
+    best_own = L[L.best & L.own]
+    cons = (best_own.groupby(["metabolite", "direction"])
+            .agg(n_runs=("run", "nunique"), arms=("arm", lambda s: ", ".join(sorted(set(s)))),
+                 objectives=("objective", lambda s: ", ".join(sorted(set(s)))),
+                 max_rate=("rate", "max"), median_rate=("rate", "median"))
+            .reset_index().sort_values(["n_runs", "max_rate"], ascending=False))
+    md(f"**{len(cons)} distinct links** across the {best_own.run.nunique()} best designs. "
+       "`n_runs` counts how many independent searches landed on a medium where the link exists — "
+       "the reproducible ones are the ones to believe.")
+    table(cons)
+```
+
+```{python}
+if not L.empty:
+    names = sorted(best_own.run.unique())
+    fig = go.Figure()
+    for i, r in enumerate(names):
+        d = best_own[best_own.run.eq(r)]
+        mets = list(d.metabolite)
+        nodes = list(gids) + mets + [f"{g} " for g in gids]  # donors | metabolites | recipients
+        src, tgt, val = [], [], []
+        for j, (za, rate) in enumerate(zip(d[a], d.rate, strict=True)):
+            don = 0 if za > 0 else 1  # the member secreting it
+            src += [don, 2 + j]
+            tgt += [2 + j, 2 + len(mets) + (1 - don)]
+            val += [rate, rate]
+        fig.add_trace(go.Sankey(visible=i == 0, node=dict(label=nodes, pad=12),
+                                link=dict(source=src, target=tgt, value=val)))
+    fig.update_layout(updatemenus=[dict(
+        x=1, y=1.15, xanchor="right",
+        buttons=[dict(label=r, method="update",
+                      args=[{"visible": [k == i for k in range(len(names))]}, {"title": r}])
+                 for i, r in enumerate(names)])], title=names[0])
+    show(fig, height=550)
+```
+
+### Which metabolites the designs moved
+
+```{python}
+ch = pd.DataFrame([dict(run=r, metabolite=x["metabolite"], log10_fold=x["log10_fold"])
+                   for r, v in runs.items()
+                   for d in v["cell"]["designs"] if d.get("E_hat") == v["cell"]["E_designed"]
+                   for x in d.get("changed", [])])
+if ch.empty:
+    md("_No design moved the medium._")
+else:
+    keep = ch.groupby("metabolite")["log10_fold"].apply(lambda s: s.abs().max()).nlargest(30).index
+    hm = ch[ch.metabolite.isin(keep)].pivot_table(index="run", columns="metabolite", values="log10_fold")
+    fig = px.imshow(hm, color_continuous_scale="RdBu", color_continuous_midpoint=0, aspect="auto",
+                    title="log10(designed / start concentration), best design per run")
+    show(fig, height=150 + 25 * len(hm))
+```
+
+## Same medium, both models
+
+The fixed-medium comparison: every start and designed medium of every run, scored
+under plain FBA and under inhibition with the true LP. Points off the diagonal
+are where product inhibition changes the interaction *at that medium*; it can go
+up as well as down, because `E` is not what the LP maximises.
+
+```{python}
+M = cx["media"]
+if not M.empty and M.model.nunique() > 1:
+    w = M.pivot_table(index=["run", "arm", "objective", "design", "best", "medium"],
+                      columns="model", values="E_true").reset_index()
+    other = [m for m in M.model.unique() if m != "fba"]
+    for m in other:
+        fig = px.scatter(w, x="fba", y=m, color="arm", symbol="medium", hover_data=["run", "design", "best"],
+                         color_discrete_sequence=PAL, labels={"fba": "E under FBA", m: f"E under {m}"},
+                         title=f"Handover rate at the same medium: FBA vs {m}")
+        hi = float(np.nanmax(w[["fba", m]].to_numpy())) or 1.0
+        fig.add_shape(type="line", x0=0, y0=0, x1=hi, y1=hi, line=dict(dash="dot", color="grey"))
+        show(fig)
+    mus = [c for c in M.columns if c.startswith("mu:")]
+    g = M.melt(id_vars=["run", "arm", "design", "medium", "model"], value_vars=mus,
+               var_name="member", value_name="mu")
+    g = g.pivot_table(index=["run", "arm", "design", "medium", "member"], columns="model",
+                      values="mu").reset_index()
+    for m in other:
+        fig = px.scatter(g, x="fba", y=m, color="member", symbol="arm", hover_data=["run", "medium"],
+                         color_discrete_sequence=PAL, title=f"Growth rate per member: FBA vs {m}")
+        show(fig)
+```
+
+## Who suppresses whom
+
+The spent-medium assay at each run's best design: grow the donor alone, then grow
+the recipient on what is left, against the fresh medium. The change splits into
+**depletion** (the donor ate what the recipient needed: competition) and
+**conditioning** (what the donor secreted hurts the recipient, with the eaten part
+put back: product inhibition). Under plain FBA conditioning is ≥ 0 by
+construction. Values are growth-rate changes per hour over a short step, shown on
+an `asinh` axis because they span many decades; hover for the raw number.
+
+```{python}
+S = cx["spent"]
+if S.empty:
+    md("_No spent-medium results._")
+else:
+    S = S.assign(pair=S.donor + " → " + S.recipient)
+    s = S.melt(id_vars=["run", "model", "pair"], value_vars=["depletion_per_h", "conditioning_per_h"],
+               var_name="term", value_name="per_h")
+    s["asinh"] = np.arcsinh(s.per_h)
+    fig = px.strip(s, x="pair", y="asinh", color="term", facet_col="model", hover_data=["run", "per_h"],
+                   color_discrete_sequence=PAL, stripmode="group",
+                   labels={"asinh": "asinh(Δμ per h)"}, title="Directional interference at the designed media")
+    show(fig, height=500)
+```
+
+## Diagnostics
+
+**Surrogate vs truth, link by link.** Each point is one metabolite at one best
+design: the surrogate's handover rate against the LP's. Head B's magnitude is its
+weakest axis (P22), so expect scatter in the rate even where the link itself is
+right; links on the x-axis floor are ones the surrogate proposed and the LP does
+not have.
+
+```{python}
+lk = pd.DataFrame([dict(run=r, arm=v["meta"]["arm"], objective=v["meta"]["objective"],
+                        metabolite=x["metabolite"], rate_hat=x["rate"], rate_true=x["rate_true"])
+                   for r, v in runs.items() for x in v["cell"]["links_at_best_design"]])
+floor = 1e-3
+lk["rate_true_plot"] = lk.rate_true.clip(lower=floor)
+lk["rate_hat_plot"] = lk.rate_hat.clip(lower=floor)
+fig = px.scatter(lk, x="rate_hat_plot", y="rate_true_plot", color="arm", symbol="objective",
+                 hover_data=["run", "metabolite", "rate_hat", "rate_true"], log_x=True, log_y=True,
+                 color_discrete_sequence=PAL, labels={"rate_hat_plot": "surrogate", "rate_true_plot": "true LP"},
+                 title=f"Link rates at the best designs (floored at {floor})")
+hi = max(lk.rate_hat_plot.max(), lk.rate_true_plot.max())
+fig.add_shape(type="line", x0=floor, y0=floor, x1=hi, y1=hi, line=dict(dash="dot", color="grey"))
+show(fig)
+```
+
+```{python}
+d = ov.melt(id_vars=["run", "arm", "objective"], value_vars=["draw_rank_rho", "obj_rank_rho", "magnitude_ratio"])
+fig = px.scatter(d, x="variable", y="value", color="arm", symbol="objective", hover_data=["run"],
+               color_discrete_sequence=PAL,
+               title="Can the surrogate rank media? (rank ρ near 0: only the LP-screened search is worth reading)")
+show(fig)
+md("`draw_rank_rho`: Spearman(surrogate E, true E) over the drawn media; `obj_rank_rho` the same for the "
+   "run's own objective; `magnitude_ratio`: surrogate E / true E at the designed medium (1 = exact; "
+   "CLAUDE.md measured 0.45-1.88 for handovers).")
+```
+
+```{python}
+if trace.exists():
+    t = tr.copy()
+    t["minutes"] = pd.to_timedelta(t.realtime.str.replace(r"(\d)([hms])", r"\1\2 ", regex=True)
+                                   .str.strip(), errors="coerce").dt.total_seconds() / 60
+    fig = px.bar(t, x="tag", y="minutes", color="status", hover_data=["peak_rss", "exit"],
+                 title="Task wall time (trace.tsv)")
+    show(fig, height=380)
+```

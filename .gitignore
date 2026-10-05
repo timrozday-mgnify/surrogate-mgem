@@ -40,3 +40,9 @@ rendered_reports/
 results/
 .serena/
 runinfo.csv
+
+# pair-interactions inputs/outputs
+workflows/pair-interactions/hpc.config
+pair-data/
+pair-results/
+results-test/

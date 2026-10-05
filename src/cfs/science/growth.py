@@ -118,8 +118,13 @@ def trust_box(sur, c0: np.ndarray, k: int, decades: float) -> tuple[np.ndarray, 
 
 
 def _c_of_x(sur, k: int, x: np.ndarray) -> np.ndarray:
-    """Invert ``x = u/(u+s)``, ``u = c/(Km+c)``."""
-    u = np.minimum(sur.x_scale[k] * x / (1.0 - x), 1.0 - 1e-12)
+    """Invert ``x = u/(u+s)``, ``u = c/(Km+c)``.
+
+    ``x`` is the ``u`` half of the input; an inhibited head's ``x_scale`` also
+    carries the ``theta`` half (§13.11), which this inverse must not read.
+    """
+    s = sur.x_scale[k][: len(x)]
+    u = np.minimum(s * x / (1.0 - x), 1.0 - 1e-12)
     return sur.km * u / (1.0 - u)
 
 

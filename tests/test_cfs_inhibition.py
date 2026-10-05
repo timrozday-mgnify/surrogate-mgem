@@ -183,3 +183,18 @@ def test_mm_upper_bound_is_affine_below_equilibrium_and_clipped_above():
         assert mm_upper_bound(VMAX, c, CEQ) == pytest.approx(VMAX * (1 - c / CEQ))
     assert mm_upper_bound(VMAX, CEQ, CEQ) == 0.0
     assert mm_upper_bound(VMAX, 10 * CEQ, CEQ) == 0.0
+
+
+def test_c_of_x_reads_the_u_half_of_an_inhibited_x_scale():
+    """`_c_of_x` inverts the u half; an inhibited head's x_scale is (u, theta)-long."""
+    from types import SimpleNamespace
+
+    from cfs.science.growth import _c_of_x
+
+    km = np.array([1e-3, 1e-2])
+    s = np.array([[0.1, 0.2, 1.0, 1.0]])  # u half, then theta half
+    c = np.array([2e-3, 5e-3])
+    u = c / (km + c)
+    x = u / (u + s[0, :2])
+    sur = SimpleNamespace(x_scale=s, km=km)
+    np.testing.assert_allclose(_c_of_x(sur, 0, x), c, rtol=1e-9)
