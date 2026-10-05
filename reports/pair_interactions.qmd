@@ -58,7 +58,7 @@ for d in sorted((RUN / "runs").glob("*/")):
 gids = next(iter(runs.values()))["cell"]["community"]
 own = {r: ("fba" if v["meta"]["ceq"] is None else f"ceq={v['meta']['ceq']}") for r, v in runs.items()}
 cx = {k: pd.read_csv(RUN / "crosseval" / f"{k}.csv") if (RUN / "crosseval" / f"{k}.csv").exists() and (RUN / "crosseval" / f"{k}.csv").stat().st_size > 1
-      else pd.DataFrame() for k in ("media", "links", "spent", "revert")}
+      else pd.DataFrame() for k in ("media", "links", "spent", "revert", "fluxes")}
 md(f"Pair **{gids[0]} + {gids[1]}**, {len(runs)} runs from `{RUN}`.")
 ```
 
@@ -112,24 +112,76 @@ show(fig)
 
 ## What the pair can exchange
 
-The survey: over every random medium a run drew, which metabolites the
-**surrogate** says one member secretes and the other takes up, and how fast. It
-is a map of candidates, not of facts — the surrogate orders media for `E` with the
-rank correlation in the overview's `draw_rank_rho` column, and the LP-checked
-links are in the next sections.
+Every medium a run screened (its random draws plus the candidate media built to
+open each possible handover) was solved with the **true LP**, one solve per
+member. A handover is a metabolite one member secretes and the other takes up at
+the same medium; its rate is `min(secreted, taken up)`, in mmol/gDW/h at equal
+biomass. Identical media screened by several runs are counted once.
 
 ```{python}
-surv = pd.DataFrame([dict(arm=v["meta"]["arm"], run=r, **x)
-                     for r, v in runs.items() for x in v["cell"]["reachable"]])
-agg = (surv.groupby(["arm", "metabolite"])
-       .agg(max_rate=("max_rate", "max"), frac_media=("frac_media", "mean"),
-            median_rate=("median_rate_when_present", "median")).reset_index())
-top = agg.groupby("metabolite")["max_rate"].max().nlargest(30).index
-fig = px.bar(agg[agg.metabolite.isin(top)], x="metabolite", y="max_rate", color="arm", barmode="group",
-             hover_data=["frac_media", "median_rate"], log_y=True, color_discrete_sequence=PAL,
-             category_orders={"metabolite": list(top)},
-             title="Top 30 reachable handovers (surrogate, max over drawn media)")
-show(fig, height=500)
+BUF = {"EX_h_e", "EX_h2o_e"}  # buffered by the vessel, never interactions
+
+
+def nm(m):
+    return m.removeprefix("EX_").removesuffix("_e")
+
+
+pools = {}
+for r, v in runs.items():
+    z = np.load(RUN / "runs" / r / "media.npz", allow_pickle=True)
+    if "pool_c" not in z or "pool_z_true_0" not in z:
+        continue
+    pools[r] = dict(
+        c=z["pool_c"], variant=z["pool_variant"], target=z["pool_metabolite"],
+        Z=z["pool_z_true_0"], ex=[str(x) for x in z["exchanges"]],
+        starts=[int(d["start_draw"]) for d in v["cell"]["designs"]], c_design=z["c_design"],
+    )
+
+
+def handovers(Z, ex):
+    """[(metabolite, producer, consumer, secreted, taken up, rate)] at one medium."""
+    out = []
+    sec, upt = np.clip(Z, 0, None), np.clip(-Z, 0, None)
+    rate = np.minimum(sec.sum(0), upt.sum(0))
+    for j in np.flatnonzero(rate > 1e-6):
+        if ex[j] in BUF:
+            continue
+        p, q = int(np.argmax(sec[:, j])), int(np.argmax(upt[:, j]))
+        out.append((ex[j], gids[p], gids[q], sec[p, j], upt[q, j], rate[j]))
+    return out
+
+
+if not pools:
+    md("_These runs predate the saved screening pool; re-run INTERACTIONS to get the true-LP survey._")
+else:
+    rows, seen = [], set()
+    for r, p in pools.items():
+        arm = runs[r]["meta"]["arm"]
+        for i in range(len(p["c"])):
+            key = (arm, p["c"][i].round(12).tobytes())
+            if key in seen:
+                continue
+            seen.add(key)
+            for m, a, b, s, u, e in handovers(p["Z"][i], p["ex"]):
+                rows.append(dict(arm=arm, medium=len(seen), metabolite=nm(m), producer=a, consumer=b,
+                                 secreted=s, taken_up=u, rate=e))
+    SV = pd.DataFrame(rows)
+    n_media = pd.Series([k[0] for k in seen]).value_counts()
+    sv = (SV.groupby(["arm", "metabolite", "producer", "consumer"])
+          .agg(media=("medium", "nunique"), median_rate=("rate", "median"), max_rate=("rate", "max"))
+          .reset_index())
+    sv["pct_media"] = 100 * sv.media / sv.arm.map(n_media)
+    sv["link"] = sv.metabolite + ":  " + sv.producer + " → " + sv.consumer
+    md("Screened media per arm: " + ", ".join(f"**{a}** {n}" for a, n in n_media.items()) + ".")
+    top = sv.groupby("link").pct_media.max().nlargest(30).index[::-1]
+    fig = px.bar(sv[sv.link.isin(top)], y="link", x="pct_media", color="arm", barmode="group",
+                 orientation="h", color_discrete_sequence=PAL, category_orders={"link": list(top)},
+                 hover_data=["media", "median_rate", "max_rate"],
+                 labels={"pct_media": "% of screened media where it happens", "link": ""},
+                 title="How often each handover happens (true LP, every screened medium)")
+    show(fig, height=200 + 22 * len(top))
+    table(sv.sort_values(["arm", "pct_media"], ascending=[True, False])
+          [["arm", "metabolite", "producer", "consumer", "media", "pct_media", "median_rate", "max_rate"]])
 ```
 
 ```{python}
@@ -140,60 +192,106 @@ for r, v in runs.items():
     cand += [dict(run=r, metabolite=m, realised=0) for m in ci["missed"]]
 cand = pd.DataFrame(cand).pivot_table(index="run", columns="metabolite", values="realised")
 fig = px.imshow(cand, color_continuous_scale=["#dddddd", "#117733"], aspect="auto",
-                title="Candidate handovers from the labels: realised by the true LP at any start (green) or not")
+                title="Candidate handovers proposed from the labels: realised by the true LP at any screened medium (green)")
 fig.update_coloraxes(showscale=False)
 show(fig, height=120 + 25 * len(cand))
 ```
 
-## The interactions at the designed media (true LP)
+## The interactions at the designed media
 
-Every run's best designed medium, re-solved with its own model. A link is a
-metabolite secreted by one member and taken up by the other; its rate is
-`min(secretion, uptake)` in mmol/gDW/h at unit biomass.
+Each run's best designed medium, solved with the true LP under the run's own model.
+`share of E` is that metabolite's fraction of the total handover rate `E`.
 
 ```{python}
-L = cx["links"]
-if L.empty:
-    md("_No cross-evaluation tables in this run dir._")
+FX = cx["fluxes"]
+if FX.empty:
+    md("_No `fluxes.csv`: re-run CROSSEVAL with this version of the pipeline._")
 else:
-    L = L[L.medium.eq("design")].copy()
-    L["own"] = [own.get(r) == m for r, m in zip(L.run, L.model, strict=True)]
-    a, b = (f"z:{g}" for g in gids)
-    L["direction"] = np.where(L[a] > 0, f"{gids[0]} → {gids[1]}", f"{gids[1]} → {gids[0]}")
-    best_own = L[L.best & L.own]
-    cons = (best_own.groupby(["metabolite", "direction"])
-            .agg(n_runs=("run", "nunique"), arms=("arm", lambda s: ", ".join(sorted(set(s)))),
-                 objectives=("objective", lambda s: ", ".join(sorted(set(s)))),
-                 max_rate=("rate", "max"), median_rate=("rate", "median"))
-            .reset_index().sort_values(["n_runs", "max_rate"], ascending=False))
-    md(f"**{len(cons)} distinct links** across the {best_own.run.nunique()} best designs. "
-       "`n_runs` counts how many independent searches landed on a medium where the link exists — "
-       "the reproducible ones are the ones to believe.")
+    FX["own"] = [own.get(r) == m for r, m in zip(FX.run, FX.model, strict=True)]
+    FX["label"] = FX.metabolite.map(nm)
+    D = FX[FX.own & FX.best & FX.medium.eq("design")]
+    H = D[D.handover > 1e-6]
+    E_run = H.drop_duplicates(["run", "metabolite"]).groupby("run").handover.sum()
+    p = H.pivot_table(index=["run", "arm", "objective", "metabolite", "handover"],
+                      columns="member", values="z").reset_index()
+    p["producer"] = np.where(p[gids[0]] > 0, gids[0], gids[1])
+    p["consumer"] = np.where(p[gids[0]] > 0, gids[1], gids[0])
+    p["secreted"] = p[gids].max(axis=1)
+    p["taken_up"] = -p[gids].min(axis=1)
+    p["share"] = p.handover / p.run.map(E_run)
+    cons = (p.groupby(["metabolite", "producer", "consumer"])
+            .agg(runs=("run", "nunique"), arms=("arm", lambda s: ", ".join(sorted(set(s)))),
+                 secreted=("secreted", "median"), taken_up=("taken_up", "median"),
+                 handover=("handover", "median"), share_of_E=("share", "median"))
+            .reset_index().sort_values(["runs", "handover"], ascending=False))
+    cons["metabolite"] = cons.metabolite.map(nm)
+    cons["share_of_E"] = (100 * cons.share_of_E).round(1).astype(str) + "%"
+    md(f"**Handovers at the {p.run.nunique()} designed media** (medians over the runs where each occurs; "
+       "`secreted` / `taken_up` are the producer's and consumer's own fluxes, so the handover is capped "
+       "by the smaller):")
     table(cons)
 ```
 
 ```{python}
-if not L.empty:
-    names = sorted(best_own.run.unique())
+def member_bars(frames, xlabel, hover_extra):
+    """One diverging bar chart per run (dropdown): secretion right, uptake left, one bar per member."""
+    names = list(frames)
     fig = go.Figure()
     for i, r in enumerate(names):
-        d = best_own[best_own.run.eq(r)]
-        mets = list(d.metabolite)
-        nodes = list(gids) + mets + [f"{g} " for g in gids]  # donors | metabolites | recipients
-        src, tgt, val = [], [], []
-        for j, (za, rate) in enumerate(zip(d[a], d.rate, strict=True)):
-            don = 0 if za > 0 else 1  # the member secreting it
-            src += [don, 2 + j]
-            tgt += [2 + j, 2 + len(mets) + (1 - don)]
-            val += [rate, rate]
-        fig.add_trace(go.Sankey(visible=i == 0, node=dict(label=nodes, pad=12),
-                                link=dict(source=src, target=tgt, value=val)))
-    fig.update_layout(updatemenus=[dict(
-        x=1, y=1.15, xanchor="right",
-        buttons=[dict(label=r, method="update",
-                      args=[{"visible": [k == i for k in range(len(names))]}, {"title": r}])
-                 for i, r in enumerate(names)])], title=names[0])
-    show(fig, height=550)
+        d = frames[r]
+        for k, g in enumerate(gids):
+            dd = d[d.member.eq(g)]
+            fig.add_trace(go.Bar(
+                y=dd.ylab, x=dd.z, orientation="h", name=g, legendgroup=g, visible=i == 0,
+                showlegend=True, marker_color=PAL[k], customdata=dd[hover_extra].to_numpy(),
+                hovertemplate=f"{g}<br>%{{y}}<br>flux %{{x:.4g}} mmol/gDW/h"
+                              + "".join(f"<br>{h} %{{customdata[{n}]:.4g}}" for n, h in enumerate(hover_extra))
+                              + "<extra></extra>"))
+    cats = {r: list(frames[r].sort_values("order").ylab.unique()) for r in names}
+    tr = len(gids)
+    fig.update_layout(
+        barmode="group", xaxis_title=xlabel, title=names[0],
+        yaxis=dict(categoryorder="array", categoryarray=cats[names[0]]),
+        updatemenus=[dict(x=1, y=1.12, xanchor="right", buttons=[
+            dict(label=r, method="update",
+                 args=[{"visible": [k // tr == i for k in range(tr * len(names))]},
+                       {"title.text": r, "yaxis.categoryarray": cats[r]}])
+            for i, r in enumerate(names)])])
+    fig.add_vline(x=0, line_color="grey")
+    return fig, max(len(c) for c in cats.values())
+
+
+if not FX.empty:
+    fr = {}
+    for r, d in H.groupby("run"):
+        d = d.assign(share=d.handover / E_run[r])
+        d["ylab"] = (d.label + ": handover " + d.handover.map("{:.3g}".format)
+                     + " (" + (100 * d.share).round(1).astype(str) + "% of E)")
+        d["order"] = d.handover  # categoryarray is bottom-up, so the largest ends on top
+        fr[r] = d
+    fig, n = member_bars(fr, "← taken up      flux (mmol/gDW/h)      secreted →", ["handover", "share"])
+    md("**Who makes and who takes each handed-over metabolite**, per run (pick it from the menu). "
+       "Bars to the right are secretion, to the left uptake; the handover is the smaller of the two, "
+       "and its rate is in the label.")
+    show(fig, height=180 + 40 * n)
+```
+
+```{python}
+if not FX.empty:
+    fr = {}
+    for r, d in D.groupby("run"):
+        mx = d.groupby("metabolite").z.apply(lambda s: s.abs().max())
+        keep_m = set(mx.nlargest(30).index) | set(d.metabolite[d.handover > 1e-6])
+        d = d[d.metabolite.isin(keep_m)].copy()
+        d["ylab"] = np.where(d.handover > 1e-6, "⇄ ", "") + d.label
+        d["order"] = d.metabolite.map(mx)
+        d["growth"] = d.mu
+        fr[r] = d
+    fig, n = member_bars(fr, "← taken up      flux (mmol/gDW/h)      secreted →", ["handover", "growth"])
+    md("**Each member's whole exchange with the medium** at the designed medium: the 30 largest fluxes "
+       "plus every handover (`⇄`). This is what each member eats and what it releases, whether or not "
+       "the partner uses it. Hover shows the member's growth rate `μ` (1/h).")
+    show(fig, height=180 + 22 * n)
 ```
 
 ### What the designs are made of
@@ -234,6 +332,72 @@ else:
         fig.update_layout(title="Contribution of each move to E (moves changing E by >1% in any run; "
                                 "blank = not moved in that run)")
         show(fig, height=150 + 25 * len(hm))
+```
+
+## The candidate and designed media
+
+The composition of every medium a run screened, plus its refined designs at the
+bottom (pick the run from the menu). Rows are media: `draw` is a random medium;
+`uptake`, `uptake+secretion`, `box`, `conditioning@…` etc. are candidate media
+built to open a handover of the named metabolite. `★` marks the starts the
+search refined. Columns are the candidate targets plus the metabolites whose
+concentration varies most across these media (60 at most); the colour is log10
+concentration (mM), blank where the metabolite is absent. Every metabolite of every
+medium is in `crosseval/media_composition.csv.gz`. The bar on the right is the
+total handover rate `E` the true LP finds at that medium; hover it for the
+largest handovers.
+
+```{python}
+from plotly.subplots import make_subplots
+
+if pools:
+    M_ = cx["media"]
+    names = list(pools)
+    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, column_widths=[0.86, 0.14],
+                        horizontal_spacing=0.01)
+    cats, nrows = {}, 0
+    for i, r in enumerate(names):
+        p = pools[r]
+        keep_x = np.array([e not in BUF for e in p["ex"]])
+        C = np.vstack([p["c"], p["c_design"]])
+        lab = [f"#{k} {v}" + (f": {nm(t)}" if t else "") + (" ★" if k in p["starts"] else "")
+               for k, (v, t) in enumerate(zip(p["variant"], p["target"], strict=True))]
+        lab += [f"design {k} ← #{s}" for k, s in enumerate(p["starts"])]
+        with np.errstate(divide="ignore"):
+            L10 = np.where(C > 0, np.log10(C), np.nan)  # absent = blank, not a colour
+        rng = np.nanmax(L10, 0) - np.nanmin(L10, 0) + np.isnan(L10).any(0) * 10.0
+        cols = [j for j in np.argsort(-rng) if keep_x[j] and rng[j] > 0.1]
+        tgt = {t for t in p["target"] if t}
+        cols = ([j for j in cols if p["ex"][j] in tgt]
+                + [j for j in cols if p["ex"][j] not in tgt][: max(0, 60 - len(tgt))])
+        e_pool, top = [], []
+        for k in range(len(p["c"])):
+            h = sorted(handovers(p["Z"][k], p["ex"]), key=lambda x: -x[5])
+            e_pool.append(sum(x[5] for x in h))
+            top.append("<br>".join(f"{nm(m)} {a}→{b} {e:.3g}" for m, a, b, _, _, e in h[:4]) or "none")
+        own_d = M_[M_.run.eq(r) & M_.medium.eq("design") & M_.model.eq(own[r])] if not M_.empty else M_
+        e_des = [float(own_d.loc[own_d.design.eq(k), "E_true"].iloc[0]) if len(own_d) else np.nan
+                 for k in range(len(p["starts"]))]
+        e_all = e_pool + e_des
+        top += ["(design)"] * len(e_des)
+        fig.add_trace(go.Heatmap(z=L10[:, cols], x=[nm(p["ex"][j]) for j in cols], y=lab, visible=i == 0,
+                                 colorscale="Viridis", colorbar=dict(title="log10 c", x=1.02),
+                                 hovertemplate="%{y}<br>%{x}<br>log10 c = %{z:.2f}<extra></extra>"),
+                      row=1, col=1)
+        fig.add_trace(go.Bar(y=lab, x=e_all, orientation="h", visible=i == 0, customdata=top,
+                             marker_color=["#888888"] * len(e_pool) + ["#CC6677"] * len(e_des),
+                             showlegend=False,
+                             hovertemplate="%{y}<br>E = %{x:.4g}<br>%{customdata}<extra></extra>"),
+                      row=1, col=2)
+        nrows = max(nrows, len(lab))
+    fig.update_layout(
+        title=names[0], xaxis2_title="E (true LP)", yaxis=dict(autorange="reversed", tickfont=dict(size=8)),
+        updatemenus=[dict(x=1, y=1.0, yanchor="bottom", xanchor="right", buttons=[
+            dict(label=r, method="update",
+                 args=[{"visible": [k // 2 == i for k in range(2 * len(names))]}, {"title.text": r}])
+            for i, r in enumerate(names)])])
+    fig.update_xaxes(tickfont=dict(size=8), row=1, col=1)
+    show(fig, height=max(500, 140 + 9 * nrows))
 ```
 
 ## Same medium, both models
@@ -314,6 +478,24 @@ fig = px.scatter(lk, x="rate_hat_plot", y="rate_true_plot", color="arm", symbol=
 hi = max(lk.rate_hat_plot.max(), lk.rate_true_plot.max())
 fig.add_shape(type="line", x0=floor, y0=floor, x1=hi, y1=hi, line=dict(dash="dot", color="grey"))
 show(fig)
+```
+
+**The surrogate's own survey**, for comparison with the true-LP one above: what
+the surrogate *thinks* the pair can exchange over the drawn media. Where it
+disagrees with the true-LP survey, believe the LP.
+
+```{python}
+surv = pd.DataFrame([dict(arm=v["meta"]["arm"], run=r, **x)
+                     for r, v in runs.items() for x in v["cell"]["reachable"]])
+agg = (surv.groupby(["arm", "metabolite"])
+       .agg(max_rate=("max_rate", "max"), frac_media=("frac_media", "mean"),
+            median_rate=("median_rate_when_present", "median")).reset_index())
+top = agg.groupby("metabolite")["max_rate"].max().nlargest(30).index
+fig = px.bar(agg[agg.metabolite.isin(top)], x="metabolite", y="max_rate", color="arm", barmode="group",
+             hover_data=["frac_media", "median_rate"], log_y=True, color_discrete_sequence=PAL,
+             category_orders={"metabolite": list(top)},
+             title="Top 30 reachable handovers (surrogate, max over drawn media)")
+show(fig, height=500)
 ```
 
 ```{python}

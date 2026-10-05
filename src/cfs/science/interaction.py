@@ -1515,7 +1515,7 @@ def run(
 
         roster = {gm.genome_id: gm for gm in read_roster(Path(roster_path))}
 
-    cells, saved = [], []
+    cells, saved, pools = [], [], []
     for n, gids in enumerate(communities):
         sur = Surrogate(value_dir, behaviour_dir, organisms=gids)
         # Loaded per community and dropped, not cached across them: a CarveMe GEM
@@ -1691,6 +1691,7 @@ def run(
                     ]
                 )
             )
+            Z_pool = np.array(Zt)  # (media, G, M): kept for the report's survey
             del Zt
             best = np.argsort(-obj_true_draws)[:starts]
             obj_hat_draws = (
@@ -1714,7 +1715,7 @@ def run(
 
                 obj_rho = float(spearmanr(obj_hat_draws, obj_true_draws).statistic)
         else:
-            EX_true = E_true_draws = obj_true_draws = None
+            EX_true = E_true_draws = obj_true_draws = Z_pool = None
             if spec.hat_batch is None:
                 raise ValueError(
                     f"--objective {spec.name} has no surrogate half, so it cannot "
@@ -1723,6 +1724,10 @@ def run(
             best = np.argsort(
                 -(E if spec.name == "handover" else spec.hat_batch(sur, C, X, al, keep)[0])
             )[:starts]
+        # Every screened medium, so a report can show what the starts were made of
+        # and which handovers the LP found at each -- not only the few refined.
+        tg = targets or [{"metabolite": None, "variant": "draw"}] * len(C)
+        pools.append((n, C, tg, EX_true, Z_pool))
 
         # Coverage: of the metabolites the labels say could be handed over, how
         # many have a start the *LP* calls interactive. The point of candidate
@@ -2058,6 +2063,18 @@ def run(
         c_start=np.array([s[2] for s in saved]),
         c_design=np.array([s[3] for s in saved]),
         exchanges=np.array(sur.exchanges),
+        # the screened pool: draws + constructed starts, per community, with the
+        # true-LP per-metabolite handover rate (NaN when the screen was off)
+        pool_community=np.concatenate([np.full(len(p[1]), p[0]) for p in pools]),
+        pool_c=np.concatenate([p[1] for p in pools]),
+        pool_variant=np.array([t["variant"] for p in pools for t in p[2]]),
+        pool_metabolite=np.array([str(t.get("metabolite") or "") for p in pools for t in p[2]]),
+        pool_ex_true=np.concatenate(
+            [np.full(p[1].shape, np.nan) if p[3] is None else p[3] for p in pools]
+        ),
+        # per-member true-LP z at every screened medium, one key per community
+        # because communities can differ in size
+        **{f"pool_z_true_{p[0]}": p[4] for p in pools if p[4] is not None},
     )
     (Path(out) / "interactions.json").write_text(json.dumps(report, indent=2))
     return report

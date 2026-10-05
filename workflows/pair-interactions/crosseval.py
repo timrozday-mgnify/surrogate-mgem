@@ -12,6 +12,14 @@ effect into depletion (competition) and conditioning (product inhibition).
 Writes, into --out:
   media.csv     one row per (run, design, medium kind, model): E, mu per member
   links.csv     one row per (..., metabolite): true rate and per-member flux
+  fluxes.csv    one row per (run, medium, model, member, exchange) at each best
+                design and its start: the member's full true-LP exchange profile
+                (z > 0 secreted, z < 0 taken up, mmol/gDW/h), with that
+                metabolite's handover rate, buffered species (H+, H2O) excluded
+  media_composition.csv.gz
+                one row per medium a run screened (draws + candidate media) or
+                designed: its variant, target, true-LP E (own model), and the
+                concentration of every exchange (mM). No solves: from media.npz
   spent.csv     one row per (run, model, donor -> recipient), best designs only
   revert.csv    one row per (run, metabolite the best design moved): how much E
                 drops when that one metabolite goes back to its start value, under
@@ -89,6 +97,32 @@ def reverts(models, ex, keep, X, c0, c1, meta, key):
     return rows
 
 
+def composition(runs) -> pd.DataFrame:
+    """Every screened and designed medium of every run, one row each, all exchanges."""
+    frames = []
+    for run in sorted(runs):
+        z = np.load(run / "media.npz", allow_pickle=True)
+        if "pool_c" not in z:
+            continue
+        ex = [str(x) for x in z["exchanges"]]
+        starts = {int(s) for s in z["start_draw"]}
+        n, nd = len(z["pool_c"]), len(z["c_design"])
+        meta = pd.DataFrame(
+            {
+                "run": run.name,
+                "medium": [f"pool#{k}" for k in range(n)] + [f"design#{k}" for k in range(nd)],
+                "variant": list(z["pool_variant"]) + ["design"] * nd,
+                "target": list(z["pool_metabolite"]) + [f"from pool#{s}" for s in z["start_draw"]],
+                "refined": [k in starts for k in range(n)] + [True] * nd,
+                "E_true_screen": list(np.nansum(z["pool_ex_true"] * keep_mask(ex), 1))
+                + [np.nan] * nd,
+            }
+        )
+        conc = pd.DataFrame(np.vstack([z["pool_c"], z["c_design"]]), columns=ex)
+        frames.append(pd.concat([meta, conc], axis=1))
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+", type=Path)
@@ -100,7 +134,7 @@ def main():
     import cobra
 
     models_by = {}
-    media, links, spent, revert = [], [], [], []
+    media, links, spent, revert, fluxes = [], [], [], [], []
     for run in sorted(a.runs):
         meta, gids, ex, rows = designs(run)
         for g in gids:
@@ -131,6 +165,19 @@ def main():
                             | {"metabolite": ex[j], "rate": e[j]}
                             | {f"z:{g}": z[i, j] for i, g in enumerate(gids)}
                         )
+                    if is_best:
+                        for i, j in zip(*np.nonzero(np.abs(z) > 1e-6), strict=True):
+                            if keep[j]:
+                                fluxes.append(
+                                    key
+                                    | {
+                                        "member": gids[i],
+                                        "metabolite": ex[j],
+                                        "z": z[i, j],
+                                        "handover": e[j],
+                                        "mu": mu[i],
+                                    }
+                                )
                     if is_best and kind == "design":
                         sm = spent_medium_assay(models, ex, c, z, X, gids, ceq=ceq, keep=keep)
                         for p in (sm or {}).get("pairs", []):
@@ -144,6 +191,8 @@ def main():
     pd.DataFrame(links).to_csv(a.out / "links.csv", index=False)
     pd.DataFrame(spent).to_csv(a.out / "spent.csv", index=False)
     pd.DataFrame(revert).to_csv(a.out / "revert.csv", index=False)
+    pd.DataFrame(fluxes).to_csv(a.out / "fluxes.csv", index=False)
+    composition(a.runs).to_csv(a.out / "media_composition.csv.gz", index=False)
 
 
 if __name__ == "__main__":
