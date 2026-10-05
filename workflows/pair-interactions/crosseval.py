@@ -13,7 +13,13 @@ Writes, into --out:
   media.csv     one row per (run, design, medium kind, model): E, mu per member
   links.csv     one row per (..., metabolite): true rate and per-member flux
   spent.csv     one row per (run, model, donor -> recipient), best designs only
+  revert.csv    one row per (run, metabolite the best design moved): how much E
+                drops when that one metabolite goes back to its start value, under
+                the run's own model. A design moves ~150-250 metabolites and E is
+                flat along nearly all of them, so the fold change says where the
+                search drifted and this says what the design is made of.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,6 +31,8 @@ import pandas as pd
 
 from cfs.groundtruth.solve import load_km_defaults, solve
 from cfs.science.interaction import ceq_map, exchange, keep_mask, spent_medium_assay
+
+_MOVED_DECADES = 0.05  # below this a metabolite counts as unmoved
 
 
 def true_solve(models, exchanges, c, ceq):
@@ -54,6 +62,25 @@ def designs(run: Path):
     return meta, cell["community"], [str(x) for x in npz["exchanges"]], rows
 
 
+def reverts(models, ex, keep, X, c0, c1, meta, key):
+    """Per moved metabolite: E(design) - E(design with that one at its start value)."""
+    ceq = None if meta["ceq"] is None else ceq_map({"default": float(meta["ceq"])}, ex, keep)
+
+    def e_of(c):
+        return exchange(true_solve(models, ex, c, ceq)[1], X, keep).sum()
+
+    e1 = e_of(c1)
+    fold = np.log10((c1 + 1e-30) / (c0 + 1e-30))
+    rows = []
+    for j in np.flatnonzero(np.abs(fold) > _MOVED_DECADES):
+        c = c1.copy()
+        c[j] = c0[j]
+        d = e1 - e_of(c)
+        rows.append(key | dict(metabolite=ex[j], log10_fold=fold[j], E_design=e1,
+                               contribution=d, contribution_rel=d / e1 if e1 else np.nan))
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+", type=Path)
@@ -65,7 +92,7 @@ def main():
     import cobra
 
     models_by = {}
-    media, links, spent = [], [], []
+    media, links, spent, revert = [], [], [], []
     for run in sorted(a.runs):
         meta, gids, ex, rows = designs(run)
         for g in gids:
@@ -92,12 +119,15 @@ def main():
                         sm = spent_medium_assay(models, ex, c, z, X, gids, ceq=ceq, keep=keep)
                         for p in (sm or {}).get("pairs", []):
                             spent.append(key | p)
+            if is_best:
+                revert += reverts(models, ex, keep, X, c0, c1, meta, dict(run=run.name, **meta))
         print(run.name, "done", flush=True)
 
     a.out.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(media).to_csv(a.out / "media.csv", index=False)
     pd.DataFrame(links).to_csv(a.out / "links.csv", index=False)
     pd.DataFrame(spent).to_csv(a.out / "spent.csv", index=False)
+    pd.DataFrame(revert).to_csv(a.out / "revert.csv", index=False)
 
 
 if __name__ == "__main__":

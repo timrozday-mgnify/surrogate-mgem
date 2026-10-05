@@ -42,12 +42,13 @@ process CROSSEVAL {
     path runs, stageAs: 'runs/*'
     path gems, stageAs: 'gems'
     val ceqs
+    path script  // an input, so editing crosseval.py invalidates -resume's cache
 
     output:
     path 'crosseval', emit: tables
 
     script:
-    "${params.python} ${projectDir}/crosseval.py runs/* --gems gems --ceq '${ceqs}' --out crosseval"
+    "${params.python} ${script} runs/* --gems gems --ceq '${ceqs}' --out crosseval"
 
     stub:
     "mkdir crosseval && touch crosseval/media.csv"
@@ -71,5 +72,5 @@ workflow {
 
     INTERACTIONS(jobs)
     ceqs = params.arms.findAll { it.ceq }.collect { it.ceq }.unique().join(',')
-    CROSSEVAL(INTERACTIONS.out.run.collect(), gems, ceqs)
+    CROSSEVAL(INTERACTIONS.out.run.collect(), gems, ceqs, file("${projectDir}/crosseval.py"))
 }

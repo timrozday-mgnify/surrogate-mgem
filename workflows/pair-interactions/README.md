@@ -10,8 +10,9 @@ INTERACTIONS  one `cfs interactions` search per (arm, objective, seed):
                           inhibition), conditioning (inhibition alone; inhibited arms)
               -> runs/<arm>__<objective>__s<seed>/{interactions.json, media.npz, run.json}
 CROSSEVAL     every start and designed medium re-solved with the true LP under every
-              model, plus the spent-medium assay at each best design
-              -> crosseval/{media,links,spent}.csv
+              model, the spent-medium assay at each best design, and each moved
+              metabolite's contribution to E (reverted one at a time)
+              -> crosseval/{media,links,spent,revert}.csv
 ```
 
 Each search proposes media with the surrogate and accepts them with the true LP, so

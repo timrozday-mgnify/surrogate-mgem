@@ -57,8 +57,8 @@ for d in sorted((RUN / "runs").glob("*/")):
                             cell=json.loads((d / "interactions.json").read_text())["cells"][0])
 gids = next(iter(runs.values()))["cell"]["community"]
 own = {r: ("fba" if v["meta"]["ceq"] is None else f"ceq={v['meta']['ceq']}") for r, v in runs.items()}
-cx = {k: pd.read_csv(RUN / "crosseval" / f"{k}.csv") if (RUN / "crosseval" / f"{k}.csv").stat().st_size > 1
-      else pd.DataFrame() for k in ("media", "links", "spent")}
+cx = {k: pd.read_csv(RUN / "crosseval" / f"{k}.csv") if (RUN / "crosseval" / f"{k}.csv").exists() and (RUN / "crosseval" / f"{k}.csv").stat().st_size > 1
+      else pd.DataFrame() for k in ("media", "links", "spent", "revert")}
 md(f"Pair **{gids[0]} + {gids[1]}**, {len(runs)} runs from `{RUN}`.")
 ```
 
@@ -196,21 +196,44 @@ if not L.empty:
     show(fig, height=550)
 ```
 
-### Which metabolites the designs moved
+### What the designs are made of
+
+A design moves ~150-250 metabolites, but the handover rate is flat along almost
+all of them: one or a few metabolites limit growth, and only the handed-over ones
+matter. The search follows the surrogate's gradient and the LP only checks that `E`
+did not fall, so the rest drift, and *which* ones drift is arbitrary and changes
+with the seed. So the fold change is not the design. Each moved metabolite is
+instead put back to its start value, one at a time, and the true LP is re-solved:
+its **contribution** is how much `E` falls (negative: the move cost `E`, and was
+outweighed by others). The contribution is always to the handover rate `E`: for
+interference and conditioning runs that is a side effect of the design, not the
+objective it optimised.
 
 ```{python}
-ch = pd.DataFrame([dict(run=r, metabolite=x["metabolite"], log10_fold=x["log10_fold"])
-                   for r, v in runs.items()
-                   for d in v["cell"]["designs"] if d.get("E_hat") == v["cell"]["E_designed"]
-                   for x in d.get("changed", [])])
-if ch.empty:
-    md("_No design moved the medium._")
+R = cx["revert"]
+if R.empty:
+    md("_No revert table: re-run CROSSEVAL with this version of the pipeline._")
 else:
-    keep = ch.groupby("metabolite")["log10_fold"].apply(lambda s: s.abs().max()).nlargest(30).index
-    hm = ch[ch.metabolite.isin(keep)].pivot_table(index="run", columns="metabolite", values="log10_fold")
-    fig = px.imshow(hm, color_continuous_scale="RdBu", color_continuous_midpoint=0, aspect="auto",
-                    title="log10(designed / start concentration), best design per run")
-    show(fig, height=150 + 25 * len(hm))
+    n = (R.assign(matters=R.contribution_rel.abs() > 0.01)
+         .groupby("run").agg(moved=("metabolite", "size"), matters=("matters", "sum"),
+                             E_design=("E_design", "first")).reset_index())
+    md("How many moved metabolites change `E` by more than 1% when reverted:")
+    table(n)
+    keep = R.loc[R.contribution_rel.abs() > 0.01, "metabolite"].unique()
+    if len(keep):
+        hm = R[R.metabolite.isin(keep)].pivot_table(index="run", columns="metabolite",
+                                                    values="contribution_rel")
+        fold = R[R.metabolite.isin(keep)].pivot_table(index="run", columns="metabolite",
+                                                      values="log10_fold").reindex_like(hm)
+        lim = float(np.nanmax(np.abs(hm.to_numpy())))
+        fig = go.Figure(go.Heatmap(
+            z=hm.to_numpy(), x=list(hm.columns), y=list(hm.index), customdata=fold.to_numpy(),
+            colorscale="RdBu", zmid=0, zmin=-lim, zmax=lim, colorbar=dict(title="ΔE / E"),
+            hovertemplate="%{y}<br>%{x}<br>contribution %{z:.3f} of E"
+                          "<br>moved %{customdata:+.2f} decades<extra></extra>"))
+        fig.update_layout(title="Contribution of each move to E (moves changing E by >1% in any run; "
+                                "blank = not moved in that run)")
+        show(fig, height=150 + 25 * len(hm))
 ```
 
 ## Same medium, both models
