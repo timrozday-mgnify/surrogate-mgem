@@ -76,8 +76,16 @@ def reverts(models, ex, keep, X, c0, c1, meta, key):
         c = c1.copy()
         c[j] = c0[j]
         d = e1 - e_of(c)
-        rows.append(key | dict(metabolite=ex[j], log10_fold=fold[j], E_design=e1,
-                               contribution=d, contribution_rel=d / e1 if e1 else np.nan))
+        rows.append(
+            key
+            | {
+                "metabolite": ex[j],
+                "log10_fold": fold[j],
+                "E_design": e1,
+                "contribution": d,
+                "contribution_rel": d / e1 if e1 else np.nan,
+            }
+        )
     return rows
 
 
@@ -109,12 +117,20 @@ def main():
                 for model, ceq in arms.items():
                     mu, z = true_solve(models, ex, c, ceq)
                     e = exchange(z, X, keep)
-                    key = dict(run=run.name, **meta, design=k, best=is_best, medium=kind, model=model)
-                    media.append(key | {"E_true": e.sum(), "n_links": int((e > 1e-6).sum())}
-                                 | {f"mu:{g}": m for g, m in zip(gids, mu, strict=True)})
+                    key = dict(
+                        run=run.name, **meta, design=k, best=is_best, medium=kind, model=model
+                    )
+                    media.append(
+                        key
+                        | {"E_true": e.sum(), "n_links": int((e > 1e-6).sum())}
+                        | {f"mu:{g}": m for g, m in zip(gids, mu, strict=True)}
+                    )
                     for j in np.flatnonzero(e > 1e-6):
-                        links.append(key | {"metabolite": ex[j], "rate": e[j]}
-                                     | {f"z:{g}": z[i, j] for i, g in enumerate(gids)})
+                        links.append(
+                            key
+                            | {"metabolite": ex[j], "rate": e[j]}
+                            | {f"z:{g}": z[i, j] for i, g in enumerate(gids)}
+                        )
                     if is_best and kind == "design":
                         sm = spent_medium_assay(models, ex, c, z, X, gids, ceq=ceq, keep=keep)
                         for p in (sm or {}).get("pairs", []):

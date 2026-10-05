@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from cfs.science import interaction
-
 from cfs.science.interaction import distinguishing, exchange, exchange_batch, link_rows
 
 
@@ -117,18 +116,22 @@ def test_candidate_links_are_a_secretion_meeting_an_uptake(tmp_path):
     from cfs.science.interaction import candidate_links
 
     ex = ["EX_a_e", "EX_b_e", "EX_c_e"]
-    z = {"A": [[-4.0, -2.0, 1e-9], [-4.0, -2.0, 1e-9]],
-         "B": [[-1.0, 3.0, -1e-9], [-1.0, 8.0, -1e-9]]}
+    z = {
+        "A": [[-4.0, -2.0, 1e-9], [-4.0, -2.0, 1e-9]],
+        "B": [[-1.0, 3.0, -1e-9], [-1.0, 8.0, -1e-9]],
+    }
     med = {"A": [[1.0, 1.0, 1.0]] * 2, "B": [[9.0, 9.0, 9.0], [7.0, 5.0, 3.0]]}
     for g in z:
         (tmp_path / f"{g}.exchanges.json").write_text(json.dumps({"exchanges": ex}))
         d = tmp_path / g / "eps_0.001"
         d.mkdir(parents=True)
         pq.write_table(
-            pa.table({
-                "z": pa.array(z[g], type=pa.list_(pa.float64())),
-                "medium": pa.array(med[g], type=pa.list_(pa.float64())),
-            }),
+            pa.table(
+                {
+                    "z": pa.array(z[g], type=pa.list_(pa.float64())),
+                    "medium": pa.array(med[g], type=pa.list_(pa.float64())),
+                }
+            ),
             d / "part.parquet",
         )
 

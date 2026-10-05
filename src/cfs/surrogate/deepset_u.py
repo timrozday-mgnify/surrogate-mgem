@@ -46,7 +46,7 @@ from cfs.surrogate.deepset import (  # noqa: F401  (the arch interface, re-expor
     organism,
 )
 from cfs.surrogate.picnn import _softplus_inv
-from cfs.surrogate.picnn_u import INPUT_TRANSFORM, W_CAP, _INIT_SCALE, to_diag  # noqa: F401
+from cfs.surrogate.picnn_u import _INIT_SCALE, INPUT_TRANSFORM, W_CAP, to_diag  # noqa: F401
 
 
 class TrunkU(deepset.Trunk):

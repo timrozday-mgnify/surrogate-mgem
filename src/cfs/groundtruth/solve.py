@@ -392,7 +392,7 @@ def mu_curvature(dmu_dc: np.ndarray, c: np.ndarray, km: np.ndarray) -> np.ndarra
 
 def exchange_jacobian(
     model,
-    solution: "Solution",
+    solution: Solution,
     concentrations: dict[str, float],
     wrt: list[str],
     km_cfg: dict | None = None,

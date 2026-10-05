@@ -533,7 +533,7 @@ def test_w_rel_cuts_the_low_mu_bias_the_plain_mse_leaves():
     with no collapse of the plateau.
     """
     ds = _synthetic()
-    kw = dict(arch="icnn", width=64, depth=2, epochs=400, batch=64, lr=3e-2)
+    kw = {"arch": "icnn", "width": 64, "depth": 2, "epochs": 400, "batch": 64, "lr": 3e-2}
 
     def low_mu_bias(w_rel):
         heads = train_value_heads(ds, w_rel=w_rel, **kw)
@@ -746,17 +746,31 @@ def test_prox_holds_slopes_near_the_seeded_tangents():
     from cfs.surrogate.train import train_value_heads
 
     ds = _min_affine_dataset(K=5, n=600, M=4)
-    kw = dict(
-        arch="groupmax-u", width=1, depth=1, epochs=40, batch=64, lr=3e-2,
-        gm_group=32, gm_temp=1e-2, gm_init="labels", seed=0,
-    )
+    kw = {
+        "arch": "groupmax-u",
+        "width": 1,
+        "depth": 1,
+        "epochs": 40,
+        "batch": 64,
+        "lr": 3e-2,
+        "gm_group": 32,
+        "gm_temp": 1e-2,
+        "gm_init": "labels",
+        "seed": 0,
+    }
 
     def drift(w_prox):
         h = train_value_heads(ds, w_prox=w_prox, **kw)
         seed_h = groupmax.init_from_tangents(
             groupmax.stack_heads(
-                jax.random.PRNGKey(0), 1, ds.x_train.shape[-1], ds.mask,
-                width=1, depth=1, group=32, temp=1e-2,
+                jax.random.PRNGKey(0),
+                1,
+                ds.x_train.shape[-1],
+                ds.mask,
+                width=1,
+                depth=1,
+                group=32,
+                temp=1e-2,
             ),
             ds,
         )

@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument(
         "--inhibition",
         type=Path,
-        help="JSON {exchange: c^eq mM, ...} plus an optional \"default\" — §13.11's "
+        help='JSON {exchange: c^eq mM, ...} plus an optional "default" — §13.11\'s '
         "thermodynamic product inhibition in the ground truth (stage 4'). Secretion "
         "of a metabolite stops as its external concentration reaches c^eq, which "
         "makes `mu` fall in that concentration and gives Head A a second input "
@@ -607,23 +607,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ix.add_argument("--draws", type=int, default=64, help="Media surveyed per community.")
     ix.add_argument(
-        "--starts", type=int, default=4,
+        "--starts",
+        type=int,
+        default=4,
         help="Multistart count. E is non-concave, so the spread across starts is part "
         "of the answer, not overhead.",
     )
     ix.add_argument(
-        "--trust-decades", type=float, default=0.5,
+        "--trust-decades",
+        type=float,
+        default=0.5,
         help="P21 trust region in the head's own input coordinate, intersected over "
         "members. Unconstrained, the designer leaves the design.",
     )
     ix.add_argument(
-        "--budget-mult", type=float, default=1.0,
+        "--budget-mult",
+        type=float,
+        default=1.0,
         help="Budget as a multiple of the start medium's own cost (default: reallocate it).",
     )
     ix.add_argument("--iters", type=int, default=120)
     ix.add_argument("--alpha", type=float, default=1.0, help="Growth fraction for Head B.")
     ix.add_argument(
-        "--verify-steps", type=int, default=8,
+        "--verify-steps",
+        type=int,
+        default=8,
         help="Trust-region iterations with the true LP as the acceptance test; 0 "
         "disables. Without it the ascent optimises a magnitude the head "
         "over-predicts by 1.6x to infinity and the true rate does not follow; with "
@@ -633,12 +641,14 @@ def build_parser() -> argparse.ArgumentParser:
         "E_hat/E_true falls 2.40 -> 1.67. Costs one FBA per member per iteration.",
     )
     ix.add_argument(
-        "--no-verify", action="store_true",
+        "--no-verify",
+        action="store_true",
         help="Skip the true-LP round-trip. Only for a structure-only survey — the "
         "objective is on flux magnitude, which is Head B's weakest axis (P22).",
     )
     ix.add_argument(
-        "--buffered", default="EX_h_e,EX_h2o_e",
+        "--buffered",
+        default="EX_h_e,EX_h2o_e",
         help="Species the vessel holds, not the community: pinned at a saturating "
         "concentration and not counted as interactions. A chemostat is "
         "pH-controlled and aqueous, so protons and water are supplied by the "
@@ -650,14 +660,16 @@ def build_parser() -> argparse.ArgumentParser:
         "cross-feeding currencies. '' buffers nothing.",
     )
     ix.add_argument(
-        "--no-screen", action="store_true",
+        "--no-screen",
+        action="store_true",
         help="Seed the multistart by the head's own E instead of by the LP's. "
         "Measured Spearman(E_hat, E_true) over 64 draws on one community: -0.053, "
         "with every E_hat-seeded start at a true rate of zero — so this seeds "
         "where the head is most optimistic, which is what the search exploits.",
     )
     ix.add_argument(
-        "--seed-mode", choices=("draws", "candidate", "conditioning"),
+        "--seed-mode",
+        choices=("draws", "candidate", "conditioning"),
         default="candidate",
         help="'draws': random §4.3 media, and whether one contains a handover is "
         "luck. 'candidate': enumerate the metabolites the labels say some member "
@@ -676,12 +688,15 @@ def build_parser() -> argparse.ArgumentParser:
         "contended disposal route at all, so quote the per-cell rate.",
     )
     ix.add_argument(
-        "--inhibition", type=Path, default=None,
+        "--inhibition",
+        type=Path,
+        default=None,
         help="§13.11/M16: JSON mapping exchange id -> equilibrium concentration, "
-        "in the medium's own units, plus an optional \"default\" key applied to "
+        'in the medium\'s own units, plus an optional "default" key applied to '
         "every other (unbuffered) exchange — per P30 an unparameterised exchange "
         "is modelled as infinitely tolerant of its own product and the LP routes "
-        "flux through exactly those, so the layer must be complete. Turns on thermodynamic product inhibition in "
+        "flux through exactly those, so the layer must be complete. Turns on "
+        "thermodynamic product inhibition in "
         "the **true LP only** — secretion capacity falls affinely to zero as the "
         "external concentration reaches equilibrium, so a member's waste inhibits "
         "itself and its neighbours, which is the negative interaction §13.5 "
@@ -691,7 +706,9 @@ def build_parser() -> argparse.ArgumentParser:
         "convex and would cost §13.2/§13.3 their convexity (P30/P31).",
     )
     ix.add_argument(
-        "--extra-candidates", type=int, default=0,
+        "--extra-candidates",
+        type=int,
+        default=0,
         help="With --inhibition: this many extra candidate metabolites taken from "
         "*capability* — any exchange two members share — rather than from the "
         "label shards, each seeded at the analytic level where the uptake and "
@@ -700,7 +717,9 @@ def build_parser() -> argparse.ArgumentParser:
         "and stage 3' found five designs whose E_true is 0.000 under FBA.",
     )
     ix.add_argument(
-        "--inhibited-links", type=int, default=0,
+        "--inhibited-links",
+        type=int,
+        default=0,
         help="With --inhibition: re-enumerate the candidate handovers by re-solving "
         "this many labelled media per member under the inhibited LP (§13.11 option "
         "i), instead of reading them off the plain-FBA label shards. Unlike "
@@ -708,7 +727,9 @@ def build_parser() -> argparse.ArgumentParser:
         "the inhibited model. Costs N solves per member; no relabel.",
     )
     ix.add_argument(
-        "--box", type=int, default=3,
+        "--box",
+        type=int,
+        default=3,
         help="With --seed-mode candidate: extra starts per candidate drawn inside "
         "the envelope of every labelled medium where the donor secreted that "
         "metabolite. That region is 1e-5 to 1e-19 of the design volume, so a §4.3 "
@@ -1061,7 +1082,7 @@ def main(argv: list[str] | None = None) -> int:
             gm_init=args.gm_init,
             gm_reanchor=args.gm_reanchor,
             gm_select=args.gm_select,
-        gm_valid_cuts=args.gm_valid_cuts,
+            gm_valid_cuts=args.gm_valid_cuts,
             gm_repair=args.gm_repair,
             gm_repair_local=args.gm_repair_local,
             gm_eval_temp=args.gm_eval_temp,

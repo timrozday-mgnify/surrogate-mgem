@@ -209,7 +209,12 @@ def interference_losses(mu_alone, mu_joint, dt, X) -> np.ndarray:
 
 
 def objective_interference_batch(
-    sur, C, X, alpha: float = 1.0, keep=None, frac: float = _INTERFERE_FRAC,
+    sur,
+    C,
+    X,
+    alpha: float = 1.0,
+    keep=None,
+    frac: float = _INTERFERE_FRAC,
     relative: bool = False,
 ):
     """``(total suppression per medium, per-member detail)``, positive = suppression.
@@ -251,7 +256,12 @@ def objective_interference_batch(
 
 
 def objective_interference(
-    sur, c, X, alpha: float = 1.0, keep=None, frac: float = _INTERFERE_FRAC,
+    sur,
+    c,
+    X,
+    alpha: float = 1.0,
+    keep=None,
+    frac: float = _INTERFERE_FRAC,
     relative: bool = False,
 ):
     """:func:`objective_interference_batch` at one medium."""
@@ -581,8 +591,12 @@ def _local_index(labels_dir, g: str, col: dict[str, int]) -> np.ndarray:
 def _new_stats(n: int) -> list:
     """``[secreted, taken_up, top, medium_at_top, box_lo, box_hi]``, all global."""
     return [
-        np.zeros(n, bool), np.zeros(n, bool), np.zeros(n),
-        np.zeros((n, n)), np.full((n, n), np.inf), np.full((n, n), -np.inf),
+        np.zeros(n, bool),
+        np.zeros(n, bool),
+        np.zeros(n),
+        np.zeros((n, n)),
+        np.full((n, n), np.inf),
+        np.full((n, n), -np.inf),
     ]
 
 
@@ -613,8 +627,9 @@ def _pair_links(gids, exchanges, S, U, best):
     for a, b in itertools.permutations(gids, 2):
         for m in np.flatnonzero(S[a] & U[b]):
             ex = exchanges[m]
-            d = links.setdefault(ex, {"donors": [], "recipients": [], "best_donor": None,
-                                      "best_secretion": 0.0})
+            d = links.setdefault(
+                ex, {"donors": [], "recipients": [], "best_donor": None, "best_secretion": 0.0}
+            )
             if a not in d["donors"]:
                 d["donors"].append(a)
             if b not in d["recipients"]:
@@ -664,11 +679,16 @@ def inhibited_links(
         loc = loc["exchanges"] if isinstance(loc, dict) else loc
         idx = _local_index(labels_dir, g, col)
         parts = sorted((Path(labels_dir) / g / f"eps_{eps_str}").glob("part*.parquet"))
-        M = np.concatenate([
-            np.stack(pq.read_table(f, columns=["medium"])
-                     .column("medium").to_numpy(zero_copy_only=False))
-            for f in parts
-        ])
+        M = np.concatenate(
+            [
+                np.stack(
+                    pq.read_table(f, columns=["medium"])
+                    .column("medium")
+                    .to_numpy(zero_copy_only=False)
+                )
+                for f in parts
+            ]
+        )
         take = np.random.default_rng(seed).permutation(len(M))[:n_media]
         M = M[take]
         Z = np.zeros((len(M), len(idx)))
@@ -726,9 +746,18 @@ def target_level(km: float, ceq_m: float | None) -> tuple[float, float]:
 
 
 def candidate_media(
-    sur, labels_dir, gids: list[str], links: dict, donor_media: dict, donor_box: dict,
-    keep: np.ndarray, seed: int, box: int = 3, scales=None,
-    ceq: dict[str, float] | None = None, extra: int = 0,
+    sur,
+    labels_dir,
+    gids: list[str],
+    links: dict,
+    donor_media: dict,
+    donor_box: dict,
+    keep: np.ndarray,
+    seed: int,
+    box: int = 3,
+    scales=None,
+    ceq: dict[str, float] | None = None,
+    extra: int = 0,
 ):
     """Starts per candidate metabolite: ``(C, targets)``.
 
@@ -779,15 +808,20 @@ def candidate_media(
     extras: list[str] = []
     if extra > 0:
         shared = [
-            e for j, e in enumerate(sur.exchanges)
+            e
+            for j, e in enumerate(sur.exchanges)
             if keep[j] and sum(bool(sur.mask[i][j]) for i in range(len(gids))) >= 2
         ]
         pool = sorted(set(shared) - set(cand))
-        extras = sorted(
-            np.random.default_rng(seed).permutation(np.array(pool, dtype=object))[
-                :extra
-            ].tolist()
-        ) if pool else []
+        extras = (
+            sorted(
+                np.random.default_rng(seed)
+                .permutation(np.array(pool, dtype=object))[:extra]
+                .tolist()
+            )
+            if pool
+            else []
+        )
 
     C, targets = [], []
     for k, m in enumerate(cand + extras):
@@ -798,9 +832,7 @@ def candidate_media(
         # which is >= `c^eq` for 100% of this index's exchanges at
         # `c^eq <= 1 mM`: the donor's secretion of the very metabolite the
         # start exists to hand over is pinned at exactly zero.
-        level, feasible = target_level(
-            float(sur.km[col[m]]), None if ceq is None else ceq.get(m)
-        )
+        level, feasible = target_level(float(sur.km[col[m]]), None if ceq is None else ceq.get(m))
         if feasible < _MIN_FEASIBLE:
             continue
         for d, var in enumerate(["analytic"] if m in extras else variants):
@@ -813,7 +845,8 @@ def candidate_media(
             )
             dims = (
                 [col[e] for e in subs[donor].active if e in col and keep[col[e]]]
-                if donor is not None else []
+                if donor is not None
+                else []
             )
             if var.startswith("uptake+secretion") and m in donor_media:
                 dm = donor_media[m]
@@ -827,8 +860,7 @@ def candidate_media(
             spec[col[m]] = level
             if var.endswith("exclusive"):
                 spec |= {
-                    col[o]: _SCARCE * sur.km[col[o]]
-                    for o in cand if o != m and o not in active
+                    col[o]: _SCARCE * sur.km[col[o]] for o in cand if o != m and o not in active
                 }
             for j, v in spec.items():
                 c[j] = v
@@ -881,7 +913,11 @@ def shared_secretion(gids: list[str], exchanges: list[str], S: dict, best: dict)
 
 
 def conditioning_media(
-    sur, gids: list[str], shared: dict, ceq: dict[str, float], keep: np.ndarray,
+    sur,
+    gids: list[str],
+    shared: dict,
+    ceq: dict[str, float],
+    keep: np.ndarray,
     levels: tuple[float, ...] = _COND_LEVELS,
 ):
     """Starts constructed to *have* product inhibition: ``(C, targets)``. **No LP.**
@@ -927,8 +963,12 @@ def distinguishing(c: np.ndarray, c_ref: np.ndarray, exchanges: list[str], top: 
     lf = np.log10(a / b)
     idx = np.argsort(-np.abs(lf))[:top]
     return [
-        {"metabolite": exchanges[i], "log10_fold": float(lf[i]),
-         "from": float(c_ref[i]), "to": float(c[i])}
+        {
+            "metabolite": exchanges[i],
+            "log10_fold": float(lf[i]),
+            "from": float(c_ref[i]),
+            "to": float(c[i]),
+        }
         for i in idx
         if abs(lf[i]) > 1e-6
     ]
@@ -994,7 +1034,6 @@ def true_z(
         for ex, v in sol.z.items():
             z[i, col[ex]] = v
     return z
-
 
 
 def interference_media(
@@ -1095,9 +1134,7 @@ def interference(
                 # `delta_rel_per_h` it is defined at a member that does not grow
                 # alone, and it goes to 0 rather than to a constant as the
                 # medium is starved (§13.5).
-                "abs_loss_per_h": (
-                    float(Xa[i] * (a - j) / dt) if dt > 0 else None
-                ),
+                "abs_loss_per_h": (float(Xa[i] * (a - j) / dt) if dt > 0 else None),
                 # None, not a number: a member that does not grow alone has no
                 # baseline to be suppressed relative to.
                 "delta_rel": float((j - a) / a) if a > 0 else None,
@@ -1201,9 +1238,7 @@ def spent_medium_assay(
                     # survives restoring what the donor ate.
                     "total_per_h": tot,
                     "conditioning_per_h": inh,
-                    "depletion_per_h": (
-                        None if tot is None or inh is None else tot - inh
-                    ),
+                    "depletion_per_h": (None if tot is None or inh is None else tot - inh),
                     # The conditioning half in absolute, biomass-weighted form:
                     # positive is suppression, and unlike the relative rate it
                     # does not saturate at a model constant as the medium is
@@ -1226,18 +1261,15 @@ def spent_medium_assay(
         # a concentration cannot hurt an FBA -- so it is only a target when
         # `--inhibition` gives secretion a bound to tighten.
         "total_abs_conditioning_per_h": float(
-            sum(p["abs_conditioning_per_h"] for p in pairs
-                if p["abs_conditioning_per_h"] is not None)
+            sum(
+                p["abs_conditioning_per_h"]
+                for p in pairs
+                if p["abs_conditioning_per_h"] is not None
+            )
         ),
-        "n_suppressed_by_conditioning": int(
-            sum(p["conditioning_per_h"] < -1e-6 for p in live)
-        ),
-        "n_facilitated_by_conditioning": int(
-            sum(p["conditioning_per_h"] > 1e-6 for p in live)
-        ),
-        "worst_conditioning_per_h": (
-            min(p["conditioning_per_h"] for p in live) if live else None
-        ),
+        "n_suppressed_by_conditioning": int(sum(p["conditioning_per_h"] < -1e-6 for p in live)),
+        "n_facilitated_by_conditioning": int(sum(p["conditioning_per_h"] > 1e-6 for p in live)),
+        "worst_conditioning_per_h": (min(p["conditioning_per_h"] for p in live) if live else None),
     }
 
 
@@ -1319,11 +1351,16 @@ def objective_spec(name: str, frac: float = _INTERFERE_FRAC) -> Objective:
         # untouched), so there is no channel that could carry it -- an ascent
         # here would climb away from any conditioning at all.
         return Objective(
-            name, None, None,
+            name,
+            None,
+            None,
             lambda models, exchanges, c, z, X, gids, keep=None, ceq=None: (
-                (spent_medium_assay(
-                    models, exchanges, c, z, X, gids, frac=frac, ceq=ceq, keep=keep
-                ) or {}).get("total_abs_conditioning_per_h", 0.0)
+                (
+                    spent_medium_assay(
+                        models, exchanges, c, z, X, gids, frac=frac, ceq=ceq, keep=keep
+                    )
+                    or {}
+                ).get("total_abs_conditioning_per_h", 0.0)
             ),
         )
     raise ValueError(f"unknown objective {name!r}")
@@ -1383,8 +1420,17 @@ def verified_ascent(
     for _ in range(max_it):
         lo, hi = trust_box(sur, c, r, keep)
         cand, _ = maximise(
-            sur, c, X, alpha, cost=cost, budget=budget, c_lo=lo, c_hi=hi, iters=iters,
-            keep=keep, obj=obj,
+            sur,
+            c,
+            X,
+            alpha,
+            cost=cost,
+            budget=budget,
+            c_lo=lo,
+            c_hi=hi,
+            iters=iters,
+            keep=keep,
+            obj=obj,
         )
         e_true = truth(cand)
         n_lp += 1
@@ -1509,8 +1555,13 @@ def run(
             # the FBA recipe where there is one and adds the links only the
             # inhibited model has.
             ilinks, imedia, ibox = inhibited_links(
-                models, labels_dir, gids, sur.exchanges, ceq,
-                n_media=inhibited_media, seed=seed + n,
+                models,
+                labels_dir,
+                gids,
+                sur.exchanges,
+                ceq,
+                n_media=inhibited_media,
+                seed=seed + n,
             )
             fresh = [m for m in ilinks if m not in links]
             links = {**links, **{m: ilinks[m] for m in fresh}}
@@ -1518,15 +1569,20 @@ def run(
             donor_box |= {m: ibox[m] for m in fresh if m in ibox}
             LOGGER.info(
                 "community %d: %d FBA candidates + %d inhibition-only = %d",
-                n, len(links) - len(fresh), len(fresh), len(links),
+                n,
+                len(links) - len(fresh),
+                len(fresh),
+                len(links),
             )
         C = np.array(
-            [buffer_medium(
-                sur,
-                community_medium(labels_dir, gids, sur.exchanges, seed + n * 1000 + d, scales),
-                keep,
-             )
-             for d in range(draws)]
+            [
+                buffer_medium(
+                    sur,
+                    community_medium(labels_dir, gids, sur.exchanges, seed + n * 1000 + d, scales),
+                    keep,
+                )
+                for d in range(draws)
+            ]
         )
         targets = None
         if seed_mode == "conditioning":
@@ -1546,7 +1602,9 @@ def run(
             Cc, targets = conditioning_media(sur, gids, shared, ceq, keep)
             LOGGER.info(
                 "community %d: %d contended disposal routes -> %d constructed starts",
-                n, len(shared), len(Cc),
+                n,
+                len(shared),
+                len(Cc),
             )
             targets = [{"metabolite": None, "variant": "draw"}] * len(C) + targets
             C = np.concatenate([C, Cc]) if len(Cc) else C
@@ -1560,8 +1618,17 @@ def run(
             # reaches from its own recipe. The draws also still win the raw rate
             # on 4 of 5 cells.
             Cc, targets = candidate_media(
-                sur, labels_dir, gids, links, donor_media, donor_box, keep,
-                seed + n * 1000, box=box, scales=scales, ceq=ceq,
+                sur,
+                labels_dir,
+                gids,
+                links,
+                donor_media,
+                donor_box,
+                keep,
+                seed + n * 1000,
+                box=box,
+                scales=scales,
+                ceq=ceq,
                 extra=extra_candidates,
             )
             targets = [{"metabolite": None, "variant": "draw"}] * len(C) + targets
@@ -1617,16 +1684,20 @@ def run(
             obj_true_draws = (
                 E_true_draws
                 if spec.name == "handover"
-                else np.array([
-                    spec.truth(models, sur.exchanges, c, z, X, gids, keep, ceq)
-                    for c, z in zip(C, Zt, strict=True)
-                ])
+                else np.array(
+                    [
+                        spec.truth(models, sur.exchanges, c, z, X, gids, keep, ceq)
+                        for c, z in zip(C, Zt, strict=True)
+                    ]
+                )
             )
             del Zt
             best = np.argsort(-obj_true_draws)[:starts]
             obj_hat_draws = (
-                None if spec.hat_batch is None
-                else E if spec.name == "handover"
+                None
+                if spec.hat_batch is None
+                else E
+                if spec.name == "handover"
                 else spec.hat_batch(sur, C, X, al, keep)[0]
             )
             if len(E_true_draws) > 2 and E_true_draws.std() > 0 and E.std() > 0:
@@ -1649,8 +1720,9 @@ def run(
                     f"--objective {spec.name} has no surrogate half, so it cannot "
                     "rank media without the LP screen. Drop --no-screen."
                 )
-            best = np.argsort(-(E if spec.name == "handover"
-                                else spec.hat_batch(sur, C, X, al, keep)[0]))[:starts]
+            best = np.argsort(
+                -(E if spec.name == "handover" else spec.hat_batch(sur, C, X, al, keep)[0])
+            )[:starts]
 
         # Coverage: of the metabolites the labels say could be handed over, how
         # many have a start the *LP* calls interactive. The point of candidate
@@ -1669,21 +1741,19 @@ def run(
                 # Which variant the LP's own best start came from -- the only
                 # way to tell whether the secretion half earned its screens.
                 "best_variant": (
-                    None if targets is None
-                    else targets[int(np.argmax(E_true_draws))]["variant"]
+                    None if targets is None else targets[int(np.argmax(E_true_draws))]["variant"]
                 ),
                 # Per variant: the best rate and the most handovers *at one
                 # medium*. A combination start is not scored by whether its last
                 # merged metabolite worked -- the point of it is simultaneity.
                 "by_variant": (
-                    None if targets is None
+                    None
+                    if targets is None
                     else {
                         v: {
                             "n_media": int(sel.sum()),
                             "E_true_max": float(E_true_draws[sel].max()),
-                            "max_links_at_one_medium": int(
-                                (EX_true[sel] > 1e-6).sum(1).max()
-                            ),
+                            "max_links_at_one_medium": int((EX_true[sel] > 1e-6).sum(1).max()),
                             # Which handovers this variant actually realised --
                             # the question the `analytic` arm exists for, since
                             # a link outside `cand` is one the FBA labels could
@@ -1712,13 +1782,28 @@ def run(
                 zt0 = true_z(models, sur.exchanges, c0, ceq=ceq)
                 t0 = float(spec.truth(models, sur.exchanges, c0, zt0, X, gids, keep, ceq))
                 c_star = c0
-                extra = {"iterations": 0, "obj_true_start": t0, "obj_true": t0,
-                         "no_surrogate_half": True}
+                extra = {
+                    "iterations": 0,
+                    "obj_true_start": t0,
+                    "obj_true": t0,
+                    "no_surrogate_half": True,
+                }
             elif verify_steps:
                 c_star, extra = verified_ascent(
-                    sur, models, c0, X, al, cost=cost, budget=budget,
-                    decades=trust_decades, max_it=verify_steps, iters=iters, keep=keep,
-                    ceq=ceq, obj=spec, genome_ids=gids,
+                    sur,
+                    models,
+                    c0,
+                    X,
+                    al,
+                    cost=cost,
+                    budget=budget,
+                    decades=trust_decades,
+                    max_it=verify_steps,
+                    iters=iters,
+                    keep=keep,
+                    ceq=ceq,
+                    obj=spec,
+                    genome_ids=gids,
                 )
                 # In `handover` mode the design objective *is* E, so the older
                 # key names still mean what every report on disk says they mean.
@@ -1726,8 +1811,17 @@ def run(
                     extra["E_true"] = extra["obj_true"]
             else:
                 c_star, path = maximise(
-                    sur, c0, X, al, cost=cost, budget=budget, c_lo=lo, c_hi=hi,
-                    iters=iters, keep=keep, obj=spec,
+                    sur,
+                    c0,
+                    X,
+                    al,
+                    cost=cost,
+                    budget=budget,
+                    c_lo=lo,
+                    c_hi=hi,
+                    iters=iters,
+                    keep=keep,
+                    obj=spec,
                 )
                 extra = {"iterations": len(path) - 1}
             E_star, _ = objective(sur, c_star, X, al, keep)
@@ -1738,8 +1832,10 @@ def run(
                     "E_start": float(E[s]),
                     "E_hat": E_star,
                     "obj_hat": (
-                        E_star if spec.name == "handover"
-                        else None if spec.hat is None
+                        E_star
+                        if spec.name == "handover"
+                        else None
+                        if spec.hat is None
                         else float(spec.hat(sur, c_star, X, al, keep)[0])
                     ),
                     "changed": distinguishing(c_star, c0, sur.exchanges),
@@ -1761,7 +1857,8 @@ def run(
             "seed_mode": seed_mode,
             "n_candidate_metabolites": len(links),
             "candidates": (
-                None if targets is None
+                None
+                if targets is None
                 else sorted({t["metabolite"] for t in targets if t["metabolite"]})
             ),
             # Per candidate metabolite: did any of its starts have a true
@@ -1779,9 +1876,7 @@ def run(
             # in `handover` mode.
             "objective": spec.name,
             "obj_rank_spearman": obj_rho,
-            "E_true_draws_max": (
-                float(E_true_draws.max()) if E_true_draws is not None else None
-            ),
+            "E_true_draws_max": (float(E_true_draws.max()) if E_true_draws is not None else None),
             "n_draws_interactive_true": (
                 int((E_true_draws > 1e-6).sum()) if E_true_draws is not None else None
             ),
@@ -1823,20 +1918,16 @@ def run(
                 # same abundances, only the bound differing -- the arms' own
                 # optima are not comparable, since each designed its own medium.
                 # G solves.
-                e_fba = exchange(
-                    true_z(models, sur.exchanges, c_best, ceq=None), X, keep
-                )
+                e_fba = exchange(true_z(models, sur.exchanges, c_best, ceq=None), X, keep)
                 t = _LINK_TOL * max(float(e_best.max()), float(e_fba.max()), 1e-30)
                 cell.update(
                     {
                         "E_true_designed_under_fba": float(e_fba.sum()),
                         "inhibition_only_links": [
-                            sur.exchanges[j]
-                            for j in np.flatnonzero((e_best > t) & (e_fba <= t))
+                            sur.exchanges[j] for j in np.flatnonzero((e_best > t) & (e_fba <= t))
                         ],
                         "inhibition_suppressed_links": [
-                            sur.exchanges[j]
-                            for j in np.flatnonzero((e_fba > t) & (e_best <= t))
+                            sur.exchanges[j] for j in np.flatnonzero((e_fba > t) & (e_best <= t))
                         ],
                     }
                 )
@@ -1887,7 +1978,10 @@ def run(
         cells.append(cell)
         LOGGER.info(
             "community %d (%d members): E draws %.4g -> designed %.4g%s",
-            n, G, float(E.max()), cell["E_designed"],
+            n,
+            G,
+            float(E.max()),
+            cell["E_designed"],
             "" if not verify else f" (true {cell['E_true_designed']:.4g})",
         )
 
@@ -1946,10 +2040,14 @@ def run(
                 # "not worse" test between two solves of one medium needs a
                 # tolerance, and 1e-6 relative is far below any real regression.
                 "passed": bool(
-                    (obj_gain >= -1e-6 * np.maximum(
-                        np.abs([c["obj_true_designed"] for c in cells]),
-                        np.abs([c["obj_true_best_draw"] for c in cells]),
-                    )).all()
+                    (
+                        obj_gain
+                        >= -1e-6
+                        * np.maximum(
+                            np.abs([c["obj_true_designed"] for c in cells]),
+                            np.abs([c["obj_true_best_draw"] for c in cells]),
+                        )
+                    ).all()
                 ),
             }
         )

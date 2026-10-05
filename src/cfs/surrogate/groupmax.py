@@ -485,7 +485,9 @@ def init_from_tangents(
             gv = valid_cuts(g_w, w, mu, ds.mask[i], gv)
             LOGGER.info(
                 "%s: %d of %d usable tangents are valid outer approximations",
-                ds.genome_ids[i], int(gv.sum()), int(ds.gvalid_train[i].sum()),
+                ds.genome_ids[i],
+                int(gv.sum()),
+                int(ds.gvalid_train[i].sum()),
             )
         if select == "level1":
             pts = w if trial_points is None else np.asarray(trial_points[i])

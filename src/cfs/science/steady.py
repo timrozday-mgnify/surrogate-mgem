@@ -480,8 +480,9 @@ def _lstsq_step(J, r, col_c, col_x, damp=0.0):
     A, r = A / dr[:, None], r / dr
     if damp > 0.0:
         AtA = A.T @ A
-        w = np.linalg.lstsq(AtA + damp * np.trace(AtA) / len(AtA) * np.eye(len(AtA)),
-                            A.T @ r, rcond=1e-10)[0]
+        w = np.linalg.lstsq(
+            AtA + damp * np.trace(AtA) / len(AtA) * np.eye(len(AtA)), A.T @ r, rcond=1e-10
+        )[0]
     else:
         w = np.linalg.lstsq(A, r, rcond=1e-10)[0]
     return w * dc
@@ -824,9 +825,7 @@ def run(
         c = draw(hi)
         # `dc/dt` is linear in X, so the pool balance at `c` is a non-negative
         # least squares, and its zeros are the first guess at the active set.
-        Z = np.array(
-            [rhs(c, np.eye(len(organisms))[i])[0][idx] for i in range(len(organisms))]
-        )
+        Z = np.array([rhs(c, np.eye(len(organisms))[i])[0][idx] for i in range(len(organisms))])
         x = nnls(Z.T, -D * (feed - c)[idx])[0]
         x[~who] = 0.0
         if not x.any():
@@ -859,7 +858,9 @@ def run(
                 else:
                     lo = th
             out[i] = hi
-        LOGGER.info("R*: %s", np.array2string(out, precision=4, formatter={"float": "{:.4e}".format}))
+        LOGGER.info(
+            "R*: %s", np.array2string(out, precision=4, formatter={"float": "{:.4e}".format})
+        )
         return out
 
     if warm_start is not None:
@@ -919,9 +920,7 @@ def run(
             # counts.
             cc, xx = out["c"], np.maximum(out["X"], 1e-12)
         al = out["alive"]
-        rs = np.concatenate(
-            [D * np.maximum(sur.km[idx], 1e-30), np.full(int(al.sum()), D)]
-        )
+        rs = np.concatenate([D * np.maximum(sur.km[idx], 1e-30), np.full(int(al.sum()), D)])
         r = np.concatenate(
             [
                 (D * (feed - out["c"]) + (rhs_lp or rhs)(out["c"], out["X"])[0])[idx],
@@ -1004,15 +1003,27 @@ def run(
             who[list(who_ix)] = True
             ci, xi = _bisect(who)
             mono = solve_steady(
-                rhs_lp or rhs, feed, D, free, sur.km, ci, xi,
-                rhs_jac=rhs if rhs_lp else None, dmu_dc=dmu_dc, solver=solver,
-                ptc=ptc, readmits=0, invade_rel=invade_rel,
+                rhs_lp or rhs,
+                feed,
+                D,
+                free,
+                sur.km,
+                ci,
+                xi,
+                rhs_jac=rhs if rhs_lp else None,
+                dmu_dc=dmu_dc,
+                solver=solver,
+                ptc=ptc,
+                readmits=0,
+                invade_rel=invade_rel,
             )
             cand = _from(mono["c"], np.maximum(mono["X"], 0.0))
             LOGGER.info(
                 "seed %s: converged=%s margin=%.3g (best %.3g)",
                 "+".join(organisms[int(k)] for k in who_ix),
-                cand["converged"], _margin(cand), _margin(sol),
+                cand["converged"],
+                _margin(cand),
+                _margin(sol),
             )
             if _key(cand) > _key(sol):
                 sol = cand

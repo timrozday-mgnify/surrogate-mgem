@@ -46,8 +46,9 @@ def mu_and_grad(sur, c: np.ndarray, k: int) -> tuple[float, np.ndarray]:
     # One chain rule for both input blocks: under §13.11's inhibition the head
     # also has a `theta` channel, whose `dtheta/dc` is *negative*, and it is the
     # only route by which `dmu/dc` can be negative at all.
-    gc = chain_to_c(sur, np.asarray(g, dtype=np.float64)[:, 0],
-                        np.asarray(x, dtype=np.float64)[:, 0], c)[k]
+    gc = chain_to_c(
+        sur, np.asarray(g, dtype=np.float64)[:, 0], np.asarray(x, dtype=np.float64)[:, 0], c
+    )[k]
     return float(mu[k, 0]) * float(sur.mu_scale[k]), gc * float(sur.mu_scale[k])
 
 
@@ -283,8 +284,7 @@ def lp_value_and_grad(model, exchanges: list[str], c: np.ndarray, km_cfg=None):
             return 0.0, np.zeros_like(c)
         mu = float(sol.objective_value or 0.0)
         pi = {
-            ex.id: float(sol.shadow_prices[next(iter(ex.metabolites)).id])
-            for ex in model.exchanges
+            ex.id: float(sol.shadow_prices[next(iter(ex.metabolites)).id]) for ex in model.exchanges
         }
     g = np.zeros_like(c)
     for j, ex in enumerate(exchanges):
@@ -418,9 +418,7 @@ def trf(
             return min([v] + [mj + float(gj @ (y - cj)) for mj, gj, cj in _kw["cuts"]])
 
         lo, hi = trust_box(sur, c, k, radius)
-        cand, _ = maximise(
-            sur, c, k, cost=cost, budget=budget, c_lo=lo, c_hi=hi, iters=iters, **kw
-        )
+        cand, _ = maximise(sur, c, k, cost=cost, budget=budget, c_lo=lo, c_hi=hi, iters=iters, **kw)
         predicted = model_value(cand) - model_value(c)
         if predicted <= 1e-12 * max(abs(f), 1e-12):
             break
@@ -446,8 +444,14 @@ def trf(
         else:
             rejects += 1
             radius *= gamma_dec
-    return c, {"n_lp": n_lp, "trf_iters": len(hist) - 1, "trf_rejects": rejects,
-               "trf_radius": radius, "trf_cuts": len(bundle), "trf_path": hist}
+    return c, {
+        "n_lp": n_lp,
+        "trf_iters": len(hist) - 1,
+        "trf_rejects": rejects,
+        "trf_radius": radius,
+        "trf_cuts": len(bundle),
+        "trf_path": hist,
+    }
 
 
 def run(
@@ -487,8 +491,17 @@ def run(
         model = cobra.io.read_sbml_model(str(roster[gid].model_path))
         if trf_iters:
             c_star, extra = trf(
-                sur, model, sur.exchanges, c0, k, cost=cost, budget=budget,
-                decades=trust_decades, iters=iters, max_it=trf_iters, mode=trf_mode,
+                sur,
+                model,
+                sur.exchanges,
+                c0,
+                k,
+                cost=cost,
+                budget=budget,
+                decades=trust_decades,
+                iters=iters,
+                max_it=trf_iters,
+                mode=trf_mode,
             )
             path = extra.pop("trf_path")
         else:

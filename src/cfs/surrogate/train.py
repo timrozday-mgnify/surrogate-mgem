@@ -826,7 +826,9 @@ def load(outdir: Path, width: int = 128, depth: int = 3) -> tuple[eqx.Module, di
         LOGGER.warning(
             "%s was trained under a different input transform (%s); it is being "
             "evaluated under %s",
-            outdir, was, INPUT_TRANSFORM,
+            outdir,
+            was,
+            INPUT_TRANSFORM,
         )
     return eqx.tree_deserialise_leaves(outdir / "value_heads.eqx", like), meta
 

@@ -371,9 +371,7 @@ def test_explicit_media_are_labelled_verbatim_and_leave_the_sidecars_alone(tmp_p
     sidecar = (tmp_path / "toy2.subspace.json").read_text()
 
     given = [{"EX_a_e": 0.5, "EX_b_e": 1.5}, {"EX_a_e": 2.5, "EX_b_e": 0.25}]
-    round1 = generate_organism(
-        model, "toy2", "deadbeef", tmp_path, cfg, round_idx=1, media=given
-    )
+    round1 = generate_organism(model, "toy2", "deadbeef", tmp_path, cfg, round_idx=1, media=given)
 
     assert round1.n_media == 2
     df = pd.read_parquet(round1.paths[0])

@@ -39,7 +39,6 @@ from pathlib import Path
 import numpy as np
 
 from cfs.compose.dfba import chain_to_c
-
 from cfs.science.growth import mu_true
 
 LOGGER = logging.getLogger("cfs.science.minimal")
@@ -345,8 +344,11 @@ def cut_loop(
             if vals[i] > 1e-12 and np.linalg.norm(grads[i]) > 0.0:
                 cuts[i].append((vals[i], grads[i], c_star.copy()))
         c_star, info = minimise(sur, c_hi, members, target, cost=cost, c_lo=c_lo, cuts=cuts)
-    return c_star, info, {"cut_rounds": len(trace), "cut_trace": trace,
-                          "n_cuts": sum(len(x) for x in cuts)}
+    return (
+        c_star,
+        info,
+        {"cut_rounds": len(trace), "cut_trace": trace, "n_cuts": sum(len(x) for x in cuts)},
+    )
 
 
 def milp_components(model, exchanges: list[str], c_hi: np.ndarray, min_growth: float) -> int | None:
@@ -459,9 +461,15 @@ def run(
         t_hi = [mu_true(m, sur.exchanges, c_hi) for m in models]
         if cut_rounds:
             c_star, info, cut_info = cut_loop(
-                sur, models, c_hi, members, target,
+                sur,
+                models,
+                c_hi,
+                members,
+                target,
                 [target_frac * h for h in t_hi],
-                cost=cost, c_lo=c_lo, rounds=cut_rounds,
+                cost=cost,
+                c_lo=c_lo,
+                rounds=cut_rounds,
             )
             info |= cut_info
         else:

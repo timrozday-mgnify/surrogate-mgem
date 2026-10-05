@@ -89,8 +89,13 @@ def dx_dc(sur, x: np.ndarray, c: np.ndarray) -> np.ndarray:
         return dxdv * dudc
     safe = np.where(np.isfinite(ceq), ceq, 1.0)
     dthdc = np.where(np.isfinite(ceq) & (c < ceq), -1.0 / safe, 0.0)
-    return dxdv * np.concatenate([np.broadcast_to(dudc, dxdv[..., : len(km)].shape),
-                                  np.broadcast_to(dthdc, dxdv[..., len(km):].shape)], axis=-1)
+    return dxdv * np.concatenate(
+        [
+            np.broadcast_to(dudc, dxdv[..., : len(km)].shape),
+            np.broadcast_to(dthdc, dxdv[..., len(km) :].shape),
+        ],
+        axis=-1,
+    )
 
 
 def chain_to_c(sur, gx: np.ndarray, x: np.ndarray, c: np.ndarray) -> np.ndarray:
@@ -336,8 +341,9 @@ class Surrogate:
         zmu = (
             None
             if self.mu_floor is None
-            else jnp.asarray(np.maximum(mu, np.asarray(self.mu_floor).reshape(-1, 1)),
-                             dtype=jnp.float32)
+            else jnp.asarray(
+                np.maximum(mu, np.asarray(self.mu_floor).reshape(-1, 1)), dtype=jnp.float32
+            )
         )
         z = np.asarray(
             self._B.flux(self._bheads, jnp.asarray(xb), a, jnp.asarray(self.z_scale), zmu)
@@ -735,9 +741,7 @@ def integrate_stiff(
             CP = np.repeat(c[None], M + 1, axis=0)
             CP[1 + np.arange(M), np.arange(M)] += h
             dcb, mub = rhs_batch(CP, X)
-            R = np.concatenate(
-                [dcb + dilution * (feed[None] - CP), (mub.T - dilution)], axis=1
-            )
+            R = np.concatenate([dcb + dilution * (feed[None] - CP), (mub.T - dilution)], axis=1)
             J[:, :M] = ((R[1:] - R[0][None]) / h[:, None]).T
         else:
             for j in range(M):

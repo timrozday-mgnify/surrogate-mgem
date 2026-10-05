@@ -173,6 +173,7 @@ def test_the_chemostat_transient_lands_on_the_closed_form_steady_state():
     assert traj.x[-1][1] < 1e-12 * x_star  # the slow member is washed out
 
     # The control: the same horizon under explicit Euler at a comparable step.
-    eul = integrate(with_chemostat(_rhs, D, feed), feed.copy(), np.array([1e-4, 1e-4]),
-                    400.0 / 400, 400)
+    eul = integrate(
+        with_chemostat(_rhs, D, feed), feed.copy(), np.array([1e-4, 1e-4]), 400.0 / 400, 400
+    )
     assert not np.isclose(eul.x[-1][0], x_star, rtol=1e-4)
