@@ -57,6 +57,17 @@ from cfs.science.growth import _c_of_x, project
 
 LOGGER = logging.getLogger("cfs.science.interaction")
 
+
+def subseed(*keys: int) -> int:
+    """An independent int seed per key tuple.
+
+    Additive offsets (`seed + n*1000 + d`) made seed 1's draws seed 0's shifted
+    by one: three "replicate" seeds shared 63 of 64 draws, and candidate media
+    at k=0 reused the draw seeds outright. Hashing the tuple removes both.
+    """
+    return int(np.random.SeedSequence([int(k) for k in keys]).generate_state(1)[0])
+
+
 # Below this share of the largest link, a "link" is solver dust or head noise
 # rather than an interaction. Same spirit as `data._DUAL_TOL`.
 _LINK_TOL = 1e-6
@@ -836,11 +847,11 @@ def candidate_media(
         if feasible < _MIN_FEASIBLE:
             continue
         for d, var in enumerate(["analytic"] if m in extras else variants):
-            rng = np.random.default_rng(seed + 1000 * k + d)
+            rng = np.random.default_rng(subseed(seed, k, d, 0))
             spec: dict[int, float] = {}
             c = buffer_medium(
                 sur,
-                community_medium(labels_dir, gids, sur.exchanges, seed + 1000 * k + d, scales),
+                community_medium(labels_dir, gids, sur.exchanges, subseed(seed, k, d, 1), scales),
                 keep,
             )
             dims = (
@@ -1355,13 +1366,9 @@ def objective_spec(name: str, frac: float = _INTERFERE_FRAC) -> Objective:
             None,
             None,
             lambda models, exchanges, c, z, X, gids, keep=None, ceq=None: (
-                (
-                    spent_medium_assay(
-                        models, exchanges, c, z, X, gids, frac=frac, ceq=ceq, keep=keep
-                    )
-                    or {}
-                ).get("total_abs_conditioning_per_h", 0.0)
-            ),
+                spent_medium_assay(models, exchanges, c, z, X, gids, frac=frac, ceq=ceq, keep=keep)
+                or {}
+            ).get("total_abs_conditioning_per_h", 0.0),
         )
     raise ValueError(f"unknown objective {name!r}")
 
@@ -1515,7 +1522,7 @@ def run(
 
         roster = {gm.genome_id: gm for gm in read_roster(Path(roster_path))}
 
-    cells, saved = [], []
+    cells, saved, pools = [], [], []
     for n, gids in enumerate(communities):
         sur = Surrogate(value_dir, behaviour_dir, organisms=gids)
         # Loaded per community and dropped, not cached across them: a CarveMe GEM
@@ -1561,7 +1568,7 @@ def run(
                 sur.exchanges,
                 ceq,
                 n_media=inhibited_media,
-                seed=seed + n,
+                seed=subseed(seed, n, 3),
             )
             fresh = [m for m in ilinks if m not in links]
             links = {**links, **{m: ilinks[m] for m in fresh}}
@@ -1578,7 +1585,9 @@ def run(
             [
                 buffer_medium(
                     sur,
-                    community_medium(labels_dir, gids, sur.exchanges, seed + n * 1000 + d, scales),
+                    community_medium(
+                        labels_dir, gids, sur.exchanges, subseed(seed, n, 0, d), scales
+                    ),
                     keep,
                 )
                 for d in range(draws)
@@ -1625,7 +1634,7 @@ def run(
                 donor_media,
                 donor_box,
                 keep,
-                seed + n * 1000,
+                subseed(seed, n, 1),
                 box=box,
                 scales=scales,
                 ceq=ceq,
@@ -1691,6 +1700,7 @@ def run(
                     ]
                 )
             )
+            Z_pool = np.array(Zt)  # (media, G, M): kept for the report's survey
             del Zt
             best = np.argsort(-obj_true_draws)[:starts]
             obj_hat_draws = (
@@ -1714,7 +1724,7 @@ def run(
 
                 obj_rho = float(spearmanr(obj_hat_draws, obj_true_draws).statistic)
         else:
-            EX_true = E_true_draws = obj_true_draws = None
+            EX_true = E_true_draws = obj_true_draws = Z_pool = None
             if spec.hat_batch is None:
                 raise ValueError(
                     f"--objective {spec.name} has no surrogate half, so it cannot "
@@ -1723,6 +1733,10 @@ def run(
             best = np.argsort(
                 -(E if spec.name == "handover" else spec.hat_batch(sur, C, X, al, keep)[0])
             )[:starts]
+        # Every screened medium, so a report can show what the starts were made of
+        # and which handovers the LP found at each -- not only the few refined.
+        tg = targets or [{"metabolite": None, "variant": "draw"}] * len(C)
+        pools.append((n, C, tg, EX_true, Z_pool))
 
         # Coverage: of the metabolites the labels say could be handed over, how
         # many have a start the *LP* calls interactive. The point of candidate
@@ -2058,6 +2072,18 @@ def run(
         c_start=np.array([s[2] for s in saved]),
         c_design=np.array([s[3] for s in saved]),
         exchanges=np.array(sur.exchanges),
+        # the screened pool: draws + constructed starts, per community, with the
+        # true-LP per-metabolite handover rate (NaN when the screen was off)
+        pool_community=np.concatenate([np.full(len(p[1]), p[0]) for p in pools]),
+        pool_c=np.concatenate([p[1] for p in pools]),
+        pool_variant=np.array([t["variant"] for p in pools for t in p[2]]),
+        pool_metabolite=np.array([str(t.get("metabolite") or "") for p in pools for t in p[2]]),
+        pool_ex_true=np.concatenate(
+            [np.full(p[1].shape, np.nan) if p[3] is None else p[3] for p in pools]
+        ),
+        # per-member true-LP z at every screened medium, one key per community
+        # because communities can differ in size
+        **{f"pool_z_true_{p[0]}": p[4] for p in pools if p[4] is not None},
     )
     (Path(out) / "interactions.json").write_text(json.dumps(report, indent=2))
     return report

@@ -34,6 +34,51 @@ process INTERACTIONS {
     "mkdir ${id} && touch ${id}/interactions.json"
 }
 
+process SURVEY {
+    tag "${name}#${shard}"
+    label 'process_survey'
+    publishDir "${params.outdir}/survey", mode: 'copy'
+
+    input:
+    tuple val(name), val(ceq), val(shard), path(labels, stageAs: 'labels'), path(value, stageAs: 'value'), path(gems, stageAs: 'gems')
+    path script
+
+    output:
+    path "${name}/shard_${shard}.npz"
+
+    script:
+    def ceq_arg = ceq ? "--ceq ${ceq}" : ''
+    """
+    mkdir ${name}
+    ${params.python} ${script} --labels labels --gems gems --value value --pair '${params.pair}' \
+        ${ceq_arg} --seed ${params.survey_seed} --shard ${shard} --n ${params.survey_media} \
+        --out ${name}/shard_${shard}.npz
+    """
+
+    stub:
+    "mkdir ${name} && touch ${name}/shard_${shard}.npz"
+}
+
+process PRUNE {
+    tag "${run.name}"
+    label 'process_prune'
+    publishDir "${params.outdir}/prune", mode: 'copy'
+
+    input:
+    path run
+    path gems, stageAs: 'gems'
+    path script
+
+    output:
+    path "${run.name}.json"
+
+    script:
+    "${params.python} ${script} ${run} --gems gems --prune --out ."
+
+    stub:
+    "touch ${run.name}.json"
+}
+
 process CROSSEVAL {
     label 'process_crosseval'
     publishDir "${params.outdir}", mode: 'copy'
@@ -70,7 +115,16 @@ workflow {
             [id, meta, args, data.resolve(arm.value), data.resolve(arm.behaviour), data.resolve(arm.labels), gems]
         }
 
+    // The true-LP survey: media drawn from the search's prior, independent of its
+    // seeds. Shards are seeded by index, so raising --survey_shards with -resume
+    // only adds media.
+    shards = Channel.fromList(params.arms)
+        .combine(Channel.of(0..<(params.survey_shards as int)).flatten())
+        .map { arm, k -> [arm.name, arm.ceq ?: null, k, data.resolve(arm.labels), data.resolve(arm.value), gems] }
+    SURVEY(shards, file("${projectDir}/survey.py"))
+
     INTERACTIONS(jobs)
+    PRUNE(INTERACTIONS.out.run, gems, file("${projectDir}/crosseval.py"))
     ceqs = params.arms.findAll { it.ceq }.collect { it.ceq }.unique().join(',')
     CROSSEVAL(INTERACTIONS.out.run.collect(), gems, ceqs, file("${projectDir}/crosseval.py"))
 }
