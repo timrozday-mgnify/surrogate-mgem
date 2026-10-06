@@ -340,7 +340,7 @@ def rank_by_territory(
     return order, territory
 
 
-def valid_cuts(g_w, w, mu, mask, valid, tol: float = 1e-6) -> np.ndarray:
+def valid_cuts(g_w, w, mu, mask, valid, tol: float = 1e-5) -> np.ndarray:
     """Which label tangents are genuine outer approximations over the training rows.
 
     A supporting hyperplane of a concave function is >= that function everywhere,
@@ -389,6 +389,11 @@ def valid_cuts(g_w, w, mu, mask, valid, tol: float = 1e-6) -> np.ndarray:
     Kept, default off, for the negative result and because the mask itself is the
     cheapest statement of how far the labels are from concave.
 
+    ``tol`` is *relative* to ``1 + |mu|``: the planes are evaluated as a float32
+    matmul whose rounding differs by backend, and an absolute 1e-6 rejected 0.3%
+    of exact tangents on macOS and 11% on the x86 CI runner (|mu| ~ 13, so the
+    float32 noise is ~1e-5). Genuine violations are 0.1-2.85 here.
+
     Returns a bool mask over rows, ``valid`` AND outer-approximating.
     """
     ok = np.flatnonzero(valid)
@@ -400,7 +405,8 @@ def valid_cuts(g_w, w, mu, mask, valid, tol: float = 1e-6) -> np.ndarray:
     step = max(1, int(2e7 // max(len(w), 1)))
     for lo in range(0, len(ok), step):
         blk = np.asarray(jnp.asarray(a[lo : lo + step]) @ jnp.asarray(w).T)
-        out[ok[lo : lo + step]] = (blk + c[lo : lo + step, None] - mu[None, :]).min(1) >= -tol
+        slack = blk + c[lo : lo + step, None] - mu[None, :]
+        out[ok[lo : lo + step]] = (slack + tol * (1.0 + np.abs(mu))[None, :]).min(1) >= 0
     return out
 
 
