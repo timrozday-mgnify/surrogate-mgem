@@ -285,6 +285,44 @@ else:
                      title="How often each handover happens over the survey (true LP)")
     show(fig, height=200 + 22 * len(top))
     table(SR.sort_values(["arm", "pct"], ascending=[True, False]))
+
+    # Which handovers the model itself creates or destroys, at *independently drawn*
+    # media. Each run's `inhibition_only_links` answers the same question at that
+    # run's own designed medium, and the arms' optima are different media, so that
+    # version is confounded by the design -- here it disagrees with itself across
+    # seeds. The survey is the unconfounded comparison: the same prior, 4-figure n,
+    # and the arms differ only in the bound.
+    ref = "fba" if "fba" in set(SR.arm) else sorted(set(SR.arm))[0]
+    N = dict(zip(pd.DataFrame(verdict).arm, pd.DataFrame(verdict).media, strict=True))
+    if len(N) > 1:
+        wide = SR.pivot_table(index="link", columns="arm", values=["media", "pct", "ci_lo", "ci_hi"]).fillna(0)
+        cmp = []
+        for arm in sorted(set(SR.arm) - {ref}):
+            for lk in wide.index:
+                a, b = wide.loc[lk, ("pct", ref)], wide.loc[lk, ("pct", arm)]
+                disjoint = (wide.loc[lk, ("ci_hi", ref)] < wide.loc[lk, ("ci_lo", arm)]
+                            or wide.loc[lk, ("ci_hi", arm)] < wide.loc[lk, ("ci_lo", ref)])
+                cmp.append(dict(arm=arm, link=lk, pct_ref=a, pct_arm=b, delta_pct=b - a,
+                                fold=(b / a if a else float("inf")) if b else 0.0,
+                                media_ref=int(wide.loc[lk, ("media", ref)]),
+                                media_arm=int(wide.loc[lk, ("media", arm)]),
+                                verdict=("created" if a == 0 and b > 0 else "destroyed" if b == 0 and a > 0
+                                         else ("promoted" if b > a else "demoted") if disjoint else "same"),
+                                ci_disjoint=bool(disjoint)))
+        CMP = pd.DataFrame(cmp).sort_values(["arm", "delta_pct"], ascending=[True, False])
+        md(f"**What the model changes, at the same medium prior.** Each arm against **{ref}**, over "
+           + ", ".join(f"{a} {n}" for a, n in N.items()) + " media. `created`/`destroyed`: present in "
+           "one arm and never in the other. `promoted`/`demoted`: both happen, and the 95% Wilson "
+           "intervals do not overlap. `same`: the intervals overlap, so this survey cannot "
+           "separate them. An arm that changes a handover's *frequency* by orders of magnitude is "
+           "the §13.11 result — the two models disagree about which medium to run.")
+        table(CMP)
+        big = CMP[CMP.verdict.isin(["created", "destroyed", "promoted", "demoted"])]
+        if not big.empty:
+            md("Changed: " + "; ".join(f"**{r.link}** {r.verdict} ({r.pct_ref:.2f}% → {r.pct_arm:.2f}%"
+                                       f" under {r.arm})" for r in big.itertuples()) + ".")
+        else:
+            md("No handover's frequency separates between the arms at 95%.")
     if pools:
         srch = {(runs[r]["meta"]["arm"], f"{nm(m)}:  {a} → {b}")
                 for r, p in pools.items() for Zm in p["Z"] for m, a, b, *_ in handovers(Zm, p["ex"])}
@@ -466,21 +504,44 @@ PR = [json.loads(f.read_text()) for f in sorted((RUN / "prune").glob("*.json"))
 if not PR:
     md("_No `prune/`: re-run the pipeline with this version (PRUNE process)._")
 else:
+    def short(t):
+        # not a blanket replace("_e", ""): `EX_gly_met_e` has one inside the name
+        for a, b in (("EX_", ""), ("_e:", ":"), ("_e,", ","), ("_e ", " ")):
+            t = t.replace(a, b)
+        return t.removesuffix("_e")
+
     P = pd.DataFrame([dict(run=p["run"], arm=p["arm"], objective=p["objective"], seed=p["seed"],
                            moved=p["n_moved"], kept=p["n_kept"],
                            objective_design=p["objective_design"], objective_pruned=p["objective_pruned"],
-                           E_pruned=p["E_pruned"], signature=p["signature"]) for p in PR])
+                           E_pruned=p["E_pruned"], signature=p["signature"],
+                           # The handovers alone are the mechanism this use case is about, and
+                           # they are what reproduces: the limiters move with the seed (ties at
+                           # the 25% cut are common) and have their own table below, so grouping
+                           # on the full signature double-counts them and splits one reproducible
+                           # mechanism into one group per seed.
+                           handover_set=", ".join(sorted(p["handovers"])) or "no handover")
+                      for p in PR])
     n_runs = P.groupby(["arm", "objective"]).run.nunique()
-    G = (P.groupby(["arm", "objective", "signature"])
-         .agg(designs=("run", "nunique"), seeds=("seed", lambda s: ", ".join(map(str, sorted(s)))),
-              objective_min=("objective_pruned", "min"), objective_max=("objective_pruned", "max"))
-         .reset_index())
-    G["share"] = G.designs / [n_runs[(a, o)] for a, o in zip(G.arm, G.objective, strict=True)]
-    G["signature"] = G.signature.str.replace("EX_", "").str.replace("_e", "", regex=False)
-    md("**Mechanisms**: designs grouped by signature (handovers at the pruned design | each "
-       "member's limiters). `share` is the fraction of that arm and objective's seeds landing on it.")
-    table(G.sort_values(["arm", "objective", "designs"], ascending=[True, True, False])
-          [["arm", "objective", "designs", "share", "seeds", "objective_min", "objective_max", "signature"]])
+
+    def groups(key, label):
+        G = (P.groupby(["arm", "objective", key])
+             .agg(designs=("run", "nunique"), seeds=("seed", lambda s: ", ".join(map(str, sorted(s)))),
+                  objective_min=("objective_pruned", "min"), objective_max=("objective_pruned", "max"))
+             .reset_index())
+        G["share"] = G.designs / [n_runs[(a, o)] for a, o in zip(G.arm, G.objective, strict=True)]
+        G[key] = G[key].map(short)
+        return (G.rename(columns={key: label})
+                .sort_values(["arm", "objective", "designs"], ascending=[True, True, False])
+                [["arm", "objective", "designs", "share", "seeds", "objective_min", "objective_max", label]])
+
+    md("**Mechanisms**: designs grouped by the handovers at the pruned design. `share` is the "
+       "fraction of that arm and objective's seeds landing on the same set. This is the grouping "
+       "to read: the limiters are reported separately below, because they shift with the seed "
+       "and including them in the key splits a reproducible handover set into one group per seed.")
+    table(groups("handover_set", "handovers"))
+    md("The same designs grouped by the **full** signature (handovers | each member's limiters), "
+       "for the limiter detail. Expect more groups here; that is the limiters, not the mechanism.")
+    table(groups("signature", "signature"))
     md("**Pruning per run**: moves the search made, moves kept, and the objective before and after.")
     table(P.drop(columns="signature").sort_values(["arm", "objective", "seed"]))
     mv = pd.DataFrame([dict(run=p["run"], **m) for p in PR for m in p["moves"] if m["kept"]])

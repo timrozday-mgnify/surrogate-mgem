@@ -58,6 +58,56 @@ wall; the default is now five seeds (25 searches).
    where the accumulation curve is still rising; then a `c^eq` sweep (add arms with
    `ceq: 0.1` / `10`) — only 1.0 mM has its own inhibited heads, so other values put
    inhibition in the true LP only (the stage 3' design).
+
+### Steps 1-3, measured — `CP040530.1 + CP070062.1`, 2026-10-06
+
+The first full run: 67/67 tasks, 25 searches x 5 seeds, 16 survey shards
+(8000 media), V5 passing on all 25. Three things it settles.
+
+**The survey has converged, so do not buy more shards.** 8 shards = 4000 media an
+arm already gives Chao1 = the number seen (9.0 of 9 under FBA, 10.0 of 10 under
+inhibition), nothing first seen in the last quarter, every frequency to within
+~1% at 95%, and the accumulation curve flat from ~1000 media. The pair has **9-10
+handovers and that is the whole list** at this medium prior.
+
+**Inhibition does not perturb the frequencies, it creates a handover.** The
+headline, at *independently drawn* media so the arms differ only in the bound:
+`no2: 062 -> 530` **4.4% -> 90.6%** and `nh4: 062 -> 530` **0% -> 84.8%** (never
+once in 4000 FBA media), with `glyc`/`pi` near-universal in both. The per-design
+`inhibition_only_links` answers the same question at each run's own designed
+medium and **contradicts itself across seeds** — no2 reads "only" in `handover__s0`
+and "suppressed" in `s3`/`s4` — because the arms' optima are different media. The
+survey is the comparison to quote; the report now tabulates it with a
+disjoint-interval test.
+
+**The mechanism reproduces, and the old grouping hid it.** Designs were grouped by
+the full signature (handovers | each member's limiters), which put FBA handover at
+five groups of one seed each and read as total irreproducibility. The limiters
+shift with the seed — ties at the 25% cut are common — and they already have their
+own table, so including them double-counted them. Grouped on the handovers alone:
+
+| arm | objective | top mechanism | share |
+| --- | --- | --- | --- |
+| fba | handover | glyc + no2 + pi | **4/5** |
+| fba | interference | glyc + no2 + pi | **4/5** |
+| ceq1mM | interference | nh4 + no2 + pi | 3/5 |
+| ceq1mM | conditioning | glyc + pi | 3/5 |
+| ceq1mM | handover | glyc + no2 + pi / glyc + pi | 2/5, 2/5 |
+
+So **step 3's seed spend is now one cell, not five**: `ceq1mM__handover` is the
+only one without a majority, and its split is exactly whether `no2` is present —
+the same link inhibition promotes. The pruned designs are also tiny: 228 moves
+proposed, **0-2 kept**, so the search's design is one or two concentrations.
+
+**The instruments, in one line each.** `obj_rank_spearman` is 0.75-0.91 for
+interference and **0.47-0.69** for handover; at the designed medium the surrogate's
+*level* is within +-1% for interference and **-50% to +324%** for handover, and it
+proposes 2-13x too many links (`n_links_hat` vs `n_links_true`). The LP acceptance
+test carries the handover searches entirely — and under FBA the ascent adds little
+over its own LP-screened start (`true_gain_rel` 0.014-0.111, one seed exactly 0),
+while under inhibition it adds 6-115%. Conditioning does not ascend, so its
+`true_gain_rel` is 1e-13 by construction and its rank rho is `nan`; that is not a
+failure.
 4. **Other pairs**: stage their genomes (`stage_data.sh <src> <out> A B`) and run
    with `--pair A,B`. Rank pairs by the consensus link count before spending on any.
 5. **What not to read off it**: absolute rates and times (`Vmax` is ~30x
