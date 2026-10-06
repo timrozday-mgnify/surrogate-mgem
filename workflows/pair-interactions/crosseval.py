@@ -21,6 +21,11 @@ Writes, into --out:
                 designed: its variant, target, true-LP E (own model), and the
                 concentration of every exchange (mM). No solves: from media.npz
   spent.csv     one row per (run, model, donor -> recipient), best designs only
+  robust.csv    one row per (run, model, handover) at each best design: is the
+                handover forced or a tie-break among alternative optima (FVA on
+                that exchange at mu_max and at 0.95 mu_max), does it survive the
+                elastic-net eps (1e-2, 1e-4), and its rate and share of E at
+                abundance ratios 1:10..10:1 (from the same z, no solves)
   revert.csv    one row per (run, metabolite the best design moved): how much E
                 drops when that one metabolite goes back to its start value, under
                 the run's own model. A design moves ~150-250 metabolites and E is
@@ -37,20 +42,24 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from cfs.groundtruth.solve import load_km_defaults, solve
+from cfs.groundtruth.solve import apply_mm_bounds, load_km_defaults, solve
 from cfs.science.interaction import ceq_map, exchange, keep_mask, spent_medium_assay
 
 _MOVED_DECADES = 0.05  # below this a metabolite counts as unmoved
+_TOL = 1e-6  # link threshold, as in `links.csv`
+_EPS_ALT = (1e-2, 1e-4)  # the label set's other elastic-net levels
+_FRACS = (1.0, 0.95)  # FVA at mu_max, and at near-optimal growth
+_RATIOS = (0.1, 0.3, 1.0, 3.0, 10.0)  # X_first / X_rest, total biomass held at G
 
 
-def true_solve(models, exchanges, c, ceq):
+def true_solve(models, exchanges, c, ceq, eps=1e-3):
     """(mu per member, z per member) from the true FBA + elastic-net solve."""
     km = load_km_defaults()
     conc = dict(zip(exchanges, c.tolist(), strict=True))
     col = {ex: j for j, ex in enumerate(exchanges)}
     mu, z = np.zeros(len(models)), np.zeros((len(models), len(exchanges)))
     for i, m in enumerate(models):
-        sol = solve(m, conc, 1.0, 1e-3, km, ceq)
+        sol = solve(m, conc, 1.0, eps, km, ceq)
         if sol.status != "optimal":
             continue
         mu[i] = sol.mu_max
@@ -68,6 +77,81 @@ def designs(run: Path):
     best = int(np.argmin([abs(e - cell["E_designed"]) for e in e_hat]))
     rows = [(k, k == best, npz["c_start"][k], npz["c_design"][k]) for k in range(len(e_hat))]
     return meta, cell["community"], [str(x) for x in npz["exchanges"]], rows
+
+
+def fva(models, exchanges, c, ceq, cols, frac):
+    """(min, max) of each member's flux on exchanges `cols` over the optima at
+    `frac * mu_max`, same bounds as :func:`true_solve`; (G, len(cols)) each.
+    A member without the exchange is pinned at 0."""
+    from cobra.flux_analysis import flux_variability_analysis
+
+    km = load_km_defaults()
+    conc = dict(zip(exchanges, c.tolist(), strict=True))
+    lo, hi = np.zeros((len(models), len(cols))), np.zeros((len(models), len(cols)))
+    for i, m in enumerate(models):
+        ids = [exchanges[j] for j in cols if exchanges[j] in m.reactions]
+        if not ids:
+            continue
+        with m:
+            apply_mm_bounds(m, conc, km, ceq)
+            try:  # processes=1: a worker pool re-pickles the GEM per call (CLAUDE.md)
+                f = flux_variability_analysis(m, ids, fraction_of_optimum=frac, processes=1)
+            except Exception:  # infeasible / no growth: no optimum to vary over
+                continue
+        for k, j in enumerate(cols):
+            if exchanges[j] in f.index:
+                lo[i, k], hi[i, k] = f.loc[exchanges[j], ["minimum", "maximum"]]
+    return lo, hi
+
+
+def robust(models, ex, keep, c, z, ceq, key):
+    """Each handover at one medium: forced or a tie-break, eps, abundance ratio.
+
+    The handover is read off the elastic-net QP's unique optimum, but the LP
+    behind it is degenerate on ~69% of exchanges (M1), so a link can be the
+    tie-break the QP picked rather than something the network must do. FVA gives
+    the rate *every* optimum delivers (`forced_rate`) and the most any does.
+    Abundance only rescales members' z (each member's LP is its own), so the
+    ratio columns need no solves.
+    """
+    G = len(models)
+    e = exchange(z, np.ones(G), keep)
+    cols = list(np.flatnonzero(e > _TOL))
+    if not cols:
+        return []
+    alt = {
+        eps: exchange(true_solve(models, ex, c, ceq, eps)[1], np.ones(G), keep) for eps in _EPS_ALT
+    }
+    lim = {f: fva(models, ex, c, ceq, cols, f) for f in _FRACS}
+    rows = []
+    for k, j in enumerate(cols):
+        r = key | {
+            "metabolite": ex[j],
+            "producer": int(np.argmax(z[:, j])),
+            "consumer": int(np.argmin(z[:, j])),
+            "rate": e[j],
+            "share": e[j] / e.sum(),
+        }
+        for f, (lo, hi) in lim.items():
+            # guaranteed: what every optimum secretes / takes up; possible: the most
+            sec_min, upt_min = np.maximum(lo[:, k], 0).sum(), np.maximum(-hi[:, k], 0).sum()
+            sec_max, upt_max = np.maximum(hi[:, k], 0).sum(), np.maximum(-lo[:, k], 0).sum()
+            r[f"forced_rate@{f}"] = min(sec_min, upt_min)
+            r[f"max_rate@{f}"] = min(sec_max, upt_max)
+        # share of the reported rate that every optimum delivers
+        r["forced_frac"] = f = r["forced_rate@1.0"] / e[j]
+        r["class"] = "forced" if f > 0.99 else "partly forced" if f > 0.01 else "tie-break"
+        for eps, ea in alt.items():
+            r[f"rate@eps={eps:g}"] = ea[j]
+        for q in _RATIOS:
+            X = np.ones(G)
+            X[0] = q
+            X *= G / X.sum()
+            ex_q = exchange(z, X, keep)
+            r[f"rate@X={q:g}"] = ex_q[j]
+            r[f"share@X={q:g}"] = ex_q[j] / ex_q.sum()
+        rows.append(r)
+    return rows
 
 
 def reverts(models, ex, keep, X, c0, c1, meta, key):
@@ -134,7 +218,7 @@ def main():
     import cobra
 
     models_by = {}
-    media, links, spent, revert, fluxes = [], [], [], [], []
+    media, links, spent, revert, fluxes, rob = [], [], [], [], [], []
     for run in sorted(a.runs):
         meta, gids, ex, rows = designs(run)
         for g in gids:
@@ -179,6 +263,10 @@ def main():
                                     }
                                 )
                     if is_best and kind == "design":
+                        rob += [
+                            x | {"producer": gids[x["producer"]], "consumer": gids[x["consumer"]]}
+                            for x in robust(models, ex, keep, c, z, ceq, key)
+                        ]
                         sm = spent_medium_assay(models, ex, c, z, X, gids, ceq=ceq, keep=keep)
                         for p in (sm or {}).get("pairs", []):
                             spent.append(key | p)
@@ -192,6 +280,7 @@ def main():
     pd.DataFrame(spent).to_csv(a.out / "spent.csv", index=False)
     pd.DataFrame(revert).to_csv(a.out / "revert.csv", index=False)
     pd.DataFrame(fluxes).to_csv(a.out / "fluxes.csv", index=False)
+    pd.DataFrame(rob).to_csv(a.out / "robust.csv", index=False)
     composition(a.runs).to_csv(a.out / "media_composition.csv.gz", index=False)
 
 

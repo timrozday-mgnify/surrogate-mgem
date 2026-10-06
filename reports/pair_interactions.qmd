@@ -58,7 +58,7 @@ for d in sorted((RUN / "runs").glob("*/")):
 gids = next(iter(runs.values()))["cell"]["community"]
 own = {r: ("fba" if v["meta"]["ceq"] is None else f"ceq={v['meta']['ceq']}") for r, v in runs.items()}
 cx = {k: pd.read_csv(RUN / "crosseval" / f"{k}.csv") if (RUN / "crosseval" / f"{k}.csv").exists() and (RUN / "crosseval" / f"{k}.csv").stat().st_size > 1
-      else pd.DataFrame() for k in ("media", "links", "spent", "revert", "fluxes")}
+      else pd.DataFrame() for k in ("media", "links", "spent", "revert", "fluxes", "robust")}
 md(f"Pair **{gids[0]} + {gids[1]}**, {len(runs)} runs from `{RUN}`.")
 ```
 
@@ -110,7 +110,7 @@ fig = px.strip(ov, x="objective", y="E_true_designed", color="arm", hover_data=[
 show(fig)
 ```
 
-## What the pair can exchange
+## What the searches' screens found
 
 Every medium a run screened (its random draws plus the candidate media built to
 open each possible handover) was solved with the **true LP**, one solve per
@@ -195,6 +195,103 @@ fig = px.imshow(cand, color_continuous_scale=["#dddddd", "#117733"], aspect="aut
                 title="Candidate handovers proposed from the labels: realised by the true LP at any screened medium (green)")
 fig.update_coloraxes(showscale=False)
 show(fig, height=120 + 25 * len(cand))
+```
+
+## Has the survey converged?
+
+The screens above are the searches' own: 64 random draws per run plus candidate
+media built to open each handover, so their counts depend on how many media a run
+happened to screen. The **survey** (`survey/<arm>/shard_*.npz`) is separate: media
+drawn from the same prior, independent of the search seeds, each solved with the
+true LP alone. It answers two questions. *Is the list of handovers complete?* The
+accumulation curve should flatten, and the Chao1 estimate of the total number of
+handovers should match the number seen. *How often does each one happen?* Its
+frequency, with a 95% Wilson interval. Frequencies are relative to this medium
+prior, not to any particular natural environment. A handover counts at a medium
+when its rate is above 1e-6 (`media`), or, more strictly, when it is at least 1%
+of that medium's total `E` (`media_1pct`). To add media, rerun the pipeline with
+`-resume` and a larger `--survey_shards`; shard *k* is always the same media.
+
+```{python}
+def wilson(k, n, z=1.96):
+    p = k / n
+    c, h = (p + z * z / (2 * n)) / (1 + z * z / n), z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return c - h, c + h
+
+
+SVY = {}
+for d in sorted((RUN / "survey").glob("*/")) if (RUN / "survey").exists() else []:
+    fs = sorted(d.glob("shard_*.npz"), key=lambda f: int(f.stem.split("_")[1]))
+    zs = [np.load(f) for f in fs if f.stat().st_size]
+    if zs:
+        SVY[d.name] = dict(Z=np.concatenate([z["z"] for z in zs]).astype(float),
+                           ex=[str(x) for x in zs[0]["exchanges"]], shards=len(zs))
+if not SVY:
+    md("_No survey: run the pipeline with this version (SURVEY process)._")
+else:
+    rows, curves, verdict = [], [], []
+    rng = np.random.default_rng(0)
+    for arm, s in SVY.items():
+        per = []  # per medium: {link: (rate, share of E)}
+        for Zm in s["Z"]:
+            h = handovers(Zm, s["ex"])
+            tot = sum(x[5] for x in h)
+            per.append({f"{nm(m)}:  {a} → {b}": (e, e / tot) for m, a, b, _, _, e in h})
+        N = len(per)
+        links = sorted(set().union(*per))
+        first = {lk: next(i for i, p in enumerate(per) if lk in p) for lk in links}
+        for lk in links:
+            k = sum(lk in p for p in per)
+            k1 = sum(lk in p and p[lk][1] >= 0.01 for p in per)
+            lo, hi = wilson(k, N)
+            rows.append(dict(arm=arm, link=lk, media=k, pct=100 * k / N, ci_lo=100 * lo, ci_hi=100 * hi,
+                             media_1pct=k1, pct_1pct=100 * k1 / N,
+                             median_rate=np.median([p[lk][0] for p in per if lk in p]), first_seen=first[lk] + 1))
+        # accumulation: distinct handovers vs media screened, over random orders
+        grid = np.unique(np.geomspace(1, N, 40).astype(int))
+        acc = np.array([[len(set().union(*[per[i] for i in o[:n]])) for n in grid]
+                        for o in (rng.permutation(N) for _ in range(30))])
+        curves += [dict(arm=arm, media=n, mean=m, lo=a, hi=b)
+                   for n, m, a, b in zip(grid, acc.mean(0), np.percentile(acc, 5, 0), np.percentile(acc, 95, 0), strict=True)]
+        cnt = np.array([sum(lk in p for p in per) for lk in links])
+        f1, f2 = int((cnt == 1).sum()), int((cnt == 2).sum())
+        chao = len(links) + f1 * (f1 - 1) / (2 * (f2 + 1))
+        late = sum(first[lk] >= 0.75 * N for lk in links)
+        widest = max((wilson(c, N)[1] - wilson(c, N)[0]) / 2 for c in cnt) if len(cnt) else 0
+        verdict.append(dict(arm=arm, media=N, shards=s["shards"], handovers=len(links), singletons=f1,
+                            doubletons=f2, chao1=round(chao, 1), new_in_last_quarter=late,
+                            widest_ci_half_width_pct=round(100 * widest, 1),
+                            converged=bool(late == 0 and chao - len(links) < 0.5)))
+    SR = pd.DataFrame(rows)
+    md("**Convergence per arm.** `converged` = no handover first seen in the last quarter of the "
+       "media and Chao1 within 0.5 of the number seen. Singletons (seen once) are what Chao1 "
+       "extrapolates from; a list with many of them is still growing.")
+    table(pd.DataFrame(verdict))
+    fig = go.Figure()
+    for k, (arm, c) in enumerate(pd.DataFrame(curves).groupby("arm")):
+        col = PAL[k % len(PAL)]
+        fig.add_trace(go.Scatter(x=c.media, y=c.hi, line=dict(width=0), showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=c.media, y=c.lo, fill="tonexty", line=dict(width=0), fillcolor=col,
+                                 opacity=0.25, showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=c.media, y=c["mean"], name=arm, line=dict(color=col)))
+    fig.update_layout(title="Distinct handovers found vs media screened (mean, 5-95% over 30 random orders)",
+                      xaxis=dict(title="media screened", type="log"), yaxis_title="distinct handovers")
+    show(fig)
+    top = SR.groupby("link").pct.max().sort_values().index
+    fig = px.scatter(SR, y="link", x="pct", color="arm", error_x=SR.ci_hi - SR.pct, error_x_minus=SR.pct - SR.ci_lo,
+                     color_discrete_sequence=PAL, category_orders={"link": list(top)[::-1]},
+                     hover_data=["media", "media_1pct", "median_rate", "first_seen"],
+                     labels={"pct": "% of survey media (95% Wilson interval)", "link": ""},
+                     title="How often each handover happens over the survey (true LP)")
+    show(fig, height=200 + 22 * len(top))
+    table(SR.sort_values(["arm", "pct"], ascending=[True, False]))
+    if pools:
+        srch = {(runs[r]["meta"]["arm"], f"{nm(m)}:  {a} → {b}")
+                for r, p in pools.items() for Zm in p["Z"] for m, a, b, *_ in handovers(Zm, p["ex"])}
+        only = sorted(srch - {(r.arm, r.link) for r in SR.itertuples()})
+        md("**Found in the searches' screens but never in the survey** (reachable only from the "
+           "constructed candidate media, or too rare for the survey to have hit): "
+           + (", ".join(f"{lk} ({a})" for a, lk in only) if only else "none."))
 ```
 
 ## The interactions at the designed media
@@ -292,6 +389,52 @@ if not FX.empty:
        "plus every handover (`⇄`). This is what each member eats and what it releases, whether or not "
        "the partner uses it. Hover shows the member's growth rate `μ` (1/h).")
     show(fig, height=180 + 22 * n)
+```
+
+### Is each handover real?
+
+Four checks on every handover at each run's best design, under the run's own
+model. The first three are new true-LP solves; the last needs none.
+
+- **Seeds**: in how many of the independent seeds of that arm and objective the
+  handover appears at the best design. Each seed draws its own random media, and
+  its own background for the candidate media (whose targets come from the labels).
+- **Forced**: the reported fluxes are one optimum (the elastic-net QP's), but most
+  exchanges have many optima (M1: 69%). FVA with growth held at its maximum gives
+  the rate *every* optimum delivers. `forced` = more than 99% of the rate is
+  guaranteed, `tie-break` = under 1%, so the handover is the QP's choice, not the
+  network's. `forced@0.95` is the same at 95% of maximum growth: how much the
+  handover depends on growing exactly optimally.
+- **eps**: the rate when the QP is re-solved at the labels' other two
+  elastic-net weights (1e-2, 1e-4), relative to the reported one (1e-3).
+- **Abundance**: the handover's share of `E` as the first member's biomass goes
+  from 1/10 to 10x the second's. Each member's fluxes do not depend on the
+  partner's biomass, so this only changes which side caps the rate.
+
+```{python}
+RB = cx["robust"]
+if RB.empty:
+    md("_No `robust.csv`: re-run CROSSEVAL with this version of the pipeline._")
+else:
+    RB = RB[[own.get(r) == m for r, m in zip(RB.run, RB.model, strict=True)]].copy()
+    RB["eps_lo"] = RB[[c for c in RB if c.startswith("rate@eps=")]].min(axis=1) / RB.rate
+    xs = [c for c in RB if c.startswith("share@X=")]
+    RB["share_lo"], RB["share_hi"] = RB[xs].min(axis=1), RB[xs].max(axis=1)
+    RB["forced95"] = RB["forced_rate@0.95"] / RB.rate
+    n_seeds = ov.groupby(["arm", "objective"]).seed.nunique()
+    rc = (RB.groupby(["arm", "objective", "metabolite", "producer", "consumer"])
+          .agg(seeds=("seed", "nunique"), rate=("rate", "median"), share=("share", "median"),
+               forced=("forced_frac", "median"), forced_0_95=("forced95", "median"),
+               classes=("class", lambda s: ", ".join(f"{k} {v}" for k, v in s.value_counts().items())),
+               eps_worst=("eps_lo", "min"), share_X_lo=("share_lo", "min"), share_X_hi=("share_hi", "max"))
+          .reset_index())
+    rc["seeds"] = (rc.seeds.astype(str) + "/"
+                   + [str(n_seeds[(a, o)]) for a, o in zip(rc.arm, rc.objective, strict=True)])
+    rc["metabolite"] = rc.metabolite.map(nm)
+    md("Medians over the seeds where the handover occurs; `eps_worst` and the `share_X` range are "
+       "the worst case over them. Read a row as solid when it appears in most seeds, is mostly "
+       "`forced`, keeps `eps_worst` near 1, and keeps a non-trivial share across abundances.")
+    table(rc.sort_values(["arm", "objective", "share"], ascending=[True, True, False]))
 ```
 
 ### What the designs are made of

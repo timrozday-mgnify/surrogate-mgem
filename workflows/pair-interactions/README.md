@@ -9,16 +9,29 @@ INTERACTIONS  one `cfs interactions` search per (arm, objective, seed):
               objective = handover (cross-feeding), interference (competition +
                           inhibition), conditioning (inhibition alone; inhibited arms)
               -> runs/<arm>__<objective>__s<seed>/{interactions.json, media.npz, run.json}
+SURVEY        the true-LP survey: media from the same prior as the searches,
+              independent of their seeds, one FBA + QP per member, sharded
+              (--survey_shards x --survey_media, default 8 x 500 per arm, ~2 min
+              a shard). The report turns it into per-handover frequencies with
+              95% intervals, an accumulation curve and a Chao1 estimate of unseen
+              handovers. Shard k is always the same media, so `-resume` with more
+              shards only adds media
+              -> survey/<arm>/shard_<k>.npz
 CROSSEVAL     every start and designed medium re-solved with the true LP under every
               model, the spent-medium assay at each best design, and each moved
-              metabolite's contribution to E (reverted one at a time)
-              -> crosseval/{media,links,spent,revert}.csv
+              metabolite's contribution to E (reverted one at a time), and per
+              handover at each best design: FVA (forced vs tie-break), the other
+              elastic-net eps, and abundance ratios 1:10..10:1
+              -> crosseval/{media,links,spent,revert,fluxes,robust}.csv
 ```
 
 Each search proposes media with the surrogate and accepts them with the true LP, so
 every reported interaction is LP-verified. Measured on a laptop (2 cores per task,
 5 at once): handover 16-22 min, interference 4-7 min, conditioning <1 min (it screens
-constructed media without an ascent, so its seeds give identical answers); the
+constructed media without an ascent, so its seeds usually pick the same constructed
+start). Seeds draw independent random media; the candidate media target the same
+metabolites in every seed (from the labels) on an independently drawn background. Before 2026-10-06 seed s reused seed 0's
+draws shifted by s, so the seeds of earlier runs are not replicates; the
 default 15 searches + cross-evaluation took 47 min wall. On Slurm, expect ~25 min.
 
 ## Plan

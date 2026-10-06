@@ -57,6 +57,17 @@ from cfs.science.growth import _c_of_x, project
 
 LOGGER = logging.getLogger("cfs.science.interaction")
 
+
+def subseed(*keys: int) -> int:
+    """An independent int seed per key tuple.
+
+    Additive offsets (`seed + n*1000 + d`) made seed 1's draws seed 0's shifted
+    by one: three "replicate" seeds shared 63 of 64 draws, and candidate media
+    at k=0 reused the draw seeds outright. Hashing the tuple removes both.
+    """
+    return int(np.random.SeedSequence([int(k) for k in keys]).generate_state(1)[0])
+
+
 # Below this share of the largest link, a "link" is solver dust or head noise
 # rather than an interaction. Same spirit as `data._DUAL_TOL`.
 _LINK_TOL = 1e-6
@@ -836,11 +847,11 @@ def candidate_media(
         if feasible < _MIN_FEASIBLE:
             continue
         for d, var in enumerate(["analytic"] if m in extras else variants):
-            rng = np.random.default_rng(seed + 1000 * k + d)
+            rng = np.random.default_rng(subseed(seed, k, d, 0))
             spec: dict[int, float] = {}
             c = buffer_medium(
                 sur,
-                community_medium(labels_dir, gids, sur.exchanges, seed + 1000 * k + d, scales),
+                community_medium(labels_dir, gids, sur.exchanges, subseed(seed, k, d, 1), scales),
                 keep,
             )
             dims = (
@@ -1355,13 +1366,9 @@ def objective_spec(name: str, frac: float = _INTERFERE_FRAC) -> Objective:
             None,
             None,
             lambda models, exchanges, c, z, X, gids, keep=None, ceq=None: (
-                (
-                    spent_medium_assay(
-                        models, exchanges, c, z, X, gids, frac=frac, ceq=ceq, keep=keep
-                    )
-                    or {}
-                ).get("total_abs_conditioning_per_h", 0.0)
-            ),
+                spent_medium_assay(models, exchanges, c, z, X, gids, frac=frac, ceq=ceq, keep=keep)
+                or {}
+            ).get("total_abs_conditioning_per_h", 0.0),
         )
     raise ValueError(f"unknown objective {name!r}")
 
@@ -1561,7 +1568,7 @@ def run(
                 sur.exchanges,
                 ceq,
                 n_media=inhibited_media,
-                seed=seed + n,
+                seed=subseed(seed, n, 3),
             )
             fresh = [m for m in ilinks if m not in links]
             links = {**links, **{m: ilinks[m] for m in fresh}}
@@ -1578,7 +1585,9 @@ def run(
             [
                 buffer_medium(
                     sur,
-                    community_medium(labels_dir, gids, sur.exchanges, seed + n * 1000 + d, scales),
+                    community_medium(
+                        labels_dir, gids, sur.exchanges, subseed(seed, n, 0, d), scales
+                    ),
                     keep,
                 )
                 for d in range(draws)
@@ -1625,7 +1634,7 @@ def run(
                 donor_media,
                 donor_box,
                 keep,
-                seed + n * 1000,
+                subseed(seed, n, 1),
                 box=box,
                 scales=scales,
                 ceq=ceq,
