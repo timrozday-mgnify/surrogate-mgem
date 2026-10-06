@@ -110,6 +110,38 @@ while under inhibition it adds 6-115%. Conditioning does not ascend, so its
 failure.
 4. **Other pairs**: stage their genomes (`stage_data.sh <src> <out> A B`) and run
    with `--pair A,B`. Rank pairs by the consensus link count before spending on any.
+
+### Scaling to a community's pairs
+
+The report's "Interaction potential and magnitude" section is the contract for
+that, and it writes three CSVs into the outdir so a community-scale report is a
+concatenation rather than a rewrite:
+
+| file | one row per | what it is for |
+| --- | --- | --- |
+| `edges.csv` | arm, metabolite, producer, consumer | the directed metabolite edge: reach + Wilson interval, typical and best rate, FVA-forced fraction, seeds |
+| `graph_edges.csv` | arm, producer, consumer | the graph's directed edge: totals summed **at one medium** then aggregated, and `weight` for the edge width |
+| `relationships.csv` | arm, unordered pair | `both_ways_pct`, `asymmetry`, and `mutual` / `one-way` — what a community graph colours an edge by |
+
+Every row stands alone: no run, seed or design is referenced, so rows from
+different pairs concatenate directly. Two things to keep right when they do.
+
+**A pair total must be summed at one medium, then aggregated** — never as a sum
+of each metabolite's own maximum, since those maxima come from different designed
+media and their sum is a rate nothing delivers. `pair_totals` in the report does
+the per-medium sum; at community scale the same function takes `G` members
+instead of 2 and needs no other change.
+
+**Reach and magnitude are separate axes and must stay separate.** On this pair
+the largest-capacity edge (`glyc`, 330-610 mmol/gDW/h) has an FVA-forced fraction
+of ~0, i.e. it is the QP's tie-break, while `pi` is fully forced at a sixth of the
+rate. Multiplying them into one score would hide that; `weight` is magnitude
+alone and `reach`/`forced`/`seeds` qualify it.
+
+For this pair the relationship summary is the whole result in one line: under
+plain FBA it is **mostly one-way** (`CP070062.1 -> CP040530.1` at 4.6% of media),
+and under inhibition at `c^eq` = 1 mM it is **mutual** (93.6%) — the same
+`no2`/`nh4` creation the survey comparison found, as a graph edge.
 5. **What not to read off it**: absolute rates and times (`Vmax` is ~30x
    physiological, so only orderings and ratios carry over), and anything about the
    assembled community's abundances — `E` is a capacity of the medium at equal

@@ -231,11 +231,13 @@ if not SVY:
 else:
     rows, curves, verdict = [], [], []
     rng = np.random.default_rng(0)
+    parts = {}  # link -> (metabolite, producer, consumer), for joins downstream
     for arm, s in SVY.items():
         per = []  # per medium: {link: (rate, share of E)}
         for Zm in s["Z"]:
             h = handovers(Zm, s["ex"])
             tot = sum(x[5] for x in h)
+            parts |= {f"{nm(m)}:  {a} → {b}": (nm(m), a, b) for m, a, b, *_ in h}
             per.append({f"{nm(m)}:  {a} → {b}": (e, e / tot) for m, a, b, _, _, e in h})
         N = len(per)
         links = sorted(set().union(*per))
@@ -244,9 +246,12 @@ else:
             k = sum(lk in p for p in per)
             k1 = sum(lk in p and p[lk][1] >= 0.01 for p in per)
             lo, hi = wilson(k, N)
+            rt = [p[lk][0] for p in per if lk in p]
             rows.append(dict(arm=arm, link=lk, media=k, pct=100 * k / N, ci_lo=100 * lo, ci_hi=100 * hi,
                              media_1pct=k1, pct_1pct=100 * k1 / N,
-                             median_rate=np.median([p[lk][0] for p in per if lk in p]), first_seen=first[lk] + 1))
+                             median_rate=np.median(rt), max_rate=max(rt),
+                             median_share=100 * np.median([p[lk][1] for p in per if lk in p]),
+                             first_seen=first[lk] + 1))
         # accumulation: distinct handovers vs media screened, over random orders
         grid = np.unique(np.geomspace(1, N, 40).astype(int))
         acc = np.array([[len(set().union(*[per[i] for i in o[:n]])) for n in grid]
@@ -567,6 +572,224 @@ else:
         md("**What limits each member at the pruned designs** (limiters carrying >= 25% of that "
            "member's dual), counted over runs:")
         table(lc.sort_values(["arm", "objective", "member", "runs"], ascending=[True, True, True, False]))
+```
+
+## Interaction potential and magnitude
+
+One row per **directed metabolite edge** — a metabolite, who makes it, who takes
+it — under one model, pooling the three kinds of evidence above into the summary
+a network plot needs. This is the unit that scales: at community scale each pair
+contributes its own edges, so every row has to stand on its own, with no
+reference to a run or a seed.
+
+Three questions per edge, kept separate because they can disagree:
+
+- **Potential** — *can it happen, and how easily?* `reach` is the share of the
+  survey's independently drawn media where it happens at all (`common` ≥ 50%,
+  `occasional` 1–50%, `rare` < 1%, `designed only` = never in the survey but
+  realised at a designed medium). The Wilson interval is in `reach_lo`/`reach_hi`.
+  A `designed only` edge is real but needs a medium built for it.
+- **Magnitude** — *how much mass moves?* `rate_typical` is the median over the
+  survey media where it happens; `rate_capacity` is the largest rate reached at
+  any best design, i.e. what the medium can be pushed to. Both are mmol/gDW/h at
+  equal biomass (`X = 1` each) and inherit the GEMs' `|Vmax| = 1000`, so they are
+  ~30× physiological: **compare edges with each other, never with a stopwatch**.
+  `share_typical` is the edge's median share of the medium's whole handover rate.
+- **Support** — *is it the network or the solver's tie-break?* `forced` is the
+  median FVA-forced fraction at the designs (1 = every optimum delivers it, 0 =
+  this optimum only), and `seeds` is how many independent seeds reached it.
+  An edge that is `common` and `forced` is the pair's biology; one that is
+  `designed only` and `tie-break` is a lead.
+
+Then the same evidence per **ordered pair** (the graph's edges) and per
+**relationship** (both directions on one row, which is what says whether an
+exchange is mutual or one-way). All three are written to `edges.csv`,
+`graph_edges.csv` and `relationships.csv` in the run directory, for a
+community-scale report to concatenate across pairs.
+
+```{python}
+if "SR" not in dir() or SR.empty:
+    md("_No survey: the edge summary needs `survey/` (SURVEY process)._")
+else:
+    # Designed-medium evidence per edge, from the best designs under each run's
+    # own model (RB is already filtered to both). Capacity is the max over runs:
+    # the question is what the medium can be pushed to, not a typical design.
+    if "RB" in dir() and not RB.empty:
+        dz = (RB.assign(metabolite=RB.metabolite.map(nm))
+              .groupby(["arm", "metabolite", "producer", "consumer"])
+              .agg(rate_capacity=("rate", "max"), share_designed=("share", "max"),
+                   forced=("forced_frac", "median"), seeds=("seed", "nunique"),
+                   objectives=("objective", "nunique"))
+              .reset_index())
+    else:
+        dz = pd.DataFrame(columns=["arm", "metabolite", "producer", "consumer", "rate_capacity",
+                                   "share_designed", "forced", "seeds", "objectives"])
+    sv = SR.assign(**{k: [parts[lk][i] for lk in SR.link]
+                      for i, k in enumerate(("metabolite", "producer", "consumer"))})
+    key = ["arm", "metabolite", "producer", "consumer"]
+    ED = sv[key + ["pct", "ci_lo", "ci_hi", "median_rate", "max_rate", "median_share", "media"]].merge(
+        dz, on=key, how="outer")
+    ED = ED.rename(columns={"pct": "reach_pct", "ci_lo": "reach_lo", "ci_hi": "reach_hi",
+                            "median_rate": "rate_typical", "max_rate": "rate_survey_max",
+                            "median_share": "share_typical", "media": "survey_media"})
+    ED["reach_pct"] = ED.reach_pct.fillna(0.0)
+    ED["reach"] = np.select(
+        [ED.reach_pct >= 50, ED.reach_pct >= 1, ED.reach_pct > 0],
+        ["common", "occasional", "rare"], default="designed only")
+    # One number for an edge's width: what the pair can be pushed to where that
+    # is known, the typical survey rate otherwise. Never a product of the two --
+    # reach and magnitude are the axes the plot keeps apart.
+    ED["weight"] = ED.rate_capacity.fillna(ED.rate_typical).fillna(0.0)
+    ED["seeds"] = ED.seeds.fillna(0).astype(int)
+    ED["objectives"] = ED.objectives.fillna(0).astype(int)
+    cols = ["arm", "metabolite", "producer", "consumer", "reach", "reach_pct", "reach_lo", "reach_hi",
+            "survey_media", "rate_typical", "share_typical", "rate_capacity", "share_designed",
+            "forced", "seeds", "objectives", "weight"]
+    ED = ED[cols].sort_values(["arm", "reach_pct", "weight"], ascending=[True, False, False])
+    table(ED)
+
+    # Per ordered pair. NOT the sum of the per-metabolite columns above: each
+    # metabolite's capacity is the max over runs, and different runs designed
+    # different media, so that sum is a rate no single medium delivers. Summed
+    # per medium first, then aggregated over media -- which is also the only
+    # version that stays a rate when a pair hands over several metabolites at
+    # once in a community.
+    def pair_totals(Z, ex, gids, label):
+        rows = []
+        sec, upt = np.clip(Z, 0, None), np.clip(-Z, 0, None)
+        keep_j = [j for j, e in enumerate(ex) if e not in BUF]
+        for a in range(len(gids)):
+            for b in range(len(gids)):
+                if a == b:
+                    continue
+                r = np.minimum(sec[:, a, keep_j], upt[:, b, keep_j]).sum(1)
+                rows.append(dict(producer=gids[a], consumer=gids[b], **{label: r}))
+        return rows
+
+    pair = []
+    for arm, sy in SVY.items():
+        for r in pair_totals(sy["Z"], sy["ex"], gids, "r"):
+            v = r.pop("r")
+            pair.append(dict(arm=arm, **r, pair_media_pct=100 * float((v > 1e-6).mean()),
+                             pair_rate_typical=float(np.median(v[v > 1e-6])) if (v > 1e-6).any() else 0.0,
+                             pair_rate_survey_max=float(v.max())))
+    PT = pd.DataFrame(pair)
+    # capacity: the best design of each run is one medium, so summing its
+    # metabolites is legitimate; take the best run.
+    if "RB" in dir() and not RB.empty:
+        cap = (RB.groupby(["arm", "run", "producer", "consumer"]).rate.sum().reset_index()
+               .groupby(["arm", "producer", "consumer"]).rate.max()
+               .rename("pair_rate_capacity").reset_index())
+    else:
+        cap = pd.DataFrame(columns=["arm", "producer", "consumer", "pair_rate_capacity"])
+    GE = (ED.groupby(["arm", "producer", "consumer"])
+          .agg(metabolites=("metabolite", lambda s: ", ".join(sorted(s))),
+               n_metabolites=("metabolite", "nunique"),
+               n_common=("reach", lambda s: int((s == "common").sum())),
+               n_forced=("forced", lambda s: int((s >= 0.99).sum())),
+               max_reach_pct=("reach_pct", "max"))
+          .reset_index()
+          .merge(PT, on=["arm", "producer", "consumer"], how="outer")
+          .merge(cap, on=["arm", "producer", "consumer"], how="left"))
+    # Neither candidate is an optimum of this one direction -- the searches maximise
+    # the whole of `E`, or a different objective entirely, and the survey does not
+    # optimise at all -- so the best total *seen* is the honest ceiling, and it is
+    # the survey's on one edge here.
+    GE["weight"] = GE[["pair_rate_capacity", "pair_rate_survey_max"]].max(axis=1).fillna(0.0)
+    for c in ("n_metabolites", "n_common", "n_forced"):
+        GE[c] = GE[c].fillna(0).astype(int)
+    md("**Per ordered pair** — the graph's edges, each total summed over metabolites **at the same "
+       "medium** and then aggregated over media, never as a sum of the per-metabolite maxima above "
+       "(those come from different media). `pair_media_pct` is how often the pair exchanges "
+       "anything, `pair_rate_typical` the median total where it does, `pair_rate_capacity` the "
+       "total at the design that maximises it. `weight`, the edge's width, is the larger of that "
+       "and the survey's maximum: no run optimises one direction on its own, so the best total "
+       "seen is the ceiling we can defend. `n_common`/`n_forced` say how many of the metabolites "
+       "are reliable rather than medium-specific or a solver tie-break.")
+    table(GE.sort_values(["arm", "weight"], ascending=[True, False]))
+
+    # Per *unordered* pair: the one line a community graph needs per relationship.
+    rec = []
+    for arm, g in GE.groupby("arm"):
+        w = {(r.producer, r.consumer): r for r in g.itertuples()}
+        for a, b in {tuple(sorted(k)) for k in w}:
+            f, r_ = w.get((a, b)), w.get((b, a))
+            wf, wr = (f.weight if f else 0.0), (r_.weight if r_ else 0.0)
+            pf, pr = (f.pair_media_pct if f else 0.0), (r_.pair_media_pct if r_ else 0.0)
+            both = min(pf, pr)
+            rec.append(dict(arm=arm, member_a=a, member_b=b,
+                            pct_a_to_b=pf, pct_b_to_a=pr, both_ways_pct=both,
+                            weight_a_to_b=wf, weight_b_to_a=wr,
+                            asymmetry=(wf - wr) / (wf + wr) if wf + wr else 0.0,
+                            relationship=("none" if max(pf, pr) < 1 else
+                                          "mutual" if both >= 50 else
+                                          "one-way" if min(pf, pr) < 1 else "mostly one-way")))
+    RE = pd.DataFrame(rec)
+    md("**Per relationship** — both directions on one row. `both_ways_pct` is how often *both* "
+       "directions run at the same medium, which is what makes an exchange mutual rather than two "
+       "one-way flows in different media; `asymmetry` is +1 when only `a → b` carries mass and −1 "
+       "when only `b → a` does. This is the row a community graph colours an edge by.")
+    table(RE.sort_values(["arm", "both_ways_pct"], ascending=[True, False]))
+    for name, df in (("edges", ED), ("graph_edges", GE), ("relationships", RE)):
+        df.to_csv(RUN / f"{name}.csv", index=False)
+    md(f"Written: `edges.csv`, `graph_edges.csv`, `relationships.csv` in `{RUN}`.")
+```
+
+```{python}
+# A node-link view of `graph_edges`. Trivial for one pair; it is here because the
+# community report reuses it unchanged at G nodes, and a layout that only works
+# at G = 2 would not survive the move.
+if "GE" in dir() and not GE.empty:
+    nodes = sorted(set(GE.producer) | set(GE.consumer))
+    th = {g: 2 * np.pi * i / len(nodes) + np.pi / 2 for i, g in enumerate(nodes)}
+    pos = {g: (np.cos(t), np.sin(t)) for g, t in th.items()}
+    arms = sorted(set(GE.arm))
+    fig = go.Figure()
+    wmax = GE.weight.max() or 1.0
+    for k, arm in enumerate(arms):
+        g = GE[GE.arm == arm]
+        vis = k == 0
+        for r in g.itertuples():
+            (x0, y0), (x1, y1) = pos[r.producer], pos[r.consumer]
+            # bow the edge so the two directions of a pair do not overlap
+            mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+            nx_, ny_ = -(y1 - y0), (x1 - x0)
+            n = np.hypot(nx_, ny_) or 1.0
+            cx_, cy_ = mx + 0.18 * nx_ / n, my + 0.18 * ny_ / n
+            t = np.linspace(0, 1, 40)[:, None]
+            b = (1 - t) ** 2 * np.array([x0, y0]) + 2 * (1 - t) * t * np.array([cx_, cy_]) + t**2 * np.array([x1, y1])
+            fig.add_trace(go.Scatter(
+                x=b[:, 0], y=b[:, 1], mode="lines", visible=vis, showlegend=False,
+                line=dict(width=1 + 7 * r.weight / wmax, color=PAL[k % len(PAL)]),
+                hovertemplate=f"{r.producer} → {r.consumer}<br>{r.n_metabolites} metabolites"
+                              f" ({r.n_common} common, {r.n_forced} forced)<br>"
+                              f"exchanges at {r.pair_media_pct:.1f}% of survey media<br>"
+                              f"typical {r.pair_rate_typical:.3g}, best {r.weight:.3g} mmol/gDW/h"
+                              f"<br>{r.metabolites}<extra></extra>"))
+            fig.add_annotation(x=b[-2, 0], y=b[-2, 1], ax=b[-6, 0], ay=b[-6, 1], xref="x", yref="y",
+                               axref="x", ayref="y", showarrow=True, arrowhead=2, arrowsize=1.2,
+                               arrowwidth=1.5, arrowcolor=PAL[k % len(PAL)], visible=vis)
+    fig.add_trace(go.Scatter(x=[pos[g][0] for g in nodes], y=[pos[g][1] for g in nodes], mode="markers+text",
+                             text=nodes, textposition="middle right", showlegend=False,
+                             marker=dict(size=18, color="#444"), hoverinfo="text"))
+    if len(arms) > 1:
+        n_per = [int(2 * (GE.arm == a).sum()) for a in arms]  # traces + annotations per arm
+        def mask(j):
+            out = []
+            for i, a in enumerate(arms):
+                out += [i == j] * (n_per[i] // 2)
+            return out + [True]
+        fig.update_layout(updatemenus=[dict(
+            buttons=[dict(label=a, method="update",
+                          args=[{"visible": mask(j)},
+                                {"annotations": [an for i, an in enumerate(fig.layout.annotations)
+                                                 if sum(n_per[:j]) // 2 <= i < sum(n_per[:j + 1]) // 2]}])
+                     for j, a in enumerate(arms)],
+            x=0, y=1.15, xanchor="left")])
+    fig.update_layout(title="Who can hand what to whom (edge width = total capacity at one medium)",
+                      xaxis=dict(visible=False, range=[-1.6, 1.6]),
+                      yaxis=dict(visible=False, range=[-1.6, 1.6], scaleanchor="x"), height=520)
+    show(fig)
 ```
 
 ## The candidate and designed media
