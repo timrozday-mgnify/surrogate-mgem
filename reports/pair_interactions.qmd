@@ -58,7 +58,7 @@ for d in sorted((RUN / "runs").glob("*/")):
 gids = next(iter(runs.values()))["cell"]["community"]
 own = {r: ("fba" if v["meta"]["ceq"] is None else f"ceq={v['meta']['ceq']}") for r, v in runs.items()}
 cx = {k: pd.read_csv(RUN / "crosseval" / f"{k}.csv") if (RUN / "crosseval" / f"{k}.csv").exists() and (RUN / "crosseval" / f"{k}.csv").stat().st_size > 1
-      else pd.DataFrame() for k in ("media", "links", "spent", "revert", "fluxes", "robust")}
+      else pd.DataFrame() for k in ("media", "links", "spent", "fluxes", "robust")}
 md(f"Pair **{gids[0]} + {gids[1]}**, {len(runs)} runs from `{RUN}`.")
 ```
 
@@ -437,44 +437,75 @@ else:
     table(rc.sort_values(["arm", "objective", "share"], ascending=[True, True, False]))
 ```
 
-### What the designs are made of
+### What the designs are made of, and do the seeds agree?
 
-A design moves ~150-250 metabolites, but the handover rate is flat along almost
-all of them: one or a few metabolites limit growth, and only the handed-over ones
-matter. The search follows the surrogate's gradient and the LP only checks that `E`
-did not fall, so the rest drift, and *which* ones drift is arbitrary and changes
-with the seed. So the fold change is not the design. Each moved metabolite is
-instead put back to its start value, one at a time, and the true LP is re-solved:
-its **contribution** is how much `E` falls (negative: the move cost `E`, and was
-outweighed by others). The contribution is always to the handover rate `E`: for
-interference and conditioning runs that is a side effect of the design, not the
-objective it optimised.
+A design moves ~150-250 metabolites, but its objective is flat along almost all
+of them: the search follows the surrogate's gradient and the LP only checks the
+objective did not fall, so most moves are drift that changes with the seed. Each
+run's best design is therefore **pruned** with the true LP, on the run's *own*
+objective (`E` for handover, the growth loss for interference, the conditioning
+term for conditioning):
+
+1. each moved metabolite is put back to its start value alone, and the objective
+   re-solved (its **contribution**);
+2. moves are then reverted cumulatively, cheapest first, as long as the
+   objective stays within 1% of the design's;
+3. what is left is the start plus the moves that matter.
+
+At the pruned medium the **mechanism** is recorded: the handovers carrying at
+least 1% of `E`, and each member's **limiting exchanges** (bounds that bind with
+a non-zero reduced cost, as shares of that member's total; "(secretion)" is a
+binding product-inhibition bound). Designs are grouped by that signature. A
+mechanism that most seeds reach is a result; one seed's mechanism is a lead.
+Conditioning runs do not ascend, so their design is the screened start and is
+not pruned.
 
 ```{python}
-R = cx["revert"]
-if R.empty:
-    md("_No revert table: re-run CROSSEVAL with this version of the pipeline._")
+PR = [json.loads(f.read_text()) for f in sorted((RUN / "prune").glob("*.json"))
+      if f.stat().st_size] if (RUN / "prune").exists() else []
+if not PR:
+    md("_No `prune/`: re-run the pipeline with this version (PRUNE process)._")
 else:
-    n = (R.assign(matters=R.contribution_rel.abs() > 0.01)
-         .groupby("run").agg(moved=("metabolite", "size"), matters=("matters", "sum"),
-                             E_design=("E_design", "first")).reset_index())
-    md("How many moved metabolites change `E` by more than 1% when reverted:")
-    table(n)
-    keep = R.loc[R.contribution_rel.abs() > 0.01, "metabolite"].unique()
-    if len(keep):
-        hm = R[R.metabolite.isin(keep)].pivot_table(index="run", columns="metabolite",
-                                                    values="contribution_rel")
-        fold = R[R.metabolite.isin(keep)].pivot_table(index="run", columns="metabolite",
-                                                      values="log10_fold").reindex_like(hm)
-        lim = float(np.nanmax(np.abs(hm.to_numpy())))
+    P = pd.DataFrame([dict(run=p["run"], arm=p["arm"], objective=p["objective"], seed=p["seed"],
+                           moved=p["n_moved"], kept=p["n_kept"],
+                           objective_design=p["objective_design"], objective_pruned=p["objective_pruned"],
+                           E_pruned=p["E_pruned"], signature=p["signature"]) for p in PR])
+    n_runs = P.groupby(["arm", "objective"]).run.nunique()
+    G = (P.groupby(["arm", "objective", "signature"])
+         .agg(designs=("run", "nunique"), seeds=("seed", lambda s: ", ".join(map(str, sorted(s)))),
+              objective_min=("objective_pruned", "min"), objective_max=("objective_pruned", "max"))
+         .reset_index())
+    G["share"] = G.designs / [n_runs[(a, o)] for a, o in zip(G.arm, G.objective, strict=True)]
+    G["signature"] = G.signature.str.replace("EX_", "").str.replace("_e", "", regex=False)
+    md("**Mechanisms**: designs grouped by signature (handovers at the pruned design | each "
+       "member's limiters). `share` is the fraction of that arm and objective's seeds landing on it.")
+    table(G.sort_values(["arm", "objective", "designs"], ascending=[True, True, False])
+          [["arm", "objective", "designs", "share", "seeds", "objective_min", "objective_max", "signature"]])
+    md("**Pruning per run**: moves the search made, moves kept, and the objective before and after.")
+    table(P.drop(columns="signature").sort_values(["arm", "objective", "seed"]))
+    mv = pd.DataFrame([dict(run=p["run"], **m) for p in PR for m in p["moves"] if m["kept"]])
+    if not mv.empty:
+        hm = mv.pivot_table(index="run", columns="metabolite", values="contribution_rel_pruned")
+        fold = mv.pivot_table(index="run", columns="metabolite", values="log10_fold").reindex_like(hm)
+        lim = float(np.nanmax(np.abs(hm.to_numpy()))) or 1.0
         fig = go.Figure(go.Heatmap(
-            z=hm.to_numpy(), x=list(hm.columns), y=list(hm.index), customdata=fold.to_numpy(),
-            colorscale="RdBu", zmid=0, zmin=-lim, zmax=lim, colorbar=dict(title="ΔE / E"),
-            hovertemplate="%{y}<br>%{x}<br>contribution %{z:.3f} of E"
-                          "<br>moved %{customdata:+.2f} decades<extra></extra>"))
-        fig.update_layout(title="Contribution of each move to E (moves changing E by >1% in any run; "
-                                "blank = not moved in that run)")
+            z=hm.to_numpy(), x=[nm(c) for c in hm.columns], y=list(hm.index), customdata=fold.to_numpy(),
+            colorscale="RdBu", zmid=0, zmin=-lim, zmax=lim, colorbar=dict(title="share of objective"),
+            hovertemplate="%{y}<br>%{x}<br>contribution %{z:.3f} of the objective"
+                          "<br>moved %{customdata:+.2f} decades from the start<extra></extra>"))
+        fig.update_layout(title="The kept moves: each one's contribution at the pruned design "
+                                "(blank = not kept in that run)")
         show(fig, height=150 + 25 * len(hm))
+    lm = pd.DataFrame([dict(run=p["run"], arm=p["arm"], objective=p["objective"], member=g, limiter=k, share=v)
+                       for p in PR for g, d in p["limiters"].items() for k, v in d.items()])
+    if not lm.empty:
+        lm["limiter"] = lm.limiter.str.replace("EX_", "").str.replace("_e", "", regex=False)
+        lc = (lm[lm.share >= 0.25].groupby(["arm", "objective", "member", "limiter"])
+              .agg(runs=("run", "nunique"), median_share=("share", "median")).reset_index())
+        lc["of"] = [n_runs[(a, o)] for a, o in zip(lc.arm, lc.objective, strict=True)]
+        md("**What limits each member at the pruned designs** (limiters carrying >= 25% of that "
+           "member's dual), counted over runs:")
+        table(lc.sort_values(["arm", "objective", "member", "runs"], ascending=[True, True, True, False]))
 ```
 
 ## The candidate and designed media

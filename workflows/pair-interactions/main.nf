@@ -59,6 +59,26 @@ process SURVEY {
     "mkdir ${name} && touch ${name}/shard_${shard}.npz"
 }
 
+process PRUNE {
+    tag "${run.name}"
+    label 'process_prune'
+    publishDir "${params.outdir}/prune", mode: 'copy'
+
+    input:
+    path run
+    path gems, stageAs: 'gems'
+    path script
+
+    output:
+    path "${run.name}.json"
+
+    script:
+    "${params.python} ${script} ${run} --gems gems --prune --out ."
+
+    stub:
+    "touch ${run.name}.json"
+}
+
 process CROSSEVAL {
     label 'process_crosseval'
     publishDir "${params.outdir}", mode: 'copy'
@@ -104,6 +124,7 @@ workflow {
     SURVEY(shards, file("${projectDir}/survey.py"))
 
     INTERACTIONS(jobs)
+    PRUNE(INTERACTIONS.out.run, gems, file("${projectDir}/crosseval.py"))
     ceqs = params.arms.findAll { it.ceq }.collect { it.ceq }.unique().join(',')
     CROSSEVAL(INTERACTIONS.out.run.collect(), gems, ceqs, file("${projectDir}/crosseval.py"))
 }
