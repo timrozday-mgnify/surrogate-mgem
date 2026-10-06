@@ -46,3 +46,4 @@ workflows/pair-interactions/hpc.config
 pair-data/
 pair-results/
 results-test/
+results-community-test/

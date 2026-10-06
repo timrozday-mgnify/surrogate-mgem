@@ -33,9 +33,28 @@ tasks:
         vars: {RUN_DIR: '{{.RUN_DIR}}', OUT: '{{.OUT}}'}
       - open rendered_reports/{{.OUT}}
 
-  pair:report:
-    desc: Render the pair-interactions report for a pipeline outdir (task pair:report RUN_DIR=/path/to/outdir)
+  community:report:
+    desc: Render the community (all-pairs) interactions report (task community:report RUN_DIR=/path/to/outdir)
     vars:
+      PAIR_ABS:
+        sh: cd "{{.RUN_DIR}}" && pwd
+      KERNEL_PY: '{{.KERNEL_PY | default "~/.local/share/mamba/envs/basicpython/bin/python"}}'
+      # its own name, so it does not overwrite pair:report's output for the same outdir
+      COUT: '{{.COUT | default (printf "%s_community.html" (base .RUN_DIR))}}'
+    preconditions:
+      - sh: test -f "{{.RUN_DIR}}/edges.csv"
+        msg: '"{{.RUN_DIR}}/edges.csv" missing — run the pipeline''s EDGES process first.'
+    cmds:
+      - mkdir -p rendered_reports
+      - cd reports && QUARTO_PYTHON={{.KERNEL_PY}} quarto render community_interactions.qmd -P run_dir:"{{.PAIR_ABS}}" --output "{{.COUT}}"
+      - mv reports/{{.COUT}} rendered_reports/{{.COUT}}
+    generates:
+      - rendered_reports/{{.COUT}}
+
+  pair:report:
+    desc: One pair in full (task pair:report RUN_DIR=/path/to/outdir [PAIR=A,B]); PAIR defaults to the top-ranked
+    vars:
+      PAIR: '{{.PAIR}}'
       PAIR_ABS:
         sh: cd "{{.RUN_DIR}}" && pwd
       # the kernel the qmd names lives in this env; quarto must find its jupyter
@@ -45,5 +64,5 @@ tasks:
         msg: '"{{.RUN_DIR}}/runs" missing — is this a pair-interactions outdir?'
     cmds:
       - mkdir -p rendered_reports
-      - cd reports && QUARTO_PYTHON={{.KERNEL_PY}} quarto render pair_interactions.qmd -P run_dir:"{{.PAIR_ABS}}" --output "{{.OUT}}"
+      - cd reports && QUARTO_PYTHON={{.KERNEL_PY}} quarto render pair_interactions.qmd -P run_dir:"{{.PAIR_ABS}}" -P pair:"{{.PAIR}}" --output "{{.OUT}}"
       - mv reports/{{.OUT}} rendered_reports/{{.OUT}}

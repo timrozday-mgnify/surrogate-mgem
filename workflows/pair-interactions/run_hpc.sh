@@ -4,9 +4,15 @@
 #SBATCH --mem=4G
 #SBATCH --time=2-00:00:00
 #SBATCH --output=pair-interactions-%j.log
-# Nextflow head job (README.md, "HPC"):
-#   sbatch workflows/pair-interactions/run_hpc.sh [extra nextflow options, e.g. --seeds 0]
-#   PROFILE=slurm,test sbatch ... --outdir <dir>   # smoke test (sbatch exports PROFILE)
+# Nextflow head job (README.md, "Run"):
+#   sbatch workflows/pair-interactions/run_hpc.sh [extra nextflow options]
+#   ... --members A,B,C,D --max_pairs 6          # a community: all pairs surveyed, 6 searched
+#   ... --max_pairs 12                           # extend the searches; -resume adds only the new
+#   PROFILE=slurm,test sbatch ... --outdir <dir> # smoke test (sbatch exports PROFILE)
+#
+# `--outdir` on the command line, always, for the test profiles: the repo-root
+# nextflow.config sets `outdir` and overrides what a profile sets.
+#
 # Run from the repo root, after workflows/pair-interactions/setup.sh, with hpc.config
 # next to this script.
 set -euo pipefail

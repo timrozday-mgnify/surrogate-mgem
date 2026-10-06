@@ -3,8 +3,11 @@
 #   bash workflows/pair-interactions/stage_data.sh <run_root> <bundle> [genome_id ...]
 # then copy it to the cluster, e.g. rsync -a <bundle>/ hpc:<shared storage>/pair-data/
 #
-# Only the listed genomes' label shards and GEMs are copied (default: the default
-# pair); the checkpoints hold all 21 organisms and load a subset. ~0.3 GB for a pair.
+# List every member of the community, not just a pair -- the pipeline derives the pairs
+# from `--members` and the survey needs all of their subspaces and GEMs. Only the listed
+# genomes' label shards and GEMs are copied; the checkpoints hold all 21 organisms and
+# load a subset. ~0.27 GB of checkpoints plus ~65 MB a genome, so ~0.4 GB for a pair and
+# ~1.6 GB for a 21-member roster.
 set -euo pipefail
 src=${1:?run root, e.g. ~/Documents/surrogate-mgems_runs/20hm_bands}
 out=${2:?bundle dir}

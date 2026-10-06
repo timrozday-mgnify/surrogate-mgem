@@ -1,0 +1,441 @@
+---
+title: "Community interactions"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    embed-resources: true
+    theme: cosmo
+jupyter: basicpython
+params:
+  run_dir: "."
+---
+
+```{python}
+# | tags: [parameters]
+# | echo: false
+# Overridden by `quarto render ... -P run_dir:/path/to/outdir`.
+run_dir = "."
+```
+
+```{python}
+# | echo: false
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from IPython.display import HTML, Markdown, display
+from plotly.offline import get_plotlyjs
+
+display(HTML(f"<script>{get_plotlyjs()}</script>"))  # once, not per figure
+RUN = Path(run_dir).expanduser().resolve()
+PAL = px.colors.qualitative.Safe
+# the pipeline's own edge definition, so the report cannot drift from the CSVs
+sys.path.insert(0, str(Path.cwd().parent / "workflows" / "pair-interactions"))
+import edge_summary as ES  # noqa: E402
+
+
+def show(fig, height=450, **kw):
+    fig.update_layout(height=height, margin=dict(l=60, r=20, t=50, b=50),
+                      legend=dict(orientation="h", y=-0.2), **kw)
+    display(HTML(fig.to_html(include_plotlyjs=False, full_html=False, default_width="100%")))
+
+
+def md(text):
+    display(Markdown(text))
+
+
+def table(df, **kw):
+    display(HTML(df.to_html(index=False, float_format=lambda v: f"{v:.4g}", **kw)))
+
+
+def csv(stem):
+    f = RUN / f"{stem}.csv"
+    return pd.read_csv(f) if f.exists() and f.stat().st_size > 1 else pd.DataFrame()
+
+
+ED, GE, RE, PA = (csv(s) for s in ("edges", "graph_edges", "relationships", "pairs"))
+if not ED.empty:
+    ED["metabolites"] = ED.get("metabolites")
+if not GE.empty:
+    GE["metabolites"] = GE.metabolites.fillna("")
+runs = {}
+for d in sorted((RUN / "runs").glob("*/")):
+    if (d / "interactions.json").exists() and (d / "interactions.json").stat().st_size:
+        meta = json.loads((d / "run.json").read_text())
+        runs[d.name] = dict(meta=meta,
+                            cell=json.loads((d / "interactions.json").read_text())["cells"][0])
+MEMBERS = sorted(set(ED.producer) | set(ED.consumer)) if not ED.empty else []
+SEARCHED = sorted({tuple(sorted(v["meta"]["pair"].split(","))) for v in runs.values()
+                   if v["meta"].get("pair")})
+ARMS = sorted(set(ED.arm)) if not ED.empty else []
+md(f"**{len(MEMBERS)} members**, {len(MEMBERS) * (len(MEMBERS) - 1) // 2} pairs, "
+   f"{len(ARMS)} model arms, from `{RUN}`.")
+```
+
+## How to read this
+
+Every pair of the community is here. They are **not** all here on the same
+evidence, and the difference is the whole point of the pipeline's shape:
+
+- The **survey** is run once over the whole community — media drawn over the union
+  of every member's active subspace, every member solved with the true LP at each
+  one — so every ordered pair gets its handover frequencies and rates for free.
+  `G` solves a medium, not `2` per pair.
+- A **search** (`cfs interactions`) designs a medium that maximises a pair's
+  interaction, and costs ~20 core-h for a pair at ten seeds. It is run on the
+  top-ranked pairs only. Where it ran, an edge also has a `rate_capacity` (what a
+  medium can be pushed to), an FVA `forced` fraction and a seed count.
+
+So read an edge's `reach` and `rate_typical` as a property of the community's
+medium prior, and `rate_capacity` as a property of a pair somebody paid to design
+for. A pair with no searches is not a pair with no interaction.
+
+Rates are mmol/gDW/h at **equal biomass** (`X = 1` each): the capacity of a medium,
+not a prediction about an assembled community's abundances. They inherit the GEMs'
+`|Vmax| = 1000` and are ~30× physiological, so compare them with each other and
+not with a stopwatch (CLAUDE.md, "Per-organism `Vmax`").
+
+```{python}
+if not PA.empty:
+    PA["searched"] = [tuple(sorted((a, b))) in SEARCHED
+                      for a, b in zip(PA.member_a, PA.member_b, strict=True)]
+    md("**Pairs, ranked by the survey** — `n_common` handovers first (several that "
+       "happen at most media is worth designing for), then mutuality, then rate. "
+       "`searched` is whether `cfs interactions` ran on it; raise `--max_pairs` and "
+       "`-resume` to extend the searches down this list.")
+    table(PA)
+```
+
+## The network
+
+The matrix is the view that scales: at 21 members a node-link plot is a hairball,
+and a matrix stays readable. Rows are producers, columns consumers, so the cell is
+what the row member can hand to the column member. Colour is `weight` — the
+largest total handover seen at a single medium — and the hover gives the
+metabolites and how reliable they are.
+
+```{python}
+if GE.empty:
+    md("_No `graph_edges.csv`: run the pipeline's EDGES process._")
+else:
+    for metric, label, logc in (("weight", "total rate at one medium (mmol/gDW/h)", True),
+                                ("n_common", "handovers at ≥ 50% of media", False),
+                                ("pair_media_pct", "% of media with any handover", False)):
+        frames = []
+        for arm in ARMS:
+            g = GE[GE.arm == arm]
+            M = (g.pivot_table(index="producer", columns="consumer", values=metric)
+                 .reindex(index=MEMBERS, columns=MEMBERS))
+            txt = (g.pivot_table(index="producer", columns="consumer", values="metabolites",
+                                 aggfunc="first")
+                   .reindex(index=MEMBERS, columns=MEMBERS).fillna(""))
+            frames.append((arm, M, txt))
+        fig = go.Figure()
+        for k, (arm, M, txt) in enumerate(frames):
+            z = np.log10(M.to_numpy() + 1e-3) if logc else M.to_numpy()
+            fig.add_trace(go.Heatmap(
+                z=z, x=MEMBERS, y=MEMBERS, customdata=txt.to_numpy(), visible=k == 0,
+                colorscale="Viridis", name=arm,
+                colorbar=dict(title="log10" if logc else ""),
+                hovertemplate="%{y} → %{x}<br>" + label + ": %{text}<br>%{customdata}<extra></extra>",
+                text=M.to_numpy()))
+        if len(frames) > 1:
+            fig.update_layout(updatemenus=[dict(
+                buttons=[dict(label=a, method="update", args=[{"visible": [i == j for i in range(len(frames))]}])
+                         for j, (a, *_) in enumerate(frames)], x=0, y=1.18, xanchor="left")])
+        fig.update_layout(title=f"Who hands what to whom — {label}",
+                          xaxis=dict(title="consumer", side="bottom"),
+                          yaxis=dict(title="producer", autorange="reversed"))
+        show(fig, height=180 + 26 * len(MEMBERS))
+```
+
+```{python}
+# The node-link view. Secondary to the matrix, and only drawn while it is legible.
+if not GE.empty and len(MEMBERS) <= 12:
+    th = {g: 2 * np.pi * i / len(MEMBERS) + np.pi / 2 for i, g in enumerate(MEMBERS)}
+    pos = {g: (np.cos(t), np.sin(t)) for g, t in th.items()}
+    wmax = GE.weight.max() or 1.0
+    fig = go.Figure()
+    n_edges = []
+    for k, arm in enumerate(ARMS):
+        g = GE[(GE.arm == arm) & (GE.weight > 0)]
+        n_edges.append(len(g))
+        for r in g.itertuples():
+            (x0, y0), (x1, y1) = pos[r.producer], pos[r.consumer]
+            # bow it, so the two directions of a pair stay apart
+            nx_, ny_ = -(y1 - y0), (x1 - x0)
+            n = np.hypot(nx_, ny_) or 1.0
+            cx_, cy_ = (x0 + x1) / 2 + 0.18 * nx_ / n, (y0 + y1) / 2 + 0.18 * ny_ / n
+            t = np.linspace(0, 1, 40)[:, None]
+            b = ((1 - t) ** 2 * np.array([x0, y0]) + 2 * (1 - t) * t * np.array([cx_, cy_])
+                 + t**2 * np.array([x1, y1]))
+            fig.add_trace(go.Scatter(
+                x=b[:, 0], y=b[:, 1], mode="lines", visible=k == 0, showlegend=False,
+                line=dict(width=1 + 7 * r.weight / wmax, color=PAL[k % len(PAL)]),
+                hovertemplate=f"{r.producer} → {r.consumer}<br>{r.n_metabolites} metabolites"
+                              f" ({r.n_common} common, {r.n_forced} forced)<br>"
+                              f"any handover at {r.pair_media_pct:.1f}% of media<br>"
+                              f"typical {r.pair_rate_typical:.3g}, best {r.weight:.3g}"
+                              f" mmol/gDW/h<br>{r.metabolites}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=[pos[g][0] for g in MEMBERS], y=[pos[g][1] for g in MEMBERS],
+                             mode="markers+text", text=MEMBERS, textposition="top center",
+                             showlegend=False, marker=dict(size=16, color="#444"), hoverinfo="text"))
+    if len(ARMS) > 1:
+        fig.update_layout(updatemenus=[dict(
+            buttons=[dict(label=a, method="update",
+                          args=[{"visible": sum(([i == j] * n for i, n in enumerate(n_edges)), []) + [True]}])
+                     for j, a in enumerate(ARMS)], x=0, y=1.15, xanchor="left")])
+    fig.update_layout(title="The same edges as a network (width = best total at one medium)",
+                      xaxis=dict(visible=False, range=[-1.5, 1.5]),
+                      yaxis=dict(visible=False, range=[-1.5, 1.5], scaleanchor="x"))
+    show(fig, height=560)
+elif not GE.empty:
+    md(f"_Node-link view skipped: {len(MEMBERS)} members is past the point where it reads. "
+       "The matrix above is the same data._")
+```
+
+## Relationships
+
+One row per unordered pair: both directions together. `both_ways_pct` is how often
+**both** directions run at the *same* medium, which is what makes an exchange
+mutual rather than two one-way flows in different media; `asymmetry` is +1 when
+only `a → b` carries mass and −1 when only `b → a` does.
+
+```{python}
+if RE.empty:
+    md("_No `relationships.csv`._")
+else:
+    order = ["mutual", "mostly one-way", "one-way", "none"]
+    cnt = (RE.groupby(["arm", "relationship"]).size().rename("pairs").reset_index())
+    fig = px.bar(cnt, x="arm", y="pairs", color="relationship", barmode="stack",
+                 color_discrete_sequence=PAL,
+                 category_orders={"relationship": order},
+                 title="How the community's pairs relate, per model arm")
+    show(fig, height=380)
+    fig = px.scatter(RE, x="both_ways_pct", y="asymmetry", color="arm", symbol="relationship",
+                     size=RE[["weight_a_to_b", "weight_b_to_a"]].max(axis=1).clip(lower=1e-3),
+                     hover_data=["member_a", "member_b", "n_metabolites", "n_common"],
+                     color_discrete_sequence=PAL,
+                     labels={"both_ways_pct": "% of media with both directions running",
+                             "asymmetry": "asymmetry  (+1 = a→b only,  −1 = b→a only)"},
+                     title="Mutual exchange is the top-left/right corner; one-way is the edges")
+    show(fig, height=480)
+    table(RE.sort_values(["arm", "both_ways_pct"], ascending=[True, False]))
+```
+
+## The edges
+
+Every directed metabolite edge. `reach` is the survey frequency tier,
+`rate_typical` the median rate where it happens, `rate_capacity` what a design
+pushed it to (blank where the pair was not searched), `forced` the FVA fraction
+that every alternative optimum delivers — so a `common`, `forced` edge is the
+community's biology and a `designed only`, tie-break edge is a lead.
+
+```{python}
+if ED.empty:
+    md("_No `edges.csv`._")
+else:
+    md("**The currencies**: how many ordered pairs each metabolite is handed over "
+       "between, counting only edges that reach at least half the media. A metabolite "
+       "several pairs trade is a community-level currency; one pair's is a private one.")
+    cur = (ED.assign(tier=ED.reach)
+           .groupby(["arm", "metabolite", "tier"]).size().rename("edges").reset_index())
+    top = (cur[cur.tier == "common"].groupby("metabolite").edges.max()
+           .nlargest(25).index if (cur.tier == "common").any()
+           else cur.groupby("metabolite").edges.max().nlargest(25).index)
+    fig = px.bar(cur[cur.metabolite.isin(top)], x="metabolite", y="edges", color="tier",
+                 barmode="stack", facet_row="arm", color_discrete_sequence=PAL,
+                 category_orders={"metabolite": list(top),
+                                  "tier": ["common", "occasional", "rare", "designed only"]},
+                 title="Which metabolites the community trades, and how reliably")
+    show(fig, height=180 + 200 * len(ARMS))
+    table(ED.sort_values(["arm", "reach_pct", "weight"], ascending=[True, False, False]))
+```
+
+## Has the survey converged?
+
+The survey is the only evidence most pairs have, so whether its list of handovers
+is complete decides what this report can claim. Pooled over every ordered pair:
+the accumulation curve should flatten and Chao1 — an estimate of the total
+including handovers not yet seen, extrapolated from the ones seen exactly once —
+should match the number seen. Raise `--survey_shards` with `-resume` where it does
+not; shard *k* is always the same media, so nothing is redone.
+
+```{python}
+SVY = ES.load_survey(RUN / "survey") if (RUN / "survey").exists() else {}
+if not SVY:
+    md("_No `survey/`: run the pipeline's SURVEY process._")
+else:
+    rng = np.random.default_rng(0)
+    verdict, curves = [], []
+    for arm, s in SVY.items():
+        ex, gids_, Z = s["exchanges"], s["gids"], s["Z"]
+        cols = np.array([j for j, e in enumerate(ex) if e not in ES.BUFFERED])
+        # per medium: the set of (metabolite, producer, consumer) live at it
+        per = [set() for _ in range(len(Z))]
+        for a, ga in enumerate(gids_):
+            for b, gb in enumerate(gids_):
+                if a == b:
+                    continue
+                R = ES.pair_rates(Z, a, b, cols) > 1e-6
+                for i, j in zip(*np.nonzero(R), strict=True):
+                    per[i].add((ES.name(ex[cols[j]]), ga, gb))
+        N = len(per)
+        links = set().union(*per) if per else set()
+        first = {lk: next(i for i, p in enumerate(per) if lk in p) for lk in links}
+        cnt = np.array([sum(lk in p for p in per) for lk in links])
+        f1, f2 = int((cnt == 1).sum()), int((cnt == 2).sum())
+        chao = len(links) + f1 * (f1 - 1) / (2 * (f2 + 1))
+        late = sum(first[lk] >= 0.75 * N for lk in links)
+        grid = np.unique(np.geomspace(1, N, 30).astype(int))
+        acc = np.array([[len(set().union(*([per[i] for i in o[:n]] or [set()]))) for n in grid]
+                        for o in (rng.permutation(N) for _ in range(20))])
+        curves += [dict(arm=arm, media=n, mean=m, lo=a, hi=b) for n, m, a, b in
+                   zip(grid, acc.mean(0), np.percentile(acc, 5, 0), np.percentile(acc, 95, 0),
+                       strict=True)]
+        verdict.append(dict(arm=arm, members=len(gids_), media=N, shards=s["shards"],
+                            handovers=len(links), singletons=f1, doubletons=f2,
+                            chao1=round(chao, 1), new_in_last_quarter=late,
+                            converged=bool(late == 0 and chao - len(links) < 0.5)))
+    table(pd.DataFrame(verdict))
+    C = pd.DataFrame(curves)
+    fig = go.Figure()
+    for k, (arm, c) in enumerate(C.groupby("arm")):
+        col = PAL[k % len(PAL)]
+        fig.add_trace(go.Scatter(x=c.media, y=c.hi, line=dict(width=0), showlegend=False,
+                                 hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=c.media, y=c.lo, fill="tonexty", line=dict(width=0),
+                                 fillcolor=col, opacity=0.25, showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=c.media, y=c["mean"], name=arm, line=dict(color=col)))
+    fig.update_layout(title="Distinct handovers found vs media surveyed "
+                            "(mean, 5–95% over 20 random orders)",
+                      xaxis=dict(title="media surveyed", type="log"),
+                      yaxis_title="distinct directed handovers")
+    show(fig)
+```
+
+## What the model changes
+
+Each arm against the reference, **at the same medium prior**, so the arms differ
+only in the bound and not in which medium they chose. An edge `created` by product
+inhibition is one the plain-FBA model says cannot happen: design an experiment
+under the wrong model and you run the wrong medium.
+
+```{python}
+if ED.empty or len(ARMS) < 2:
+    md("_One arm only: nothing to compare._")
+else:
+    ref = "fba" if "fba" in ARMS else ARMS[0]
+    key = ["metabolite", "producer", "consumer"]
+    base = ED[ED.arm == ref].set_index(key)
+    rows = []
+    for arm in [a for a in ARMS if a != ref]:
+        other = ED[ED.arm == arm].set_index(key)
+        for k in base.index.union(other.index):
+            r0, r1 = base.reindex([k]).iloc[0], other.reindex([k]).iloc[0]
+            a, b = (r0.reach_pct if pd.notna(r0.reach_pct) else 0.0), \
+                   (r1.reach_pct if pd.notna(r1.reach_pct) else 0.0)
+            lo0, hi0 = (r0.reach_lo, r0.reach_hi) if pd.notna(r0.reach_lo) else (0.0, 0.0)
+            lo1, hi1 = (r1.reach_lo, r1.reach_hi) if pd.notna(r1.reach_lo) else (0.0, 0.0)
+            disjoint = bool(hi0 < lo1 or hi1 < lo0)
+            rows.append(dict(arm=arm, metabolite=k[0], producer=k[1], consumer=k[2],
+                             pct_ref=a, pct_arm=b, delta_pct=b - a,
+                             verdict=("created" if a == 0 and b > 0 else
+                                      "destroyed" if b == 0 and a > 0 else
+                                      ("promoted" if b > a else "demoted") if disjoint else "same"),
+                             ci_disjoint=disjoint))
+    CMP = pd.DataFrame(rows).sort_values(["arm", "delta_pct"], ascending=[True, False])
+    md(f"Reference arm: **{ref}**. `created`/`destroyed` = present in one arm and never "
+       "in the other; `promoted`/`demoted` = both happen and the 95% Wilson intervals "
+       "do not overlap; `same` = this survey cannot separate them.")
+    table(CMP[CMP.verdict != "same"])
+    cnt = CMP.groupby(["arm", "verdict"]).size().rename("edges").reset_index()
+    fig = px.bar(cnt, x="arm", y="edges", color="verdict", barmode="stack",
+                 color_discrete_sequence=PAL,
+                 category_orders={"verdict": ["created", "promoted", "same", "demoted",
+                                              "destroyed"]},
+                 title=f"What each model changes about the community's edges, against {ref}")
+    show(fig, height=380)
+```
+
+## Where the searches add to the survey
+
+For the pairs a search ran on: what a designed medium reached that no drawn medium
+did. `rate_capacity / rate_survey_max` above 1 is the design earning its cost; a
+`designed only` edge is one the survey never saw at all.
+
+```{python}
+if ED.empty or not SEARCHED:
+    md("_No searches in this run: every edge here is survey evidence. "
+       "Raise `--max_pairs` and `-resume` to search the top-ranked pairs._")
+else:
+    S = ED[ED.rate_capacity.notna()].copy()
+    S["pair"] = ["{} ↔ {}".format(*sorted((p, c)))
+                 for p, c in zip(S.producer, S.consumer, strict=True)]
+    S["gain"] = S.rate_capacity / S.rate_survey_max.replace(0, np.nan)
+    md(f"Searched pairs: " + ", ".join(f"**{a} ↔ {b}**" for a, b in SEARCHED)
+       + f". {int((S.reach == 'designed only').sum())} of {len(S)} designed edges were "
+       "never seen in the survey.")
+    fig = px.scatter(S, x="rate_survey_max", y="rate_capacity", color="arm", symbol="reach",
+                     hover_data=["metabolite", "producer", "consumer", "seeds", "forced"],
+                     log_x=True, log_y=True, color_discrete_sequence=PAL,
+                     labels={"rate_survey_max": "best rate the survey found",
+                             "rate_capacity": "best rate a design reached"},
+                     title="Does designing a medium beat drawing one? (above the line = yes)")
+    lim = [max(1e-3, float(S[["rate_survey_max", "rate_capacity"]].min().min())),
+           float(S[["rate_survey_max", "rate_capacity"]].max().max())]
+    fig.add_shape(type="line", x0=lim[0], y0=lim[0], x1=lim[1], y1=lim[1],
+                  line=dict(dash="dot", color="grey"))
+    show(fig)
+    table(S.sort_values("gain", ascending=False)
+          [["arm", "pair", "metabolite", "producer", "consumer", "reach", "rate_survey_max",
+            "rate_capacity", "gain", "forced", "seeds"]])
+```
+
+## Diagnostics
+
+```{python}
+if not runs:
+    md("_No search runs._")
+else:
+    rows = []
+    for r, v in runs.items():
+        c, m = v["cell"], v["meta"]
+        rows.append(dict(run=r, pair=m.get("pair", ""), arm=m["arm"], objective=m["objective"],
+                         seed=m["seed"], obj_rank_rho=c.get("obj_rank_spearman"),
+                         magnitude_ratio=c.get("magnitude_ratio"),
+                         links_true=c.get("n_links_true"), links_hat=c.get("n_links_hat"),
+                         E_true_designed=c.get("E_true_designed"),
+                         gain_rel=c.get("true_gain_rel")))
+    OV = pd.DataFrame(rows)
+    md("One row per search. `obj_rank_rho` near 0 means only the LP-screened half of "
+       "the search is worth reading; `magnitude_ratio` is the surrogate's rate over the "
+       "LP's at the designed medium (1 = exact). Per-pair detail, including the pruned "
+       "mechanisms and the seed agreement, is in the pair report: "
+       "`task pair:report RUN_DIR=<outdir> PAIR=<A,B>`.")
+    fig = px.strip(OV, x="objective", y="obj_rank_rho", color="arm", hover_data=["run"],
+                   color_discrete_sequence=PAL, stripmode="overlay",
+                   title="Can the surrogate rank media for each objective?")
+    show(fig, height=380)
+    table(OV.sort_values(["pair", "arm", "objective", "seed"]))
+
+trace = RUN / "trace.tsv"
+if trace.exists():
+    t = pd.read_csv(trace, sep="\t")
+    t["minutes"] = pd.to_timedelta(t.realtime.str.replace(r"(\d)([hms])", r"\1\2 ", regex=True)
+                                   .str.strip(), errors="coerce").dt.total_seconds() / 60
+    t["process"] = t.name.str.replace(r" .*", "", regex=True)
+    fig = px.box(t, x="process", y="minutes", color="status", points="all",
+                 hover_data=["tag", "peak_rss", "exit"], color_discrete_sequence=PAL,
+                 title="Task wall time by process (trace.tsv)")
+    show(fig, height=420)
+    md(f"**{len(t)} tasks**, "
+       + ", ".join(f"{k}: {v}" for k, v in t.status.value_counts().items())
+       + f". Total {t.minutes.sum():.0f} core-minutes of task time.")
+```
