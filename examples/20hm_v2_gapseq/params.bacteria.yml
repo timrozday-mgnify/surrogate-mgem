@@ -1,0 +1,10 @@
+# GapSeq only: gap-filled GEMs for the bacteria half of the 20HM v2 panel.
+# A params file rather than `--run_x false` on the CLI, because a CLI "false"
+# reaches the workflow as a truthy string.
+input: samplesheet.bacteria.csv
+outdir: results-bacteria
+run_carveme: false
+run_gapseq: true
+run_pfam: false
+run_dbcan: false
+run_kofam: false

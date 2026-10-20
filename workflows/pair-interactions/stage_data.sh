@@ -25,6 +25,12 @@ for root in labels_p4 labels_i3; do
     for g in "${gids[@]}"; do
         rsync -a "$src/$root/$g" "$src/$root/$g".*.json "$out/$root/"
     done
+    # the root's own record of the c^eq it was solved with. Only `_stack` reads it,
+    # so the pipeline does not need it -- but a bundle without it is a root that
+    # silently reads as plain FBA if anything ever retrains from the bundle.
+    if [ -f "$src/$root/inhibition.json" ]; then
+        rsync -a "$src/$root/inhibition.json" "$out/$root/"
+    fi
 done
 for g in "${gids[@]}"; do cp "$gem_dir/$g.xml" "$out/gems/"; done
 du -sh "$out"
