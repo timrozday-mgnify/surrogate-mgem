@@ -13,12 +13,17 @@ of them is scored.
 Taken from 20hm_bands/make_label_pool.py; the holdout is a flag here rather than a
 path relative to the cwd.
 """
-import argparse, glob
+
+import argparse
+import glob
+
 import numpy as np
 
 p = argparse.ArgumentParser()
 p.add_argument("runs", nargs="+", help="`cfs community` output dirs")
-p.add_argument("--holdout", required=True, help="community_holdout.npz: the exchange order + index_hash")
+p.add_argument(
+    "--holdout", required=True, help="community_holdout.npz: the exchange order + index_hash"
+)
 p.add_argument("--stride", type=int, default=5, help="keep every Nth trajectory state")
 p.add_argument("--out", required=True)
 a = p.parse_args()

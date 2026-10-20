@@ -9,7 +9,10 @@ Seeded, so a list is a property of (roster, seed) and not of when it ran.
 
     python make_communities.py roster.csv 20251020 communities.txt communities15.txt
 """
-import argparse, csv, random
+
+import argparse
+import csv
+import random
 
 p = argparse.ArgumentParser()
 p.add_argument("roster")

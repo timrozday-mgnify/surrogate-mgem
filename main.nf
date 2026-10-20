@@ -30,7 +30,7 @@ workflow {
           --n_communities, --n_communities_augment, --active_rounds,
           --hidden_configs, --n_models_list, --train_sizes
         """.stripIndent()
-        return
+        exit(0)
     }
     if (!(params.stage in ['qc', 'labels', 'train', 'sweep'])) {
         error "Unknown --stage '${params.stage}' (expected 'qc', 'labels', 'sweep' or 'train')."
