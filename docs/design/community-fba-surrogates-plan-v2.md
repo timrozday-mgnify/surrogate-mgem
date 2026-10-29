@@ -8028,7 +8028,37 @@ backed by a representation that explains most of the variance before any learnin
 it inherits Head A's structure rather than fighting it. A' is a cheap interim worth one
 run. B and D are not worth building until C has been tried.
 
-**Status, 2026-10-29.** A' is implemented (`run_aprime.py`) and running: the same
+### 17.5 A' is measured: the features help the fit and break the transfer
+
+Same rows, same splits, same head, 400 epochs, only the edit descriptor varies
+(`run_aprime.py`, `aprime.json`). Baselines 0.1026 / -0.6224 / -0.6025.
+
+| descriptor | width | by medium | leave-reaction-out | pure unseen | `under_rate` (by medium) |
+| --- | --- | --- | --- | --- | --- |
+| one-hot | 917 | 0.3745 | **-0.212** | **-0.741** | 0.446 |
+| orphan | 420 | 0.059 | -0.251 | -0.752 | 0.375 |
+| stoich | 280 | 0.471 | -1.089 | -4.836 | 0.232 |
+| stoich + orphan | 700 | **0.512** | -1.599 | -6.824 | **0.179** |
+
+**It splits cleanly, and not the way §17.2 predicted.** On seen edits the structural
+descriptors are better on both axes that matter: R2 0.375 -> 0.512, and `under_rate`
+0.446 -> 0.179, which is the P20 direction — over-predicting growth is the error that
+would waste wet-lab effort, and halving it is a real gain. On *unseen* edits they are
+much worse: -0.212 -> -1.599, and -0.741 -> -6.824 on the pure split.
+
+**The forest did the opposite** (§17.2: one-hot -0.007, stoich +0.137 on the same
+split), and that contrast is the diagnosis. The features carry transferable information
+— a forest extracts it — but this head cannot use it, because a min of affine pieces is
+*unbounded*: a continuous descriptor whose unseen combinations land off the training
+manifold gets extrapolated linearly and without limit, where a one-hot bit at least
+stays in [0, 1]. A tree partitions and therefore saturates; max-affine does not.
+
+So A' is half a result: **adopt the structural descriptors for anything scored on seen
+edits, and do not expect them to fix transfer in this family.** It also sharpens the
+case for C and D — the problem is not what the features say but that this hypothesis
+class extrapolates them unboundedly.
+
+**Status, 2026-10-29.** A' is implemented (`run_aprime.py`) and measured above: the same
 `MaskedGroupMaxHead` with `z` replaced by the structural descriptors, which needs no
 change to the head because `z` enters only through a linear embedding — concavity and
 monotonicity in the medium never depended on it being binary. It scores one-hot,
