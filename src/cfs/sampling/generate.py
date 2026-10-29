@@ -89,7 +89,43 @@ def _row(
         row["mask_id"] = int(mask_id)
         row["knockouts"] = list(knockouts or [])
         row["mu_unmasked"] = float("nan") if mu_base is None else float(mu_base)
+        row["rel_dmu"], row["edit_class"] = _edit_effect(sol.mu_max, mu_base)
     return row
+
+
+# A row's own target, derived once at label time rather than in every consumer.
+_MU_FLOOR = 1e-9  # below this `mu` is zero to the LP, not a small number
+_REL_TOL = 1e-6  # relative change below this is solver noise, not an effect
+
+
+def _edit_effect(mu, mu_base) -> tuple[float, str]:
+    """``(rel_dmu, edit_class)`` for one mask row against its paired control.
+
+    The **relative** change is the trainable target, not absolute ``mu``: M19 measured
+    `baseline_r2_mu_unchanged` swinging from -2.0 to +0.51 between two label sets that
+    differed only in their candidates, because absolute ``mu`` is dominated by whichever
+    class happens to prevail. ``rel_dmu`` is invariant to that, and ``edit_class``
+    makes the mix explicit so training and scoring can stratify on it instead of
+    discovering it.
+
+    ``dead`` is a medium the control cannot grow on: the ratio is meaningless there and
+    the row says nothing about the edit (the same solver-dust trap as the duals).
+    Classes otherwise: ``lethal`` (mu to zero), ``helpful`` (mu up — the gap-filling
+    direction, and the only positive sign), ``noop``, ``partial``.
+    """
+    if mu_base is None:
+        return float("nan"), "unknown"
+    base = float(mu_base)
+    if base <= _MU_FLOOR:
+        return float("nan"), "dead"
+    rel = (float(mu) - base) / base
+    if float(mu) <= _MU_FLOOR:
+        return rel, "lethal"
+    if rel > _REL_TOL:
+        return rel, "helpful"
+    if abs(rel) <= _REL_TOL:
+        return rel, "noop"
+    return rel, "partial"
 
 
 def generate_organism(
@@ -110,6 +146,9 @@ def generate_organism(
     mask_k_max: int = 5,
     mask_additions: Sequence[str] | None = None,
     universe=None,
+    mask_k_min: int = 1,
+    mask_deficient: float = 0.0,
+    mask_drops: Sequence[str] | None = None,
 ) -> OrganismShards:
     """Generate all label shards for one organism (plan §4.5).
 
@@ -235,7 +274,23 @@ def generate_organism(
             len(media),
             seed=cfg.seed,
             k_max=mask_k_max,
+            k_min=mask_k_min,
         )
+        if mask_deficient > 0:
+            # An addition can only help where something is missing, so a share of the
+            # media are stripped of a nutrient. The rest stay rich on purpose: all
+            # deficient would teach the head that edits always matter.
+            from cfs.sampling.masks import deficient_media
+
+            # The drop set must be the one the addition pool was screened against,
+            # not any exchange: a targeted pool rescues a *specific* deficiency. With
+            # random drops, 5 of 240 additions helped; with the matched pair, 23 of 64.
+            media = deficient_media(
+                media,
+                mask_drops or [ex.id for ex in model.exchanges],
+                seed=cfg.seed,
+                frac=mask_deficient,
+            )
         knock = [mask_to_knockouts(rxn_ids, row) for row in masks]
         (outdir / f"{genome_id}.{_MASKS_FILE}").write_text(
             json.dumps(
@@ -318,6 +373,9 @@ def generate_roster(
     mask_k_max: int = 5,
     mask_additions: dict[str, Sequence[str]] | None = None,
     universe=None,
+    mask_k_min: int = 1,
+    mask_deficient: float = 0.0,
+    mask_drops: dict[str, Sequence[str]] | None = None,
 ) -> list[OrganismShards]:
     """Run :func:`generate_organism` for every roster model (serial; see module doc).
 
@@ -372,6 +430,9 @@ def generate_roster(
                     None if mask_additions is None else mask_additions.get(gm.genome_id)
                 ),
                 universe=universe,
+                mask_k_min=mask_k_min,
+                mask_deficient=mask_deficient,
+                mask_drops=(None if mask_drops is None else mask_drops.get(gm.genome_id)),
             )
         )
     if ceq is not None:

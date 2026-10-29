@@ -148,6 +148,24 @@ def build_parser() -> argparse.ArgumentParser:
         "universe, which is what lets one index cover both directions.",
     )
     gen.add_argument(
+        "--mask-k-min",
+        type=int,
+        default=1,
+        help="Smallest number of edits in one mask (default 1). Raising it is how the "
+        "label set is pushed toward the synthetic-lethal and pathway-AND cases a "
+        "single-edit screen cannot see, and away from the single knockouts exact FBA "
+        "already answers in 3.5 ms.",
+    )
+    gen.add_argument(
+        "--mask-deficient",
+        type=float,
+        default=0.0,
+        help="Share of media stripped of 1-2 nutrients (default 0 = all rich). An "
+        "addition can only raise mu where something is MISSING -- M19 attempt 2 came "
+        "out 58.9%% no-op because 235 of 240 additions did nothing on a rich medium. "
+        "The rest stay rich on purpose.",
+    )
+    gen.add_argument(
         "--mask-k-max",
         type=int,
         default=5,
@@ -1495,7 +1513,7 @@ def main(argv: list[str] | None = None) -> int:
             ceq = ceq_map(
                 json.loads(args.inhibition.read_text()), ex_all, keep_mask(ex_all, buffered)
             )
-        mask_cands = mask_adds = None
+        mask_cands = mask_adds = mask_drops = None
         universe = None
         if args.mask_candidates:
             raw = json.loads(args.mask_candidates.read_text())
@@ -1506,6 +1524,7 @@ def main(argv: list[str] | None = None) -> int:
                 g: (v["candidates"] if isinstance(v, dict) else v) for g, v in raw.items()
             }
             mask_adds = {g: v.get("additions", []) for g, v in raw.items() if isinstance(v, dict)}
+            mask_drops = {g: v.get("drops", []) for g, v in raw.items() if isinstance(v, dict)}
             if any(mask_adds.values()):
                 if not args.mask_universe:
                     raise SystemExit("--mask-candidates lists additions: --mask-universe needed")
@@ -1526,6 +1545,9 @@ def main(argv: list[str] | None = None) -> int:
             mask_k_max=args.mask_k_max,
             mask_additions=mask_adds,
             universe=universe,
+            mask_k_min=args.mask_k_min,
+            mask_deficient=args.mask_deficient,
+            mask_drops=mask_drops,
         )
         print(
             json.dumps(

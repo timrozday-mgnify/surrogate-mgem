@@ -241,3 +241,46 @@ def test_mu_unmasked_is_the_paired_control():
     killed = solve(m, conc, alpha=1.0, eps=1e-3, knockouts=["T", "T2"]).mu_max
     assert killed == pytest.approx(0.0, abs=1e-9)
     assert mu_unmasked(m, conc) > killed
+
+
+def test_edit_class_and_rel_dmu():
+    """The derived target (§14/M19 option 3): relative change, not absolute mu.
+
+    Absolute `mu` is dominated by whichever class prevails in the label set — M19
+    measured the trivial baseline's R2 swinging -2.0 -> +0.51 between two sets that
+    differed only in their candidates. `rel_dmu` is invariant to that.
+    """
+    from cfs.sampling.generate import _edit_effect
+
+    assert _edit_effect(1.0, 1.0) == (0.0, "noop")
+    assert _edit_effect(0.0, 1.0) == (-1.0, "lethal")
+    rel, cls = _edit_effect(0.5, 1.0)
+    assert cls == "partial" and rel == pytest.approx(-0.5)
+    rel, cls = _edit_effect(1.5, 1.0)
+    assert cls == "helpful" and rel == pytest.approx(0.5)  # the gap-filling direction
+    # A medium the control cannot grow on says nothing about the edit, and dividing by
+    # it manufactures huge ratios out of solver dust.
+    assert _edit_effect(1e-11, 1e-13)[1] == "dead"
+    assert _edit_effect(1.0, None)[1] == "unknown"
+
+
+def test_deficient_media_drops_only_present_exchanges():
+    from cfs.sampling.masks import deficient_media
+
+    media = [{"EX_a_e": 10.0, "EX_b_e": 10.0, "EX_c_e": 0.0} for _ in range(40)]
+    out = deficient_media(media, ["EX_a_e", "EX_b_e", "EX_c_e"], seed=0, frac=1.0)
+    dropped = [sum(1 for k, v in m.items() if v == 0.0) for m in out]
+    # EX_c_e was already 0 and is never "dropped"; 1-2 of the other two go to 0.
+    assert all(1 <= d - 1 <= 2 for d in dropped)
+    # frac keeps some media rich, or the head learns that edits always matter.
+    some_rich = deficient_media(media, ["EX_a_e", "EX_b_e"], seed=0, frac=0.5)
+    assert any(m["EX_a_e"] == 10.0 and m["EX_b_e"] == 10.0 for m in some_rich)
+
+
+def test_k_min_biases_masks_high():
+    from cfs.sampling.masks import sample_edit_masks
+
+    ids = [f"R{i}" for i in range(20)]
+    masks = sample_edit_masks(ids, ids, ids[:10], 200, seed=0, k_max=5, k_min=3, p_unmasked=0.0)
+    removed = (masks == 0).sum(axis=1)
+    assert removed.min() >= 3 and removed.max() <= 5

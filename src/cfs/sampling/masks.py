@@ -110,12 +110,13 @@ def sample_edit_masks(
     seed: int = 0,
     k_max: int = 5,
     p_unmasked: float = 0.05,
+    k_min: int = 1,
 ) -> np.ndarray:
     """``(n_masks, R)`` float32 0/1 masks over ``reaction_ids`` (1 = present).
 
     Each row flips ``k`` candidate bits **away from their base value**, with ``k``
-    uniform on ``1..k_max``. So a candidate the carved model has is *removed* and one
-    it lacks is *added* — the symmetric version of what gap-filling does, and the
+    uniform on ``k_min..k_max``. So a candidate the carved model has is *removed* and
+    one it lacks is *added* — the symmetric version of what gap-filling does, and the
     reason the index has to contain absent reactions (§15.4). ``k > 1`` is what
     carries the pathway-AND structure single edits cannot show: a route needs two
     steps, and neither alone moves ``mu``.
@@ -146,7 +147,7 @@ def sample_edit_masks(
     for row in range(n_masks):
         if rng.random() < p_unmasked:
             continue
-        k = rng.integers(1, k_max + 1)
+        k = rng.integers(max(1, min(k_min, k_max)), k_max + 1)
         flip = rng.choice(cand_idx, size=k, replace=False)
         masks[row, flip] = 1.0 - masks[row, flip]
     return masks
@@ -242,3 +243,73 @@ def mu_unmasked_with(model, concentrations: dict, off: Sequence[str], km_cfg: di
         for r_id in off:
             model.reactions.get_by_id(r_id).bounds = (0.0, 0.0)
         return float(mu_optimize(model, "single-edit screen"))
+
+
+def deficient_media(
+    media: Sequence[dict],
+    droppable: Sequence[str],
+    seed: int = 0,
+    frac: float = 0.5,
+    n_drop_max: int = 2,
+    floor: float = 0.0,
+) -> list[dict]:
+    """Make a share of ``media`` **deficient**: drop 1..``n_drop_max`` exchanges to
+    ``floor``.
+
+    This is the fix for M19's second failure mode. Attempt 2 came out 58.9% no-op
+    because only 5 of 240 random universe additions did anything on a rich medium —
+    an organism already at its growth maximum cannot be helped by a new reaction, so
+    the addition half of the mask had nothing to learn from.
+
+    An addition is informative exactly where something is **missing**, which is
+    gap-filling's own setting: growth observed where the model predicts none. Removing
+    a nutrient the organism cannot make puts it in that regime, and an addition that
+    opens a biosynthetic route then *rescues* growth — a ``helpful`` row with a real
+    effect size.
+
+    ``frac`` keeps the rest rich on purpose: a label set of only deficient media would
+    teach the head that edits always matter, which is the mirror of the bias it has now.
+
+    ponytail: uniform draw over ``droppable``; bias it toward the nutrients the
+    addition pool can actually substitute for only if the helpful share stays low.
+    """
+    rng = np.random.default_rng(seed)
+    out = []
+    for medium in media:
+        m = dict(medium)
+        present = [ex for ex in droppable if m.get(ex, 0.0) > 0.0]
+        if present and rng.random() < frac:
+            k = int(rng.integers(1, min(n_drop_max, len(present)) + 1))
+            for ex in rng.choice(np.array(present), size=k, replace=False):
+                m[str(ex)] = floor
+        out.append(m)
+    return out
+
+
+def universe_additions_near(universe, model, metabolite_ids: Sequence[str], n: int) -> list[str]:
+    """Universe reactions this model lacks that **touch** ``metabolite_ids``.
+
+    A random addition pool is near-useless as a label source, measured twice: 5 of 240
+    random universe reactions raised ``mu`` on a rich medium, and **6 of 240** once the
+    media were made deficient. Making the medium poor is not enough, because a random
+    pool almost never contains the specific route that rescues a specific deficiency —
+    so the pool has to be chosen *relative to what is missing*.
+
+    This is the one-step neighbourhood of the dropped metabolites in the universe
+    hypergraph: the reactions that could plausibly supply them. It is also what a real
+    gap-filling candidate set looks like — the low-evidence annotations around a
+    pathway the organism appears to lack, not a uniform sample of BiGG.
+
+    ponytail: one step only. Go to two if the one-step pool still cannot rescue, since
+    a route may need an intermediate the model also lacks.
+    """
+    have = {r.id for r in model.reactions}
+    wanted = set(metabolite_ids)
+    hits = []
+    for rxn in universe.reactions:
+        if rxn.id in have or rxn.id.startswith("EX_"):
+            continue
+        if wanted & {m.id for m in rxn.metabolites}:
+            hits.append(rxn.id)
+    hits.sort()
+    return hits[:n]
