@@ -8067,6 +8067,52 @@ orphan, stoich and stoich+orphan on three splits against `0_baseline`'s 0.3745 /
 run; its cofactor table extends §17.3's ATP fix to GTP, CTP, UTP, CoA and SAM as
 turnover rather than drain, and `bound_violations` is the check that it worked.
 
+### 17.6 C, first iteration: the factorisation transfers, the composition is the problem
+
+2000 rows with capacity labels (1504 usable), 53 precursors, ATP/GTP/CTP/UTP/CoA/SAM as
+turnover demands. Forest per binding precursor on the `stoich+orphan` descriptor, then
+composed (`run_option_c.py`, `option_c2.json`).
+
+**Individual capacities transfer, and that is the result worth having.** R2 for
+`cap_p` on *unseen* edits: `ca2_c` **0.960**, `mql8_c` 0.625, `fad_c` 0.619,
+`datp_c` 0.080, `atp_c` **-0.852**. Set against `mu` itself on the same split — the
+head at -0.212, a forest at 0.137 — several capacities are an order of magnitude more
+learnable than growth. **A per-subgraph problem is the easier problem**, which is what
+§17.3 predicted and the reason to prefer C.
+
+**Composing them is where it goes wrong**, in two separable ways:
+
+| | by medium | leave-reaction-out |
+| --- | --- | --- |
+| `min_p cap_p`, learned | -0.098 | -0.373 |
+| gated on predicted lethality | **0.390** | -0.241 |
+| **live rows only** (growth survives) | **0.573** | **0.493** |
+| lethality agreement, learned min | 0.571 | 0.524 |
+
+1. **A regression cannot produce a hard zero**, so a min of *learned* capacities is
+   never lethal: the no-learning decomposition agreed with lethality in **every** row
+   and the learned one agrees in about half. Gating on lethality separately recovers
+   most of it (-0.098 -> 0.390 by medium), and on live rows alone the composed
+   capacities reach **0.493 on unseen edits**.
+2. **The min is dominated by its worst factor.** `atp_c` is both the most frequently
+   binding precursor (440 of 1504 rows) and the only badly-learned one (-0.852),
+   because its capacity is energy turnover and spans decades. An error in any single
+   factor passes straight through the min.
+
+**And a correction to §17.2's headline.** The orphan rule ranks unseen lethality at
+AUROC 0.997, but a classifier on those features at its default threshold has recall
+**0.5 by medium and 0.2 on unseen edits**. Good ranking is not good hard
+classification: the classes are imbalanced and 0.5 is the wrong cut. More to the point,
+**orphaning should not be learned at all** — "did this edit leave some precursor with no
+producer" is a deterministic function of the mask and the stoichiometry, so the gate can
+be *computed* exactly and for free, as it was in §17.3 where agreement was 1.0.
+
+**So C survives its first test, with its shape changed:** a computed lethality gate, a
+log-scale or ratio target for the energy factors, and per-precursor capacities as the
+learned part. The pure-unseen split could not be scored here — only 1504 of 4512 rows
+carry capacity labels and none of the pure rows were sampled, so that gap needs more
+label rows before C can be compared with A' on the hardest split.
+
 **First C experiment**: tighten the bound (cofactor recycling), then train one small
 model per binding precursor on `cap_p` and score leave-reaction-out and pure-unseen
 against the forest numbers in 17.2. If `cap_p` transfers where `mu` did not, the
