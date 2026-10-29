@@ -50,6 +50,9 @@ class Solution:
     shadow_prices: dict[str, float]  # exchange_id -> dmu_max/d(lower bound)
     status: str  # "optimal" or a solver status string
     fluxes: np.ndarray = field(repr=False, default=None)  # full flux vector (model.reactions order)
+    # §16.3: reaction_id -> reduced cost, for the §14 candidate set only. A binding
+    # indicator, not a calibrated derivative -- see `solve`.
+    reduced_costs: dict[str, float] = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #
@@ -285,6 +288,7 @@ def solve(
     km_cfg: dict | None = None,
     ceq: dict[str, float] | None = None,
     knockouts: Sequence[str] | None = None,
+    reduced_cost_for: Sequence[str] | None = None,
 ) -> Solution:
     """Ground-truth solve for one (medium, alpha, eps) (plan §3.2).
 
@@ -330,6 +334,24 @@ def solve(
         shadow = {
             ex.id: float(fba.shadow_prices[next(iter(ex.metabolites)).id]) for ex in model.exchanges
         }
+        # §16.3: a reaction's reduced cost is non-zero exactly when its own flux bound
+        # binds, so this is free information about which edits would have mattered on
+        # this medium. It is read as a *binding indicator*, never as a calibrated
+        # derivative: cobra's reduced costs carry a convention scaling (the same reason
+        # the exchange duals above are read off `shadow_prices` instead), and half the
+        # "non-zero" duals in this pipeline were O(1e-14) dust.
+        #
+        # It is exact for the ADDITION direction and only suggestive for removals: an
+        # addition sits at bounds (0, 0), so its bound binds by construction and its
+        # reduced cost is the marginal value of opening it. A present reaction carrying
+        # flux strictly inside its bounds has reduced cost 0 and may still be essential,
+        # because a knockout is not a marginal perturbation. `live_candidates` handles
+        # that direction with an FVA instead.
+        rcost = (
+            {r_id: float(fba.reduced_costs[r_id]) for r_id in reduced_cost_for}
+            if reduced_cost_for
+            else {}
+        )
 
         v, status = elastic_net_fluxes(model, alpha * mu_max, eps)
 
@@ -344,6 +366,7 @@ def solve(
         shadow_prices=shadow,
         status=status.lower(),
         fluxes=v,
+        reduced_costs=rcost,
     )
 
 

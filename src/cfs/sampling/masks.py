@@ -313,3 +313,111 @@ def universe_additions_near(universe, model, metabolite_ids: Sequence[str], n: i
             hits.append(rxn.id)
     hits.sort()
     return hits[:n]
+
+
+# Reduced costs and FVA bounds both come back with solver dust: half the "non-zero"
+# exchange duals in this pipeline were O(1e-14), and a row whose whole signal is dust
+# would make every candidate look live.
+_DUAL_TOL = 1e-9
+_FLUX_TOL = 1e-7
+
+
+def live_candidates(
+    model,
+    concentrations: dict,
+    candidates: Sequence[str],
+    base_present: Sequence[str],
+    km_cfg: dict | None = None,
+    fraction_of_optimum: float = 1.0,
+) -> list[str]:
+    """The candidates whose edit would actually bite on **this** medium (§16.2 row 2).
+
+    This is the mask analogue of the demand probe's per-metabolite limiting scale: a
+    metabolite has a concentration band where it matters, and a reaction has *media*
+    where it matters. Pairing each candidate with those media is what `frac_focus`
+    does on the medium axis, and it is the direct attack on M19's 42% no-ops.
+
+    The two directions need different tests, and conflating them is the trap:
+
+    * an **addition** sits at bounds ``(0, 0)``, so its own bound binds by
+      construction and its **reduced cost** is the marginal value of opening it —
+      free, from the solve already being done (§16.3);
+    * a **removal** is not a marginal perturbation. A present reaction carrying flux
+      strictly inside its bounds has reduced cost 0 and may still be essential, so the
+      test is an **FVA**: if the reaction's flux can be driven to zero while growth
+      holds, some alternative route exists and removing it is a no-op. That costs two
+      LPs per candidate rather than nothing.
+
+    ponytail: FVA at ``fraction_of_optimum=1.0``, i.e. "is there an alternative at the
+    optimum". Lower it if too many candidates come back live.
+    """
+    from cobra.flux_analysis import flux_variability_analysis
+
+    from cfs.groundtruth.solve import apply_mm_bounds, load_km_defaults
+
+    km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
+    present = set(base_present)
+    additions = [r for r in candidates if r not in present]
+    removals = [r for r in candidates if r in present]
+
+    with model:
+        apply_mm_bounds(model, concentrations, km_cfg, None)
+        for r_id in additions:  # the base network has every addition off
+            model.reactions.get_by_id(r_id).bounds = (0.0, 0.0)
+        sol = model.optimize()
+        if sol.status != "optimal" or not sol.objective_value:
+            return []
+        live = [r for r in additions if abs(float(sol.reduced_costs[r])) > _DUAL_TOL]
+        if removals:
+            fva = flux_variability_analysis(
+                model,
+                reaction_list=removals,
+                fraction_of_optimum=fraction_of_optimum,
+                # One process: cobra otherwise forks a pool per call, and this runs
+                # once per medium -- 200 pool spawns each copying the model was slow
+                # enough that the first anchored run was killed before writing a row.
+                processes=1,
+            )
+            for r_id in removals:
+                lo, hi = float(fva.minimum[r_id]), float(fva.maximum[r_id])
+                # Zero unreachable within the interval => no alternative route => the
+                # removal must cost growth.
+                if lo > _FLUX_TOL or hi < -_FLUX_TOL:
+                    live.append(r_id)
+    return sorted(live)
+
+
+def sample_anchored_masks(
+    reaction_ids: Sequence[str],
+    base_present: Sequence[str],
+    live_per_medium: Sequence[Sequence[str]],
+    seed: int = 0,
+    k_max: int = 5,
+    k_min: int = 1,
+    p_unmasked: float = 0.05,
+) -> np.ndarray:
+    """One mask per medium, drawn from **that medium's** live candidates.
+
+    The anchored counterpart of :func:`sample_edit_masks`, which draws from the whole
+    candidate set regardless of medium and therefore spends most of its budget on edits
+    that cannot do anything where they landed.
+
+    A medium with no live candidate gets the base mask rather than a random edit: a row
+    that cannot show an effect is better spent anchoring the medium axis, and it is
+    still a true `noop` label.
+    """
+    pos = {r: i for i, r in enumerate(reaction_ids)}
+    rng = np.random.default_rng(seed)
+    base = np.zeros(len(reaction_ids), dtype=np.float32)
+    for r in base_present:
+        if r in pos:
+            base[pos[r]] = 1.0
+    masks = np.tile(base, (len(live_per_medium), 1))
+    for row, live in enumerate(live_per_medium):
+        idx = [pos[r] for r in live if r in pos]
+        if not idx or rng.random() < p_unmasked:
+            continue
+        k = int(rng.integers(max(1, min(k_min, len(idx))), min(k_max, len(idx)) + 1))
+        flip = rng.choice(np.array(idx), size=k, replace=False)
+        masks[row, flip] = 1.0 - masks[row, flip]
+    return masks

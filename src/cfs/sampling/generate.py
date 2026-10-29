@@ -90,6 +90,10 @@ def _row(
         row["knockouts"] = list(knockouts or [])
         row["mu_unmasked"] = float("nan") if mu_base is None else float(mu_base)
         row["rel_dmu"], row["edit_class"] = _edit_effect(sol.mu_max, mu_base)
+        if sol.reduced_costs:
+            # §16.3, aligned to the sidecar's `candidates` order: which edits would
+            # have mattered on this medium, free from the solve already done.
+            row["reduced_cost"] = [float(v) for v in sol.reduced_costs.values()]
     return row
 
 
@@ -149,6 +153,7 @@ def generate_organism(
     mask_k_min: int = 1,
     mask_deficient: float = 0.0,
     mask_drops: Sequence[str] | None = None,
+    mask_anchor: bool = False,
 ) -> OrganismShards:
     """Generate all label shards for one organism (plan §4.5).
 
@@ -267,15 +272,6 @@ def generate_organism(
                 raise ValueError("mask_additions needs a universe model to copy from")
             added = extend_with_additions(model, universe, mask_additions)
         rxn_ids = maskable_reactions(model)
-        masks = sample_edit_masks(
-            rxn_ids,
-            base_present,
-            mask_candidates,
-            len(media),
-            seed=cfg.seed,
-            k_max=mask_k_max,
-            k_min=mask_k_min,
-        )
         if mask_deficient > 0:
             # An addition can only help where something is missing, so a share of the
             # media are stripped of a nutrient. The rest stay rich on purpose: all
@@ -290,6 +286,42 @@ def generate_organism(
                 mask_drops or [ex.id for ex in model.exchanges],
                 seed=cfg.seed,
                 frac=mask_deficient,
+            )
+        if mask_anchor:
+            # §16.5 step 2: pair each medium with an edit that can actually bite there,
+            # instead of drawing from the whole candidate set and hoping. Two LPs per
+            # removal candidate per medium, which is why it is opt-in.
+            from cfs.sampling.masks import live_candidates, sample_anchored_masks
+
+            live = [
+                live_candidates(model, medium, mask_candidates, base_present, km_cfg)
+                for medium in media
+            ]
+            n_live = sum(len(x) for x in live)
+            LOGGER.info(
+                "%s: anchored masks, %d live candidate slots over %d media (%.2f/medium)",
+                genome_id,
+                n_live,
+                len(media),
+                n_live / max(len(media), 1),
+            )
+            masks = sample_anchored_masks(
+                rxn_ids,
+                base_present,
+                live,
+                seed=cfg.seed,
+                k_max=mask_k_max,
+                k_min=mask_k_min,
+            )
+        else:
+            masks = sample_edit_masks(
+                rxn_ids,
+                base_present,
+                mask_candidates,
+                len(media),
+                seed=cfg.seed,
+                k_max=mask_k_max,
+                k_min=mask_k_min,
             )
         knock = [mask_to_knockouts(rxn_ids, row) for row in masks]
         (outdir / f"{genome_id}.{_MASKS_FILE}").write_text(
@@ -336,6 +368,7 @@ def generate_organism(
                     km_cfg,
                     ceq,
                     None if knock_e is None else knock_e[mid],
+                    reduced_cost_for=mask_candidates,
                 ),
                 ex_order,
                 mask_id=None if knock_e is None else mid,
@@ -376,6 +409,7 @@ def generate_roster(
     mask_k_min: int = 1,
     mask_deficient: float = 0.0,
     mask_drops: dict[str, Sequence[str]] | None = None,
+    mask_anchor: bool = False,
 ) -> list[OrganismShards]:
     """Run :func:`generate_organism` for every roster model (serial; see module doc).
 
@@ -433,6 +467,7 @@ def generate_roster(
                 mask_k_min=mask_k_min,
                 mask_deficient=mask_deficient,
                 mask_drops=(None if mask_drops is None else mask_drops.get(gm.genome_id)),
+                mask_anchor=mask_anchor,
             )
         )
     if ceq is not None:

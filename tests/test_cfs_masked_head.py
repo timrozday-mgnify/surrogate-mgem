@@ -284,3 +284,37 @@ def test_k_min_biases_masks_high():
     masks = sample_edit_masks(ids, ids, ids[:10], 200, seed=0, k_max=5, k_min=3, p_unmasked=0.0)
     removed = (masks == 0).sum(axis=1)
     assert removed.min() >= 3 and removed.max() <= 5
+
+
+def test_live_candidates_separates_the_two_directions():
+    """§16.3/§16.5: an addition is judged by its reduced cost, a removal by FVA.
+
+    The toy model has two interchangeable transporters, so neither removal bites on
+    its own — a reduced-cost test would call both dead, and an FVA correctly says
+    each one's flux can go to zero.
+    """
+    pytest.importorskip("cobra")
+    from cfs.sampling.masks import live_candidates, maskable_reactions
+
+    m = _toy_model()
+    ids = maskable_reactions(m)  # ["T", "T2"]
+    live = live_candidates(m, {"EX_a_e": 1e3}, ids, ids)
+    assert live == []  # redundant pair: zero is reachable for both
+
+    # Delete the alternative and the survivor becomes live: its flux cannot be zero.
+    m2 = _toy_model()
+    m2.reactions.get_by_id("T2").bounds = (0.0, 0.0)
+    assert live_candidates(m2, {"EX_a_e": 1e3}, ["T"], ["T"]) == ["T"]
+
+
+def test_anchored_masks_only_flip_live_candidates():
+    from cfs.sampling.masks import sample_anchored_masks
+
+    ids = [f"R{i}" for i in range(10)]
+    live = [["R2"], [], ["R3", "R4"], []]
+    masks = sample_anchored_masks(ids, ids, live, seed=0, k_max=2, p_unmasked=0.0)
+    assert masks.shape == (4, 10)
+    # A medium with no live candidate gets the base mask, not a random edit.
+    assert masks[1].sum() == 10 and masks[3].sum() == 10
+    assert masks[0][2] == 0.0  # the one live candidate was flipped
+    assert set(np.flatnonzero(masks[2] == 0)) <= {3, 4}

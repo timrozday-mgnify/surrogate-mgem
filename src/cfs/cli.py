@@ -166,6 +166,16 @@ def build_parser() -> argparse.ArgumentParser:
         "The rest stay rich on purpose.",
     )
     gen.add_argument(
+        "--mask-anchor",
+        action="store_true",
+        help="Draw each medium's mask from the candidates that can actually bite THERE "
+        "(\u00a716.5 step 2): additions by non-zero reduced cost, free from the solve; "
+        "removals by an FVA that asks whether the flux can go to zero while growth "
+        "holds. The mask analogue of the per-metabolite focus stratum, and the direct "
+        "attack on M19's 42%% no-ops. Costs two extra LPs per removal candidate per "
+        "medium, so it is opt-in.",
+    )
+    gen.add_argument(
         "--mask-k-max",
         type=int,
         default=5,
@@ -1548,6 +1558,7 @@ def main(argv: list[str] | None = None) -> int:
             mask_k_min=args.mask_k_min,
             mask_deficient=args.mask_deficient,
             mask_drops=mask_drops,
+            mask_anchor=args.mask_anchor,
         )
         print(
             json.dumps(
