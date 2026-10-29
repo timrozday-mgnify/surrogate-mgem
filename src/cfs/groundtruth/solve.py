@@ -23,6 +23,7 @@ Imports are function-local so the module loads without the solver stack.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -251,12 +252,21 @@ def solve(
     eps: float,
     km_cfg: dict | None = None,
     ceq: dict[str, float] | None = None,
+    knockouts: Sequence[str] | None = None,
 ) -> Solution:
     """Ground-truth solve for one (medium, alpha, eps) (plan §3.2).
 
     Returns :class:`Solution` with ``mu_max``, exchange fluxes ``z`` (this
     organism's own exchanges only), and exchange shadow prices. The model is not
     mutated (bounds are applied inside a context).
+
+    ``knockouts`` are internal reaction ids forced to zero flux — the label side of
+    §14's mask-conditioned head. Deleting a column can only shrink the feasible set,
+    so ``mu_max`` is monotone non-increasing in the knockout set; that is the
+    invariant :func:`cfs.surrogate.masked.mask_monotonicity_violation_rate` holds the
+    head to. An id that is not in the model raises: a silently-ignored knockout is
+    indistinguishable from an edit that did nothing, which is the one failure this
+    label set cannot afford.
     """
     from cobra.exceptions import OptimizationError
 
@@ -271,6 +281,8 @@ def solve(
     model.solver.configuration.timeout = int(_QP_TIME_LIMIT)
     with model:
         apply_mm_bounds(model, concentrations, km_cfg, ceq)
+        for r_id in knockouts or ():
+            model.reactions.get_by_id(r_id).bounds = (0.0, 0.0)
 
         try:
             fba = model.optimize()

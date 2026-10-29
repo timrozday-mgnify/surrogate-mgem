@@ -7472,6 +7472,170 @@ curve — growth falling monotonically with product concentration — and the su
 tracks the LP through it.* Without a gate of that shape the layer cannot be
 validated, only added.
 
+## 14. Phase 8 — reaction presence as an input (**in development, 2026-10-29**)
+
+Everything above conditions the heads on the **medium** for a **fixed** network: the
+input is `c` (444 exchanges, 888 with the §13.11 `theta` channel) and the
+stoichiometric matrix is a constant of the checkpoint. This section adds a second
+input, a **reaction-presence mask** `z ∈ {0,1}^R` over the organism's own reactions,
+so that internal edits — a candidate annotation, a knockout, a gap-fill candidate —
+can be screened without rebuilding the model.
+
+**Status.** §14.2 (option A) is what is being developed now. §14.3 (option B) is
+recorded as a later alternative, not started. §14.4 is the reason both exist.
+
+### 14.1 What a reaction is, in the value function
+
+Head A is a max-affine family: `mu_hat(w) = min_j [mu_j + pi_j·(w - w_j)]`
+(`groupmax.py`, and §8.5 for why it is an upper bound). The natural question is
+whether a reaction corresponds to one of those hyperplanes. It does not, and the
+correct mapping is what makes option B below well posed:
+
+| Object | In the value function |
+| --- | --- |
+| **Hyperplane** (one affine piece) | One optimal basis — a **vertex of the dual polytope**. A metabolic *strategy*, whose gradient `pi_j` is its shadow-price vector |
+| **Reaction** `r` | A **half-space** in dual space: one constraint `pi·S_r <= c_r` |
+
+A dual vertex is the intersection of many reaction constraints, so each reaction
+affects many hyperplanes and each hyperplane is fixed by a combination of reactions.
+Neither direction is one-to-one.
+
+**The direction of the effect is load-bearing.** Turning a reaction off deletes a
+column of `S`, which deletes a dual constraint, which *enlarges* the dual feasible
+set, so the min runs over more vertices and `mu` falls. A knockout therefore **adds
+pieces to the min**; it does not remove one. In the head's own sign convention
+(`out` convex, `mu_hat = -out`) a knockout **raises** a plane's offset, pushing it
+into the group max. Any mask conditioning that only ever *removes* capacity from the
+head has the mechanism backwards.
+
+### 14.2 Option A — mask enters through the plane parameters (in development)
+
+The head keeps its structure and its measured input map; `z` enters **only** through
+the parameters of the affine pieces, never through the max/min itself:
+
+```
+b_k(z)   = b_k  + Bb_k · e(z)          # per-unit offset, pre-activation
+wx_k(z)  = -softplus(wx_k + Bw_k · e(z))   # per-unit, pre-softplus
+e(z)     = MLP(E z)                    # small embedding of the mask
+```
+
+`e(z)` is zero at initialisation (final layer zero-init), so **at init the head is
+bit-identical to the unconditioned `GroupMaxHead`** and inherits every measured
+result above — the `--gm-init labels` tangent initialisation, `DEFAULT_TEMP = 0.01`,
+`W_CAP = 1e5`, the monotone output. That is the whole reason for this parameterisation
+rather than a redesign.
+
+**What survives structurally, for every `z`:**
+
+- **Concavity in `w`.** A min of affine-in-`w` functions is concave in `w` however
+  its coefficients were produced. `concavity_violation_rate` must still read
+  exactly 0, and it is still measured in `w`/`u`, never in the model's input space.
+- **Monotone non-decreasing in `w`.** The signs are structural: `softplus` on the
+  pass-through, `-softplus` on the input skips. An additive offset *inside* the
+  `softplus` cannot change a sign.
+- **Sobolev-on-duals.** `grad_w mu_hat` is still the active piece's `pi`, so §7's
+  per-row norm-relative term is unchanged. With a mask it also carries which piece
+  is active, which is extra signal rather than less.
+- **Newton / dFBA composition.** Needs concavity in `w` at fixed `z`, and `z` is
+  constant along a trajectory. §8 is untouched.
+
+**What is deliberately restricted.** The offsets are **per unit (per plane)**, not
+per (plane, input): `wx` is `(width*group, 444)` per layer, so full per-input offsets
+would be a hypernetwork with ~450k outputs per layer. Per-plane offsets let a mask
+lift, drop or rescale a strategy but not freely rotate it. Rotation is option B's
+job. **This is an assumption to be measured, not a saving** — the diagnostic is
+whether held-out masks need rotations the per-plane family cannot reach.
+
+**What is *not* structural, and therefore must be measured.** `mu_max` is monotone
+non-increasing under reaction removal, and option A does not enforce that. A new
+diagnostic `mask_monotonicity_violation_rate` — the fraction of nested mask pairs
+`z' <= z` with `mu_hat(w, z') > mu_hat(w, z) + tol` — joins
+`concavity_violation_rate` in the gate. Option B gets this for free, which is the
+main argument for it.
+
+### 14.3 Option B — learn the dual polytope, one constraint per reaction (later)
+
+```
+mu(u, z) = min { pi·u  :  A_r·pi <= b_r  for every r with z_r = 1 }
+```
+
+A small LP inside the model (a differentiable-optimisation layer), with `A_r, b_r`
+learned per reaction. Properties option A has to learn, this one has by construction:
+
+- **masking is linear in `z`** — it selects constraints;
+- **monotone in `z`**: more reactions means more constraints, a smaller dual feasible
+  set, a larger min, so more reactions can only mean more growth;
+- **the pathway AND-structure is native** — vertices depend jointly on constraints,
+  so "A alone does nothing, B alone does nothing, A+B completes a route" needs no
+  training data to be representable;
+- **`pi` has dimension 444** (the exchange index), not one component per metabolite,
+  so the learned LP is genuinely smaller than the GEM's own dual;
+- it supplies a usable `d(violation)/dz`, which is what the
+  `20hm-genome-collection` uncertainty plan §9 wants for gradient-informed discrete
+  samplers.
+
+This is the principled version and is **not started**. It is a different training
+story (implicit differentiation through an LP, Clarabel or `lineax` on the KKT
+system) and should not be attempted until option A has shown whether mask
+conditioning works at all.
+
+### 14.4 Why: approximating MILP reconstruction methods
+
+The target is to **approximate gap-filling and the other GSMM MILP methods** by
+replacing the inner LP feasibility oracle with a differentiable surrogate, then
+optimising or sampling over reaction-presence space:
+
+- **gap-filling** = find the minimal `z` extension making a set of phenotypes
+  feasible. With `mu_hat(w, z)` differentiable in the mask embedding, this becomes
+  continuous optimisation with a sparsity penalty, or MCMC/SMC over `z`.
+- **posterior sampling over networks** — the `20hm-genome-collection` plan
+  `gem/uncertainty-aware-reconstruction.md` §5 — needs many `(w, z)` evaluations per
+  move, which is exactly where a surrogate beats the LP.
+- **experiment design** (that plan §7) ranks candidate experiments by how much they
+  split a posterior over `z`, which needs the same bulk evaluation.
+
+**But note the measured baseline before claiming a speed-up:** a *warm* single-edit
+FBA solve on a carved GEM is **3.5 ms** (GLPK, one core, 1841 reactions; measured
+2026-10-28), and a cold solve 72 ms. So:
+
+- **single-member screening does not need a surrogate at all.** 2000 candidates ×
+  100 conditions × 24 genomes is ~5 CPU-hours of exact FBA, fully parallel.
+- The surrogate earns its place only for **community-level** phenotypes (each
+  candidate needs a composed solve) and for **combinatorial** search over many
+  simultaneous edits.
+- **The surrogate is a filter, not an oracle.** Every accepted edit is re-checked
+  with exact FBA. This is the same discipline as `--lp-repair` in §13.3, where the
+  true LP caught a synthetic-lethal set the surrogate could not see.
+
+### 14.5 Pitfalls specific to the mask (P18–P22)
+
+| # | Pitfall | Guard |
+| --- | --- | --- |
+| **P18** | **Random masks carry almost no signal.** A uniform draw over `R` reactions either hits redundant reactions (`mu` unchanged) or essential ones (`mu` = 0). Both are cheap to predict and teach nothing | Sample in the **thin shell**: masks differing from a carved model by `k ∈ {1..5}` reactions, drawn from the candidate set actually being screened. This matches the use case, but it means the head is only valid **near** the models it was trained around — not "network-editable" in general. State that limit whenever a number is quoted |
+| **P19** | **No smoothness in `z` to exploit.** `mu_max` is neither concave nor submodular in the mask; pathway completion is a step change. Interpolating between seen masks is unjustified | Hold out whole **edit types**, not rows: leave-pathway-out and leave-reaction-out. A random split over `(w, z)` rows will look far better than the real task |
+| **P20** | **The §8.5 over-prediction defect becomes systematic.** Max-affine is a min of tangents, so it is an upper bound and is loose where no tangent sits nearby. A mask moves the true function *down*; if the pieces do not follow, the head over-predicts growth for knocked-out networks — i.e. reports "this reaction is not needed", the exact error that matters for screening | Measure the **one-sided** error on knockout rows separately (`under_rate` on masks, not just on media), and keep §8.5's repair path. An over-predicting screen is worse than no screen |
+| **P21** | **Dead planes, mask edition** (cf. the init collapse in M3). A mask offset can push every plane a row needs out of the group max, leaving no active piece and no gradient | Zero-init `e(z)`, so training starts from the measured-good unconditioned head; keep the diverse-bias init; monitor active-plane counts per mask as well as per row |
+| **P22** | **Exchanges are reactions too.** The mask and the 444-wide `u` input overlap, and carved models differ in which exchanges they have | Mask only **internal** reactions in the first pass; an exchange edit must go through the medium input, not the mask, or the two inputs contradict each other |
+
+Also inherited and still live: **P13** (one `index_hash` per run — a mask index needs
+the same treatment, frozen and hashed), and the `W_CAP` rule from M17 — **a clip in
+an input map is a modelling assumption**: `min(w, cap)` preserves concavity and
+destroys injectivity, and an upper-bound invariant needs the second. Do not clip the
+mask embedding.
+
+### 14.6 Milestones
+
+| # | Milestone | Gate |
+| --- | --- | --- |
+| **M18** | Mask-conditioned Head A (option A) exists and its invariants hold | `concavity_violation_rate` exactly 0 over random masks; monotone in `w`; bit-identical to `GroupMaxHead` at init |
+| **M19** | Knockout labels: `(medium, mask) -> mu_max, duals` on one organism, thin-shell sampled | 100% optimal solves, one mask `index_hash`, and the label set's own `mu` distribution reported (how many masks are no-ops, how many lethal) |
+| **M20** | Held-out **edit** accuracy | Leave-reaction-out and leave-pathway-out R² and gradient cosine, plus `under_rate` on knockout rows. Compare against the trivial baseline "`mu` unchanged", which P18 says will be strong |
+| M21 | Option B (§14.3), only if M20 says per-plane conditioning is the limit | — |
+
+`V9`: on a toy network whose essential reactions are known by construction, the head
+reproduces the full knockout ranking. Without a gate of that shape the layer can be
+added but not validated.
+
 ## Appendix — repository layout
 
 ```
