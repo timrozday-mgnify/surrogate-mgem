@@ -8,6 +8,7 @@ reduction to the unconditioned head at init, concavity in ``w``, and monotonicit
 
 from __future__ import annotations
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -318,3 +319,21 @@ def test_anchored_masks_only_flip_live_candidates():
     assert masks[1].sum() == 10 and masks[3].sum() == 10
     assert masks[0][2] == 0.0  # the one live candidate was flipped
     assert set(np.flatnonzero(masks[2] == 0)) <= {3, 4}
+
+
+def test_repair_direction_is_an_upper_bound():
+    """The outer-approximation invariant and the screening use case pull opposite ways.
+
+    `repair_intercepts` upstream exists because a trained head reading *below* a label
+    has left the min-of-tangents family, so it lifts the head. For §14's screening use
+    case the dangerous error is the other one: over-predicting growth for an edited
+    network reports "this reaction is not needed" (P20). So repair necessarily raises
+    `under_rate`, and that trade has to be measured, not assumed away.
+    """
+    head = _head()
+    w, z = _rows(8)
+    before = jax.vmap(head.on_w)(w, z)
+    # Lowering `out_b` raises `mu_hat`, since `out` is convex and `mu_hat = -out`.
+    lifted = eqx.tree_at(lambda h: h.head.out_b, head, head.head.out_b - 1.0)
+    after = jax.vmap(lifted.on_w)(w, z)
+    assert jnp.all(after > before)
