@@ -446,6 +446,46 @@ under-mixed. Report a convergence diagnostic or do not report the sample.
 
 ---
 
+## Part 4e — Neural-FBA hybrids, the Patil-group toolchain, and editing the network
+
+Added 2026-10-28, from the 20HM model-completeness work
+(`~/Documents/mimicc/20hm-genome-collection/gem/implementation-plan.md` §7b and §9). That work
+asked whether a fast surrogate could screen *candidate annotations*, adding a reaction and checking
+whether predicted growth then matches observed growth. The answer for this repo, both `src/cfs/` and the
+legacy encoder, is **not as built**. Every head is conditioned on the medium for a *fixed* network, so
+an internal edit (one isoleucine-pathway enzyme, say) needs relabelling and retraining. And
+for single members it doesn't need a surrogate: a warm FBA re-solve after one edit took **3.5 ms**
+(GLPK, *B. theta* CarveMe 1.6.6, 1,841 reactions).
+
+| Reference | Why it matters here |
+| --- | --- |
+| Faure, Mollet, Liebermeister & Faulon, **A neural-mechanistic hybrid approach improving the predictive power of genome-scale metabolic models** (AMN), [Nat Commun 2023](https://pmc.ncbi.nlm.nih.gov/articles/PMC10400647); code [brsynth/amn_release](https://github.com/brsynth/amn_release) (MIT) | **The nearest neural-FBA neighbour, and it drops different legs from Part 4's.** A dense layer maps the medium to an initial full flux vector, and a mechanistic layer (Wt-, LP- or QP-solver) refines it. Stoichiometry, bounds and positivity are **soft penalties** in the loss, not structure. So there is no concavity, no monotonicity and no dual supervision, and nothing guarantees mass balance at inference. It is tied to one GEM's `S` (the *E. coli* model was iML1515 pruned to 550 reactions) and is not composed into communities. Two things it has that this repo lacks: (1) **a reaction-knockout input** (binary vector over reactions; Q² = 0.81 on 145 *E. coli* mutants × 120 media, where plain FBA showed no correlation), the only published surrogate where the network itself is an input; (2) **AMN-Reservoir**, which *learns* the medium → uptake-bound map from measured growth, the problem §3.3 fixes by assuming Michaelis–Menten. Unseen knockouts and reaction *additions* are not tested; the authors name the latter as future work. |
+| Machado, Andrejev, Tramontano & Patil, **CarveMe**, [NAR 2018](https://academic.oup.com/nar/article/46/15/7542/5042022) | The generator of every label in this repo. Two properties matter here: models are **carved top-down from one universe**, so every roster member is a reaction subset of a shared network, which is what makes a reaction-mask input (below) well defined across organisms; and CarveMe can emit **ensembles** for reactions without gene evidence, a model-uncertainty axis no head here currently sees. |
+| Basile et al. (Patil group), **CarveMe-GutMicrobes**, bioRxiv 2026; [arianccbasile/carvemegut](https://github.com/arianccbasile/carvemegut) | A gut-specific CarveMe fork: an AGORA2-merged universe, a taxon-restricted DIAMOND database, and an **archaeal template**. If it replaces stock CarveMe for 20HM, every label root changes and the frozen index (P13) has to be rebuilt. The biggest change is likely *M. smithii*: stock CarveMe covers only 36% of its KEGG-metabolic genes. Setup, version pins and traps (the 2026 gramneg universe has no biomass reaction) are in `~/Documents/mimicc/20hm-genome-collection/literature/basile2026-carveme-gutmicrobes/`. |
+| Zelezniak, Andrejev, Ponomarova, Mende, Bork & Patil, **Metabolic dependencies drive species co-occurrence in diverse microbial communities** (SMETANA), [PNAS 2015](https://pmc.ncbi.nlm.nih.gov/articles/PMC4443341) | The standard interaction metrics: **MRO** (resource overlap, i.e. competition) and **MIP** (interaction potential, i.e. cooperation) for whole communities, plus per-species SCS, MUS and MPS ([algorithms](https://smetana.readthedocs.io/en/stable/algorithms.html)). These are the downstream objectives a pair-interactions workflow is usually compared against, and the per-species scores need many solves per community. They are a second many-query target, and a reference to check the surrogate's cross-feeding calls against. |
+| Machado, Maistrenko, Andrejev, Kim, Bork, Patil & Patil, **Polarization of microbial communities between competitive and cooperative metabolism**, [Nat Ecol Evol 2021](https://pmc.ncbi.nlm.nih.gov/articles/PMC7610595) | **The scale use case, done with solvers.** Co-occurring groups of up to 40 members across thousands of habitats, plus flux simulations of invasion and nutrient shift. The finding (competitive vs cooperative communities, with cooperators smaller-genomed and auxotrophic) is a **qualitative result a composed surrogate should reproduce**, and the run is the kind of workload that justifies amortising the solve. |
+| Tramontano, Andrejev, …, Typas & Patil, **Nutritional preferences of human gut bacteria reveal their metabolic idiosyncrasies**, Nat Microbiol 2018 | **Measured growth of 96 gut strains on 19 media** (4 rich, 15 defined). Every label here is simulated, so this is the obvious real-growth anchor for Head A's `mu_max(u)`, either as a test or for AMN-Reservoir-style calibration of the uptake map. Caveat: CarveMe 1.x was already benchmarked on it, so it is spent as an *independent* test of CarveMe-derived models. |
+| Kumar & Maranas, **GrowMatch**, [PLoS Comput Biol 2009](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2645679/) | The use case a network-editable surrogate would serve: add or remove functions until growth/no-growth calls match mutant data (*E. coli* consistency 90.6% → 96.7%). Solved as a MILP over the universe. A surrogate replaces the solve only when the search is combinatorial or community-level. |
+| Boer et al., **DNNGIOR** (improving GEMs of incomplete genomes with deep learning), [iScience 2024](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC11629236/) | **A ready-made reaction-content representation.** A network trained on reaction co-occurrence across >11k bacterial species weights gap-filling candidates (≈14× more accurate than unweighted gap-filling on drafts). Its reaction-presence input is the kind of encoder a network-editable surrogate would need, and its weights are a prior over which edits are plausible. |
+
+### Future work: a network-editable surrogate
+
+Desirable, and not on any current milestone. A surrogate whose inputs include the **reaction /
+enzyme content** as well as the medium, so candidate annotations, knockouts and pathway units can
+be screened without a solve, including at community level where each candidate otherwise costs a
+community solve. The natural construction combines the three entries above: a **reaction-presence
+mask over the CarveMe universe** (every carved model is a mask; additions and knockouts are bit
+flips), AMN's demonstration that a knockout vector can be an input, and DNNGIOR-style
+reaction-content features. It would be trained on models with reactions randomly added and removed.
+
+What has to be shown first:
+- **Unseen edits.** AMN never tests a knockout absent from training, and generalising to edits it hasn't seen is the whole point.
+- **Scale.** AMN's *E. coli* model was pruned to 550 reactions, and CarveMe universes have several thousand. Nobody has shown it works at that size.
+- **Structure.** Whether the concavity in `u` survives conditioning on a discrete mask. It should for each fixed mask, since each is still an LP value function, but the max-affine planes would have to be mask-dependent.
+- **Verification.** Exact FBA confirms every hit. That is the verify-in-loop pattern already used here, and the cheap part.
+
+---
+
 ## Part 5 — Open questions → what to read
 
 | Open question | Read | What it should tell you |
@@ -476,11 +516,11 @@ And the sharpest demonstration of what the relaxation buys is §13.2b: the exact
 gradient is a **subgradient selection at a kink**, and a trust-region method built on it
 *stalls there* while the smoothed head walks through. Not accuracy — a usable direction at a
 corner. The nearest neighbours each drop one leg: the reactive-transport ANN has no
-structure, GroupMax and the max-affine statistics have no biology, and the community-FBA
+structure, AMN (Part 4e) embeds the network but only as soft penalties, with no concavity, no duals and no composition, GroupMax and the max-affine statistics have no biology, and the community-FBA
 methods keep the LP. If this is written up, that three-way intersection is the claim — and
 the concavity is what makes the §13 medium-design programs convex, which is the part a
 reviewer will care about more than the speedup.
 
 ---
 
-*Compiled 2026-09-01; Part 4b and the hybrid stock-take added 2026-09-06.*
+*Compiled 2026-09-01; Part 4b and the hybrid stock-take added 2026-09-06; Part 4e (AMN, the Patil-group toolchain, a network-editable surrogate) added 2026-10-28.*
