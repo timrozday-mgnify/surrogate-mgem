@@ -108,6 +108,8 @@ def generate_organism(
     ceq: dict[str, float] | None = None,
     mask_candidates: Sequence[str] | None = None,
     mask_k_max: int = 5,
+    mask_additions: Sequence[str] | None = None,
+    universe=None,
 ) -> OrganismShards:
     """Generate all label shards for one organism (plan §4.5).
 
@@ -204,19 +206,35 @@ def generate_organism(
     # (medium, mask) pair: scoring one eps against another otherwise compares two
     # different networks and reads as a smoothing effect.
     knock: list[list[str]] | None = None
+    added: list[str] = []
     if mask_candidates is not None:
+        from cfs.sampling.masks import (
+            extend_with_additions,
+            mask_to_knockouts,
+            maskable_reactions,
+            sample_edit_masks,
+        )
         from cfs.sampling.masks import (
             index_hash as mask_index_hash,
         )
-        from cfs.sampling.masks import (
-            mask_to_knockouts,
-            maskable_reactions,
-            sample_knockout_masks,
-        )
 
+        # §15.4: the index must contain reactions the carved model LACKS, or a mask can
+        # only ever remove and the gap-filling case is unrepresentable. The addition
+        # pool is grafted in at zero bounds, so the extended model is numerically
+        # identical to the original until a mask turns one on.
+        base_present = maskable_reactions(model)
+        if mask_additions:
+            if universe is None:
+                raise ValueError("mask_additions needs a universe model to copy from")
+            added = extend_with_additions(model, universe, mask_additions)
         rxn_ids = maskable_reactions(model)
-        masks = sample_knockout_masks(
-            rxn_ids, mask_candidates, len(media), seed=cfg.seed, k_max=mask_k_max
+        masks = sample_edit_masks(
+            rxn_ids,
+            base_present,
+            mask_candidates,
+            len(media),
+            seed=cfg.seed,
+            k_max=mask_k_max,
         )
         knock = [mask_to_knockouts(rxn_ids, row) for row in masks]
         (outdir / f"{genome_id}.{_MASKS_FILE}").write_text(
@@ -224,6 +242,13 @@ def generate_organism(
                 {
                     "mask_index_hash": mask_index_hash(rxn_ids),
                     "n_reactions": len(rxn_ids),
+                    "n_base_present": len(base_present),
+                    "n_additions": len(added),
+                    # Both lists, not just their counts: without them an analysis
+                    # cannot tell a row's *edits* from its unselected additions,
+                    # which are off for the same reason but are not edits.
+                    "base_present": base_present,
+                    "additions": added,
                     "candidates": list(mask_candidates),
                     "k_max": mask_k_max,
                     "reactions": rxn_ids,
@@ -260,8 +285,12 @@ def generate_organism(
                 ex_order,
                 mask_id=None if knock_e is None else mid,
                 knockouts=None if knock_e is None else knock_e[mid],
+                # The control is the *base* network: every addition off. On an
+                # extended model `mu_unmasked` alone would leave the grafted
+                # reactions at their universe bounds, i.e. compare each edit
+                # against a network that already has every candidate addition.
                 mu_base=(
-                    None if knock_e is None else mu_unmasked(model, medium, km_cfg, ceq)
+                    None if knock_e is None else mu_unmasked(model, medium, km_cfg, ceq, off=added)
                 ),
             )
             for mid, medium in enumerate(media_e)
@@ -287,6 +316,8 @@ def generate_roster(
     ceq: dict[str, float] | None = None,
     mask_candidates: dict[str, Sequence[str]] | None = None,
     mask_k_max: int = 5,
+    mask_additions: dict[str, Sequence[str]] | None = None,
+    universe=None,
 ) -> list[OrganismShards]:
     """Run :func:`generate_organism` for every roster model (serial; see module doc).
 
@@ -337,6 +368,10 @@ def generate_roster(
                     None if mask_candidates is None else mask_candidates.get(gm.genome_id)
                 ),
                 mask_k_max=mask_k_max,
+                mask_additions=(
+                    None if mask_additions is None else mask_additions.get(gm.genome_id)
+                ),
+                universe=universe,
             )
         )
     if ceq is not None:

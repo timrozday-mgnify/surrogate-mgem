@@ -139,6 +139,15 @@ def build_parser() -> argparse.ArgumentParser:
         "<genome>.masks.json beside the shards.",
     )
     gen.add_argument(
+        "--mask-universe",
+        type=Path,
+        help="Universe SBML (e.g. carvemegut's bigg_universe.xml) to copy addition "
+        "candidates from. Required when --mask-candidates lists reactions the carved "
+        "model lacks: a mask over the organism's own reactions can only REMOVE, and "
+        "gap-filling is addition (\u00a715.4). Every carved model is a subset of the "
+        "universe, which is what lets one index cover both directions.",
+    )
+    gen.add_argument(
         "--mask-k-max",
         type=int,
         default=5,
@@ -1486,7 +1495,23 @@ def main(argv: list[str] | None = None) -> int:
             ceq = ceq_map(
                 json.loads(args.inhibition.read_text()), ex_all, keep_mask(ex_all, buffered)
             )
-        mask_cands = json.loads(args.mask_candidates.read_text()) if args.mask_candidates else None
+        mask_cands = mask_adds = None
+        universe = None
+        if args.mask_candidates:
+            raw = json.loads(args.mask_candidates.read_text())
+            # Two accepted shapes: {genome: [ids]} for removals only, and
+            # {genome: {"candidates": [...], "additions": [...]}} from the screened
+            # selection, whose `additions` are grafted in from the universe.
+            mask_cands = {
+                g: (v["candidates"] if isinstance(v, dict) else v) for g, v in raw.items()
+            }
+            mask_adds = {g: v.get("additions", []) for g, v in raw.items() if isinstance(v, dict)}
+            if any(mask_adds.values()):
+                if not args.mask_universe:
+                    raise SystemExit("--mask-candidates lists additions: --mask-universe needed")
+                import cobra
+
+                universe = cobra.io.read_sbml_model(str(args.mask_universe))
         shards = generate_roster(
             roster,
             args.index,
@@ -1499,6 +1524,8 @@ def main(argv: list[str] | None = None) -> int:
             ceq=ceq,
             mask_candidates=mask_cands,
             mask_k_max=args.mask_k_max,
+            mask_additions=mask_adds,
+            universe=universe,
         )
         print(
             json.dumps(

@@ -7627,12 +7627,42 @@ mask embedding.
 
 ### 14.6 Milestones
 
+**Gate order (set 2026-10-29).** M18 -> M19 -> M20 -> V9, then the §15 comparison.
+M21 is conditional on M20, not a gate in its own right: option B is only built if M20
+says per-plane conditioning is the limit. **§15's M22/M23 comparison work does not
+start until M20 and V9 are met** — a benchmark against FlowGAT and AMN is only
+meaningful once this head has a number of its own to compare, and running it earlier
+just measures an untrained model.
+
+
 | # | Milestone | Gate |
 | --- | --- | --- |
 | **M18** | Mask-conditioned Head A (option A) exists and its invariants hold | `concavity_violation_rate` exactly 0 over random masks; monotone in `w`; bit-identical to `GroupMaxHead` at init |
 | **M19** | Knockout labels: `(medium, mask) -> mu_max, duals` on one organism, thin-shell sampled | 100% optimal solves, one mask `index_hash`, and the label set's own `mu` distribution reported (how many masks are no-ops, how many lethal) |
 | **M20** | Held-out **edit** accuracy | Leave-reaction-out and leave-pathway-out R² and gradient cosine, plus `under_rate` on knockout rows. Compare against the trivial baseline "`mu` unchanged", which P18 says will be strong |
-| M21 | Option B (§14.3), only if M20 says per-plane conditioning is the limit | — |
+| M21 | Option B (§14.3), only if M20 says per-plane conditioning is the limit | Conditional, not a gate |
+
+**M19 attempt 2 (2026-10-29): the screen, and the medium problem.** Attempt 1 failed its
+own gate (62.7% lethal / 26.5% no-op / 10.8% partial), so candidates are now chosen by
+a **measured single-edit screen** rather than the "carries flux" proxy — one warm LP per
+candidate classifies it lethal / partial / noop / helpful, and the selection is built to
+a target class mix (`make_mask_candidates2.py`). On `CP009913.1` over all 853 removals
+plus a 240-reaction universe addition pool, on a rich screen medium:
+
+| edit direction | screen result |
+| --- | --- |
+| removals (853) | **708 noop, 88 partial, 57 lethal** |
+| additions (240 random universe reactions) | **235 noop, 5 helpful** |
+
+Two things follow. First, the removal screen works: there are enough `partial` reactions
+to build a shell out of, and "carries flux" was simply the wrong filter. Second, and more
+important: **only 5 of 240 additions do anything at all on a rich medium, and none can do
+more than nothing when the organism is already at its maximum.** An addition is
+informative only where something is *missing* — which is exactly gap-filling's own
+setting, growth observed where the model predicts none. So the addition arm needs
+**deficient media** (drop a nutrient, see which addition rescues), not the sampling
+design's rich ones. Until that is built, the addition half of the mask is representable
+but untestable, and `k > 1` is where the removal half's signal has to come from.
 
 `V9`: on a toy network whose essential reactions are known by construction, the head
 reproduces the full knockout ranking. Without a gate of that shape the layer can be

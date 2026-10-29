@@ -250,9 +250,15 @@ def mu_unmasked(
     concentrations: dict[str, float],
     km_cfg: dict | None = None,
     ceq: dict[str, float] | None = None,
+    off: Sequence[str] | None = None,
 ) -> float:
-    """``mu_max`` on this medium with **no** knockouts — the paired control for a
+    """``mu_max`` on this medium for the **base** network — the paired control for a
     §14 mask row.
+
+    ``off`` is forced to zero flux: on a model extended with an addition pool
+    (:func:`cfs.sampling.masks.extend_with_additions`) the base network is the one
+    with every addition off, so without it each edit would be compared against a
+    network that already has every candidate addition in it.
 
     Without it a mask label is uninterpretable: with one mask per medium there is no
     unedited solve on the *same* medium, so "this edit did nothing" cannot be told
@@ -266,6 +272,8 @@ def mu_unmasked(
     km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
     with model:
         apply_mm_bounds(model, concentrations, km_cfg, ceq)
+        for r_id in off or ():
+            model.reactions.get_by_id(r_id).bounds = (0.0, 0.0)
         return float(mu_optimize(model, "unmasked control"))
 
 
