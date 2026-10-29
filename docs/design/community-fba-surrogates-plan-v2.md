@@ -7905,6 +7905,134 @@ the per-reaction coverage table reported the way §4.6 reports per-metabolite co
 Until the coverage table exists, "informative share" is a single number hiding the same
 ~1137:9:1 skew the medium axis had.
 
+## 17. Why M20 fails, and what to model instead (explored 2026-10-29)
+
+M20's best run beat "the edit does nothing" on unseen edits but stayed below zero R2
+(-0.212). Before building more, four cheap experiments asked whether that is a shortage
+of labels, unsuitable labels, or the wrong thing being modelled. A random forest is the
+probe throughout, as in `cfs baseline-rf`: it has no concavity, monotonicity or init
+problem, so where it also fails, the failure is in what the inputs say.
+
+All on `CP009913.1`, three concatenated roots, 4512 rows. Scripts and outputs in
+`~/Documents/surrogate-mgems_runs/20hm_masks/` (`explore_reprs.py`,
+`explore_precursors.py`, and their `.json`).
+
+### 17.1 Not a label-count problem
+
+Leave-reaction-out R2 for a forest on the one-hot mask, against training fraction:
+
+| fraction | 10% | 25% | 50% | 100% |
+| --- | --- | --- | --- | --- |
+| one-hot | -0.084 | -0.029 | -0.025 | **-0.007** |
+| stoich + orphan | -0.075 | 0.063 | 0.176 | 0.135 |
+
+**One-hot is flat.** That is not an empirical accident; it is forced. Under
+leave-reaction-out, a held-out reaction's bit is never varied in training, so *no* model
+of any kind can learn what flipping it does. An atomic reaction identity carries no
+transferable information. More labels of the same kind cannot fix this.
+
+### 17.2 Representation matters, but local features stop at lethality
+
+Forest R2 (and lethality AUROC) by representation and split:
+
+| representation | by medium | leave-reaction-out | **pure unseen** (448 rows) | leave-module-out |
+| --- | --- | --- | --- | --- |
+| one-hot | 0.689 | -0.007 | -1.57 (AUROC 0.977) | 0.498 |
+| stoich deltas | 0.644 | **0.137** | -1.17 (0.927) | 0.338 |
+| orphaned metabolites | **0.711** | -0.019 | **-0.25 (0.997)** | 0.373 |
+| module deltas | 0.512 | -0.011 | -0.91 (0.913) | 0.471 |
+
+"Pure unseen" rows are the ones whose *only* edits are held-out reactions, so they test
+transfer and nothing else; mixed rows let a one-hot model lean on seen co-edits.
+
+Three findings:
+
+1. **Lethality transfers; effect size does not.** "Did this edit leave a metabolite with
+   no producer" ranks lethality on never-seen edits at AUROC 0.997, with no training
+   needed to define it. But R2 stays negative everywhere on the pure split.
+2. **No representation can tell a no-op from a partial loss**: effect-vs-no-op AUROC is
+   0.43-0.56 on every split, *including the easy one*. The reason is mechanistic.
+   Whether removing a reaction costs growth depends on whether an *equally efficient
+   alternative route* exists — a global, flux-level property. Two edits that each
+   remove one of two parallel routes look identical locally; one is a no-op and the
+   other a partial loss depending on the routes' yields. Local structure cannot see it.
+3. **CarveMe models carry no subsystem annotation** — every candidate was `unassigned`,
+   so pathway features from that field are empty. The modules above are Louvain
+   communities of the reaction graph with currency metabolites removed (degree > 15);
+   a curated pathway map would be a better test of the pathway idea.
+
+Separately: the forest scores **0.689** by medium where the trained masked head scored
+**0.375** on the same data. So there is *also* an architecture/optimisation deficit,
+the same shape as the ICNN-vs-forest gap recorded for Head A.
+
+### 17.3 The fundamental decomposition: growth is a min over subgraph capacities
+
+The hypothesis: each biomass precursor `p` is made by some subgraph of the network. Its
+capacity under a medium and an edit is the most of `p` the network can make *alone*,
+divided by its biomass coefficient. Then
+
+```
+mu_liebig = min_p cap_p(u, z)
+```
+
+Measured on 600 rows, 53 precursors, one LP per precursor per row, **no learning**:
+
+| | first attempt | ATP as hydrolysis |
+| --- | --- | --- |
+| R2 against true `mu` | 0.154 | **0.897** |
+| Spearman | 0.859 | **0.877** |
+| lethality agreement | 1.0 | **1.0** |
+| distinct binding precursors | 22 | 23 |
+
+**The first attempt was wrong about ATP, and the fix is the finding.** In the biomass
+reaction ATP is mostly *hydrolysed* (maintenance: `atp + h2o -> adp + pi + h`), not
+consumed, so a plain ATP demand measures de-novo adenine synthesis. Modelled as
+hydrolysis, the decomposition goes from explaining 15% of the variance to 90%.
+
+What it means:
+
+- **Lethality is exact and local**: `mu = 0` iff some precursor's subgraph is
+  disconnected. That is a reachability question, which is why the orphan features of
+  17.2 rank it so well.
+- **The composition is a min**, the same structure as Head A's max-affine family. So
+  the answer to the original "does each reaction correspond to a hyperplane?" is: no,
+  but each **biosynthetic subgraph corresponds to a group of hyperplanes**.
+- **The latent is small**: 23 of 53 precursors ever bind, and five of them (ATP, Ca2+,
+  CoA, UDP-MurNAc-pentapeptide, SAM) bind in over two thirds of rows.
+
+Two honest limits. It is **not yet a valid upper bound** — 144 of 600 rows read *below*
+the true `mu` (median ratio 0.80), because other cofactors (CoA, SAM, GTP) are also
+partly recycled rather than consumed, and some ATP is incorporated into RNA rather than
+hydrolysed. Fixing those should tighten it. And it is **weakest on the partial class**
+(Spearman 0.33), where co-limitation means precursors compete for shared resources and
+independent capacities stop composing by a plain min.
+
+**It is a representation, not a speed-up.** Fifty-three LPs per row is more work than
+one FBA. Its value is that it says *what to learn*: each precursor's capacity is a
+per-subgraph problem, and the open question is whether those transfer to unseen edits
+better than `mu` does.
+
+### 17.4 Options
+
+| | Option | Evidence | What would decide it |
+| --- | --- | --- | --- |
+| **C** | **Subgraph factorisation** — learn per-precursor capacity `cap_p(u, z)` and compose by min | Decomposition explains R2 0.90 with no learning; lethality exact; 23-dimensional latent; same min structure as Head A | Does `cap_p` transfer to pure unseen edits? It is a smaller, more local problem than `mu`, so it should, but that is untested |
+| **A'** | Option A with a **structural mask embedding** (orphan + stoich features instead of one-hot) | Lifts leave-reaction-out 0.007 -> 0.137 in a forest, and transfers lethality at AUROC 0.997 | Cheap to try. Cannot fix the no-op/partial blindness of 17.2, so its ceiling is low |
+| **D** | **Graph network** over the reaction-metabolite bipartite graph, conditioned on medium and mask | The one learned representation that can in principle see alternative routes, since message passing approximates flux propagation | The most expensive to build; closest published relative is FlowGAT, which is a node classifier and not conditioned on edits |
+| **B** | Option B, the dual polytope, but with constraints **computed from stoichiometry** | A *learned* per-reaction constraint has exactly one-hot's transfer problem; computed from `S_r` it is a reduced LP | Only worth building if it is genuinely smaller than the LP it replaces |
+| **E** | Reframe as a **guide**, not a predictor: gate on ranking, with exact FBA verifying | Lethality ranks well; effect-vs-no-op is at chance | As a guide today, it can *prune lethal candidates* but cannot *find effective ones* |
+| **F** | Stop the surrogate for single organisms: exact FBA (3.5 ms) plus the **orphan rule as a free lethality filter** | The orphan rule needs no training and ranks unseen lethality at 0.997 | Is the remaining need (community-level, combinatorial) large enough to justify a surrogate at all? |
+
+**Recommendation: C, with F as the baseline it has to beat.** C is the only option
+backed by a representation that explains most of the variance before any learning, and
+it inherits Head A's structure rather than fighting it. A' is a cheap interim worth one
+run. B and D are not worth building until C has been tried.
+
+**First C experiment**: tighten the bound (cofactor recycling), then train one small
+model per binding precursor on `cap_p` and score leave-reaction-out and pure-unseen
+against the forest numbers in 17.2. If `cap_p` transfers where `mu` did not, the
+factorisation is the architecture.
+
 ## Appendix — repository layout
 
 ```
