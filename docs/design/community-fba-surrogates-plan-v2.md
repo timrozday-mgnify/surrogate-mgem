@@ -7484,6 +7484,8 @@ can be screened without rebuilding the model.
 **Status.** §14.2 (option A) is what is being developed now. §14.3 (option B) is
 recorded as a later alternative, not started. §14.4 is the reason both exist.
 
+**Read §15 before spending more on this.** It benchmarks §14 against FlowGAT, FluxGAT and AMN and reaches two uncomfortable conclusions: single-knockout essentiality is already covered by published work and by exact FBA, and the mask index built here is over the organism's **own** reactions, so it can only *remove* — which means §14.4's gap-filling goal is not yet reachable. §15.4 says what to change (index the CarveMe universe instead).
+
 ### 14.1 What a reaction is, in the value function
 
 Head A is a max-affine family: `mu_hat(w) = min_j [mu_j + pi_j·(w - w_j)]`
@@ -7635,6 +7637,136 @@ mask embedding.
 `V9`: on a toy network whose essential reactions are known by construction, the head
 reproduces the full knockout ranking. Without a gate of that shape the layer can be
 added but not validated.
+
+## 15. Benchmarking §14 against the published alternatives — and what is redundant
+
+**The honest summary first: one of §14's two use cases is already covered by published
+work, and the one that is not is the one the current label set does not test.** This
+section says which is which, how to run the comparators, and what would have to be
+true for §14 to be worth finishing.
+
+### 15.1 What each method actually takes as input
+
+| Method | Input | Output | Edits it can represent |
+| --- | --- | --- | --- |
+| **§14 masked Head A** | medium `u` (444) **+** reaction mask `z` | `mu_max`, concave in `u`, with duals | **removals only** — see 15.4 |
+| **AMN** (Faure 2023) | medium **+** binary reaction-knockout vector `R_KO` | growth, via soft `SV=0` penalties | removals |
+| **FlowGAT** (Hasibi, Michoel & Oyarzún 2024) | a **mass-flow graph built from one wild-type FBA solution** per condition; node features are flow-profile encodings | binary essentiality label **per reaction node**, semi-supervised | **none as input** — knockouts are the *labels*, not an input |
+| **FluxGAT** (Sharma 2024) | a graph from **flux sampling** (no objective function) | binary gene essentiality | none as input |
+| exact FBA | medium + any edit | `mu_max` + duals, exactly | removals *and* additions |
+
+The distinction that decides redundancy: **FlowGAT and FluxGAT are node classifiers on
+a fixed graph.** They answer "which reactions in this network are essential in this
+condition". They do not take an edit as input, they return a label rather than a growth
+rate, and FlowGAT trains a separate model per condition graph. §14's head answers a
+different question — `mu` for an arbitrary `(medium, edit)` pair — and the two only
+meet on **single-knockout essentiality**.
+
+FlowGAT does not address adding a reaction at all. Its discussion proposes other flux
+descriptions (elementary flux modes, extreme pathways, flux sampling) as extensions;
+additions are not among them.
+
+### 15.2 Where §14 is redundant
+
+**On single-reaction essentiality, §14 adds nothing.** FBA already answers it exactly in
+3.5 ms warm, FlowGAT reaches "close to FBA" on *E. coli* iML1515, and FluxGAT does the
+mammalian case. A surrogate that predicts single knockouts is a slower, less accurate
+route to a question with an exact 3.5 ms answer.
+
+**This is a problem for the M19 label set as it stands.** Measured: **62.7% of its rows
+are lethal and 26.5% are no-ops** — that is, ~89% of the labels are essentiality
+questions, exactly the published territory. The thin shell was pointed at the redundant
+part of the space. The fix is in the candidates, not the architecture (M19's own
+conclusion): choose reactions that **have alternatives**, so the informative `partial`
+class dominates.
+
+### 15.3 Where no precedent was found
+
+- **`mu` as a function of `(medium, edit)` jointly**, rather than essentiality at one
+  medium. FlowGAT needs a new graph and a new trained model per condition.
+- **Concavity in the medium, with duals**, which is what §8's Newton composition and the
+  master problem consume. AMN embeds `S` only as a soft penalty: no concavity, no duals,
+  no composition. FlowGAT has no value function at all.
+- **Multi-reaction edits (`k > 1`)**, the pathway-AND case. No comparator takes a
+  combinatorial edit as input.
+- **Community-level** phenotypes under an edit, which is the one place a surrogate beats
+  exact FBA outright (each candidate otherwise needs a composed solve).
+- **Additions**, which is what gap-filling actually needs — and which §14 as built cannot
+  do either (15.4).
+
+### 15.4 A correction to §14: the mask is over the wrong set
+
+`cfs.sampling.masks.maskable_reactions` indexes **the organism's own internal
+reactions**, so a mask can only ever *remove*. §14.4's stated goal is approximating
+gap-filling, which is *addition*. These do not meet.
+
+To cover additions the mask index must be the **CarveMe universe**, with each carved
+model a subset of it: then `z` ranges over present *and* absent reactions, and an
+addition is a bit going 0 -> 1. That is what makes the universe the right index (every
+panel member is a subset of one shared matrix), and it is the gap between what is built
+and what §14.4 claims. Consequences, none of them free:
+
+- `R` goes from ~850 (one organism's internal reactions) to the universe's several
+  thousand, so the embedding and the label budget both grow;
+- the label solve must run on the **universe restricted to `z`**, not on the carved
+  model, which is a different and slower LP;
+- P13 again: one frozen universe index, hashed, shared across the roster.
+
+**Until this is done, §14 cannot be described as approximating gap-filling.** It
+approximates knockout screening, which is the redundant half.
+
+### 15.5 How to run the comparators
+
+Three mutually incompatible stacks (TensorFlow; PyG 2.3.1 + Lightning 1.8.6; torch
+2.8.0), so **one container each**, built locally and converted to Apptainer only if a
+run needs the cluster. None of the three benchmarks is big: FlowGAT's *E. coli* mass-flow
+graph is 444 nodes and its code archive is 286 kB. **A laptop with Docker is enough for
+the comparisons themselves.**
+
+| Method | Source | Stack | Container | HPC needed? |
+| --- | --- | --- | --- | --- |
+| **AMN** | `github.com/brsynth/amn_release`, **MIT** | conda, `environment_amn.yml` (versions pinned there; the README pins none and misnames the file `environment_amn.yaml`) | Write a Dockerfile over `continuumio/miniconda3` + that env file. No Dockerfile is provided | No. Tested on Ubuntu 22.04 / macOS |
+| **FlowGAT** | **Zenodo 10.5281/zenodo.10551318**, `FlowGAT.zip` 285.7 kB, **CC-BY-4.0**. No GitHub repo exists | Python ≥3.6, PyG 2.3.1, PyTorch Lightning 1.8.6, GraphGym; COBRApy 0.26.3 + glpk for the FBA step | Dockerfile over a pinned `pytorch` base. `python main.py --cfg configs/k_fold_gat.yaml --repeat 10 --k_fold` | No for the GNN. The paper's own runs used a national HPC facility but report no runtimes |
+| **FluxGAT** | `github.com/kierensharma/FluxGAT`, **no licence file found** | `requirements.txt` pins cobra 0.29.0, torch 2.8.0, torch_geometric 2.4.0, keras 3.13.2, networkx 2.8.8, node2vec 0.4.6, numpy 1.26.2, pandas 2.1.3, scikit-learn 1.5.0 | Dockerfile from that requirements.txt | **Yes for the flux sampling** — that stage, not the GNN, is the cost. Nextflow + Apptainer + SLURM, like `--stage labels` |
+
+**The licence matters.** AMN is MIT, so it can be vendored and containerised freely.
+FlowGAT's archive is CC-BY-4.0 — fine to use and modify with attribution, but it is a
+*documentation* licence applied to code, so check before redistributing an image.
+**FluxGAT has no licence file**, which means no permission to redistribute: run it from
+a local clone, do not ship an image of it, and treat it as a read-only reference.
+
+### 15.6 The benchmark that would actually settle it
+
+The comparators and §14 share exactly one task, so that is the one to run:
+
+**V10 — single-knockout essentiality on one GEM, one medium.** *E. coli* iML1515 on
+glucose, labels from the Monk et al. knockout growth data (3892 genes; FlowGAT's glucose
+graph has 444 nodes of which ~255 are labelled, ~75% of them essential). Report PRAUC
+against the no-skill floor, which is **74.9% precision** on that data — with that
+imbalance, accuracy is meaningless and must not be quoted. Entrants: exact FBA (the
+gold standard, and the one to beat on *cost*, not accuracy), FlowGAT, the §14 masked
+head, and the trivial "essential iff carrying flux" rule.
+
+**Expected outcome, stated in advance so the result cannot be rationalised afterwards:
+§14 will not beat FBA, and probably will not beat FlowGAT.** That is the point of running
+it — if §14 loses on the shared task, its case rests entirely on 15.3, and the work must
+move to the capabilities no comparator has (`k > 1`, additions over the universe,
+community composition, duals for the master problem) or stop.
+
+**V11 — the comparison nobody else can run**, and therefore the one that justifies the
+effort: `k > 1` edits and additions over the universe, scored against exact FBA, with
+the `partial` class separated from the lethal rows (M19). No published comparator can
+enter it, so FBA is the only baseline — which makes **cost per query** the metric, not
+accuracy, with accuracy as a constraint ("within x% of FBA at y× the throughput").
+
+### 15.7 Milestones
+
+| # | Milestone | Gate |
+| --- | --- | --- |
+| **M22** | Three containers that reproduce one published number each | A documented Dockerfile per method; FluxGAT run from a local clone only, no image shipped |
+| **M23** | V10 shared-task benchmark | PRAUC for all four entrants on the identical fold split, against the 74.9% no-skill floor |
+| **M24** | Universe-indexed mask (15.4) | A frozen, hashed universe index; a label solve on the universe restricted to `z`; additions representable |
+| **M25** | V11, the cost-per-query comparison on `k > 1` and additions | Accuracy within a stated tolerance of FBA, at a stated throughput multiple |
 
 ## Appendix — repository layout
 
