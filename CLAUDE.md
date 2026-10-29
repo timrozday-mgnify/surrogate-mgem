@@ -55,6 +55,8 @@
 
 > | **§17 why M20 fails, and what to model instead** | **2026-10-29.** Not a label-count problem: one-hot leave-reaction-out R2 is flat (-0.084 to -0.007 from 10% to 100% of data), because a held-out reaction's bit never varies in training. Local structural features rank lethality on unseen edits (orphan AUROC 0.997) but nothing separates no-op from partial (AUROC 0.43-0.56), since that depends on alternative routes. CarveMe models carry no subsystem annotation. **Growth ~ min over 53 biomass-precursor subgraph capacities explains R2 0.897 with no learning** (lethality agreement 1.0), once ATP is modelled as hydrolysis. Recommendation: option C, subgraph factorisation | plan §17 |
 
+> | **A' and C staged, 2026-10-29** | A' (`run_aprime.py`) swaps the head's one-hot `z` for §17.2's structural descriptors — no head change needed, since `z` only enters a linear embedding — and was **left running, no result yet**; it writes `aprime.json` incrementally. C stage 1 (`run_option_c.py`) is written and **unrun**: per-precursor capacity labels with GTP/CTP/UTP/CoA/SAM joining ATP as *turnover* demands rather than drains, which is §17.3's fix generalised, with `bound_violations` as the check. **D (graph network) is now the backup if C fails, replacing B.** | plan §17.4 |
+
 > **The label set** (M3/M4 train on this): `~/Documents/surrogate-mgems_runs/20hm_bands/`
 > from `~/Documents/20hm_carveme_models` (21 CarveMe GEMs). 4000 media/organism —
 > 1/5 of the D10 budget, laptop-sized; `SamplingConfig.n_media` still defaults to

@@ -8018,15 +8018,24 @@ better than `mu` does.
 | --- | --- | --- | --- |
 | **C** | **Subgraph factorisation** — learn per-precursor capacity `cap_p(u, z)` and compose by min | Decomposition explains R2 0.90 with no learning; lethality exact; 23-dimensional latent; same min structure as Head A | Does `cap_p` transfer to pure unseen edits? It is a smaller, more local problem than `mu`, so it should, but that is untested |
 | **A'** | Option A with a **structural mask embedding** (orphan + stoich features instead of one-hot) | Lifts leave-reaction-out 0.007 -> 0.137 in a forest, and transfers lethality at AUROC 0.997 | Cheap to try. Cannot fix the no-op/partial blindness of 17.2, so its ceiling is low |
-| **D** | **Graph network** over the reaction-metabolite bipartite graph, conditioned on medium and mask | The one learned representation that can in principle see alternative routes, since message passing approximates flux propagation | The most expensive to build; closest published relative is FlowGAT, which is a node classifier and not conditioned on edits |
+| **D** | **Graph network** over the reaction-metabolite bipartite graph, conditioned on medium and mask — **the preferred backup if C fails** (set 2026-10-29, replacing B in that role) | The one learned representation that can in principle see alternative routes, since message passing approximates flux propagation | The most expensive to build; closest published relative is FlowGAT, which is a node classifier and not conditioned on edits |
 | **B** | Option B, the dual polytope, but with constraints **computed from stoichiometry** | A *learned* per-reaction constraint has exactly one-hot's transfer problem; computed from `S_r` it is a reduced LP | Only worth building if it is genuinely smaller than the LP it replaces |
 | **E** | Reframe as a **guide**, not a predictor: gate on ranking, with exact FBA verifying | Lethality ranks well; effect-vs-no-op is at chance | As a guide today, it can *prune lethal candidates* but cannot *find effective ones* |
 | **F** | Stop the surrogate for single organisms: exact FBA (3.5 ms) plus the **orphan rule as a free lethality filter** | The orphan rule needs no training and ranks unseen lethality at 0.997 | Is the remaining need (community-level, combinatorial) large enough to justify a surrogate at all? |
 
-**Recommendation: C, with F as the baseline it has to beat.** C is the only option
+**Order set 2026-10-29: A' first (cheap interim), then C; D is the backup if C fails.** B is no longer the backup. **Recommendation: C, with F as the baseline it has to beat.** C is the only option
 backed by a representation that explains most of the variance before any learning, and
 it inherits Head A's structure rather than fighting it. A' is a cheap interim worth one
 run. B and D are not worth building until C has been tried.
+
+**Status, 2026-10-29.** A' is implemented (`run_aprime.py`) and running: the same
+`MaskedGroupMaxHead` with `z` replaced by the structural descriptors, which needs no
+change to the head because `z` enters only through a linear embedding — concavity and
+monotonicity in the medium never depended on it being binary. It scores one-hot,
+orphan, stoich and stoich+orphan on three splits against `0_baseline`'s 0.3745 /
+-0.212. **No result yet.** C's stage 1 is implemented (`run_option_c.py`) and not yet
+run; its cofactor table extends §17.3's ATP fix to GTP, CTP, UTP, CoA and SAM as
+turnover rather than drain, and `bound_violations` is the check that it worked.
 
 **First C experiment**: tighten the bound (cofactor recycling), then train one small
 model per binding precursor on `cap_p` and score leave-reaction-out and pure-unseen
