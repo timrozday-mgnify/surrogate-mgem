@@ -7798,6 +7798,113 @@ accuracy, with accuracy as a constraint ("within x% of FBA at y× the throughput
 | **M24** | Universe-indexed mask (15.4) | A frozen, hashed universe index; a label solve on the universe restricted to `z`; additions representable |
 | **M25** | V11, the cost-per-query comparison on `k > 1` and additions | Accuracy within a stated tolerance of FBA, at a stated throughput multiple |
 
+## 16. Targeting informative rows on the mask axis
+
+M19 attempt 3 left **42% no-ops**. Heads A and B had the same problem on the medium
+axis and five mechanisms were built to solve it; none of them has a mask analogue yet.
+This section transfers them, then adds the methods the medium axis had no use for.
+
+### 16.1 What the medium axis already does
+
+| # | Mechanism | Where | What it buys |
+| --- | --- | --- | --- |
+| 1 | **Active subspace** `A_i` — vary only the exchanges that matter, hold the rest rich | `sampling/active_subspace.py` | Dimensions that cannot move `mu` are never sampled |
+| 2 | **Demand probe** — bisect `log10(c/Km)` for the point where `mu_max` has recovered `target_frac` of that metabolite's **own** range, before any labels | §4.7, `demand_probe` | Self-anchoring design: ~350 LPs and ~2 s per organism against ~32 000 labelled solves. A metabolite that never limits is **omitted, not defaulted** |
+| 3 | **Per-metabolite bands and strata** — `frac_focus` 0.50 straddling each onset, `frac_below_km` 0.40, `frac_low_mu` 0.15 (deliberately slow media), `frac_bg_perturb` 0.10 (the community regime) | §4.3, `sample_media` | The single biggest lever on M3. Without it a shared band leaves medians spanning 5107x unsampled, and the design lands on the plateau — 76% of media above 75% of max `mu` |
+| 4 | **Top-up** — weights `1 - grad_cosine` with a 0.25 floor, from the **measured** held-out error, spent as the next round's focus budget | §4.6, `topup_weights` | Budget goes where the head is wrong, not where a guess says it might be |
+| 5 | **Ensemble gradient disagreement** | `surrogate/ensemble.py` | Covers the cells diagnostics *cannot* see: metabolites that never limited have no measured error and no `u*` |
+
+Two cross-cutting lessons, both paid for: **coverage is the predictor** (held-out cosine
+tracks a cell's training row count at Spearman 0.72), and **the ruler must not move** —
+top-up media leaked into validation and three rounds were read as a trend before the
+retraction. Head B adds a sixth: its residual is coverage of the media the composition
+actually visits, so those get labelled directly (`--media`, `make_traj_pool.py`), and
+NN distance to its own training media predicts its error at Spearman +0.673.
+
+### 16.2 The transfer
+
+| Medium axis | Mask axis |
+| --- | --- |
+| exchange | reaction |
+| concentration `c` | the present/absent bit |
+| "where does this metabolite start limiting" | **"on which media does this reaction matter"** |
+| limiting scale `s` per metabolite | **limiting medium per reaction** |
+| metabolite that never limits → omitted | reaction that is a no-op everywhere → outside `A^mask` |
+| focus stratum straddling the onset | the mask paired with the medium where **that** edit bites |
+| `frac_low_mu`, deliberately slow media | deficient media (built, §14/M19) |
+| top-up weights `1 - cos` | per-**reaction** error weights |
+| ensemble gradient disagreement | ensemble disagreement over **masks** |
+| validation = round-0 media only | validation = round-0 masks **and** leave-reaction-out |
+
+The single-edit screen already built (`screen_single_edits`) is the mask's **demand
+probe**: a cheap label-free LP sweep that anchors the design, with the class mix playing
+the role of `target_frac`. What is missing is everything in rows 3–5 — and the row that
+matters most, the per-reaction *limiting medium*.
+
+### 16.3 The reduced cost is a free informativeness oracle
+
+The strongest transfer, and it costs nothing. `mu`'s sensitivity to a reaction's own
+flux bound is its **reduced cost**, which is non-zero exactly when that bound binds. So
+for any medium already being solved, the LP's duals say **which reactions would have
+mattered if edited** — the mask's `A_i`, at that medium, for free.
+
+The pipeline already stores exchange shadow prices for precisely this reason on the
+medium axis (`solve` reads `fba.shadow_prices`). Storing `reduced_costs` for the
+candidate reactions turns **every existing row into an informativeness measurement**,
+and the design becomes: sample the mask for reaction `r` on the media where `r`'s
+reduced cost is non-zero. That is row 2 of the table, implemented with no new solves.
+
+Two cautions, both already learned on this codebase. The duals are **solver output and
+carry dust**: half the "non-zero" exchange duals were O(1e-14), so a tolerance is
+needed, not a `!= 0` test. And a reduced cost is a *local* derivative at the optimum,
+so it predicts `partial` rows well and says nothing about a reaction whose removal only
+bites in combination — which is what 16.4 is for.
+
+### 16.4 Methods the medium axis had no use for
+
+A concentration is continuous and one-dimensional per metabolite; a mask is discrete and
+combinatorial, so three families apply here that have no media analogue.
+
+| Method | What it gives | Cost |
+| --- | --- | --- |
+| **Minimal cut sets** (MCS) | The minimal lethal reaction sets, exactly. A mask one reaction short of a cut is a no-op and the cut itself is lethal, so **sampling at a cut's boundary is maximally informative by construction** — it is the decision surface. Enumerating small MCSs is a dual/duality problem (Ballerstein, von Kamp) and relates directly to the Meneco enumeration in `20hm-genome-collection`'s uncertainty plan §5 | MILP/dual enumeration; small `k` only |
+| **Flux coupling analysis** (FCA, F2C2) | Which reactions are coupled, hence which `k`-subsets *interact*. Random `k`-subsets drawn across the network are independent, which is exactly why they come out no-op: coupling is the prior that says which pairs are worth drawing | LP-based, cheap |
+| **Covering arrays** | A guarantee that every pair (or triple) of candidates appears at least once, in far fewer rows than exhaustive: pairwise coverage of 60 candidates needs a few hundred rows, not `C(60,2)` = 1770 | Combinatorial construction, no solves |
+
+And three that are generic but fit the problem:
+
+- **Query by committee / BALD.** Train an ensemble, draw masks where members disagree.
+  The repo already has `gradient_disagreement`; the mask version is the same code on a
+  different input. Worth noting that this is **the same objective as the experiment
+  ranking** in `20hm-genome-collection`'s `gem/uncertainty-aware-reconstruction.md` §7 —
+  one implementation serves both, which is an argument for building it properly.
+- **Hard-negative mining.** Keep the no-op rows the head *predicts* as effects, discard
+  the ones it already gets right. This is the mask version of `inverse_density_weights`:
+  the no-op class is 42% of rows and defines the baseline, so **weight it, do not filter
+  it** — deleting the majority class is how a model learns that every edit matters.
+- **Curriculum on `k`.** Fit `k=1`, then let the head's own errors at `k` choose the
+  `k+1` rows. Cheap, and it gives the `k > 1` budget somewhere to point.
+
+### 16.5 Order, and the gate
+
+1. **Store internal reduced costs** for the candidate set (16.3). No new solves, and it
+   makes every row say which edits would have mattered. Do this first.
+2. **Per-reaction limiting-medium anchor**: pair each candidate with media where its
+   reduced cost is non-zero, as `frac_focus` does for metabolites. This is the direct
+   attack on the 42%.
+3. **FCA for the `k > 1` draws** (16.4): draw multi-edit masks from coupled sets rather
+   than uniformly.
+4. **Mask top-up** from measured per-reaction error, with the floor — and **validation
+   masks frozen to round 0**, or this repeats the retracted top-up experiment on a
+   moving ruler.
+5. MCS and covering arrays only if 1–4 leave the no-op share high.
+
+**V12.** The share of rows that are `partial`, `helpful` or multi-edit `lethal` exceeds
+**70%** on two organisms, with the no-op share **weighted rather than filtered**, and
+the per-reaction coverage table reported the way §4.6 reports per-metabolite coverage.
+Until the coverage table exists, "informative share" is a single number hiding the same
+~1137:9:1 skew the medium axis had.
+
 ## Appendix — repository layout
 
 ```
