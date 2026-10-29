@@ -126,6 +126,26 @@ def build_parser() -> argparse.ArgumentParser:
         "and a pH controller. Any finite c^eq puts their secretion bound at zero, "
         "which is an infeasible model rather than inhibition.",
     )
+    gen.add_argument(
+        "--mask-candidates",
+        type=Path,
+        help="JSON {genome_id: [reaction_id, ...]} — §14/M19 reaction-presence "
+        "labels. Each medium is paired with one thin-shell mask over that organism's "
+        "candidates (not the media x masks product), and the row records which "
+        "reactions were knocked out. Candidates are required rather than defaulted "
+        "to every reaction: a uniform mask draw either hits a redundant reaction (mu "
+        "unchanged) or an essential one (mu = 0) and teaches the head nothing (P18). "
+        "This makes a *different label root* — two extra columns, recorded in "
+        "<genome>.masks.json beside the shards.",
+    )
+    gen.add_argument(
+        "--mask-k-max",
+        type=int,
+        default=5,
+        help="Largest number of reactions removed in one mask (default 5). k > 1 is "
+        "what carries the pathway-AND structure single knockouts cannot show: a route "
+        "needs two steps and neither alone moves mu.",
+    )
     gen.add_argument("--seed", type=int, default=0)
 
     tu = sub.add_parser(
@@ -1466,6 +1486,7 @@ def main(argv: list[str] | None = None) -> int:
             ceq = ceq_map(
                 json.loads(args.inhibition.read_text()), ex_all, keep_mask(ex_all, buffered)
             )
+        mask_cands = json.loads(args.mask_candidates.read_text()) if args.mask_candidates else None
         shards = generate_roster(
             roster,
             args.index,
@@ -1476,6 +1497,8 @@ def main(argv: list[str] | None = None) -> int:
             round_idx=args.round_idx,
             media=media,
             ceq=ceq,
+            mask_candidates=mask_cands,
+            mask_k_max=args.mask_k_max,
         )
         print(
             json.dumps(

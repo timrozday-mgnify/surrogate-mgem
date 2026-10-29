@@ -245,6 +245,30 @@ def mu_optimize(model, what: str = "") -> float:
         return 0.0
 
 
+def mu_unmasked(
+    model,
+    concentrations: dict[str, float],
+    km_cfg: dict | None = None,
+    ceq: dict[str, float] | None = None,
+) -> float:
+    """``mu_max`` on this medium with **no** knockouts — the paired control for a
+    §14 mask row.
+
+    Without it a mask label is uninterpretable: with one mask per medium there is no
+    unedited solve on the *same* medium, so "this edit did nothing" cannot be told
+    from "this medium is poor". It is also what makes P20 measurable per row — the
+    one-sided error that matters is over-predicting growth for a knocked-out
+    network, which needs the true ``delta mu``, not the absolute level.
+
+    Plain FBA only: no elastic-net QP, because the control needs ``mu`` and nothing
+    else. So the pairing costs an LP a row, not a QP.
+    """
+    km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
+    with model:
+        apply_mm_bounds(model, concentrations, km_cfg, ceq)
+        return float(mu_optimize(model, "unmasked control"))
+
+
 def solve(
     model,
     concentrations: dict[str, float],

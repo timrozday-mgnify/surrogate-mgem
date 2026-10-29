@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +36,12 @@ _ROUND_STRIDE = 1_000_000
 # §13.11 stage 4': the label root records the `c^eq` it was solved with.
 _INHIBITION_FILE = "inhibition.json"
 
+# §14/M19: the mask label root records its own frozen reaction index, hashed for the
+# same reason the metabolite index is (P13) — a silent reorder would fuse two
+# incompatible designs, and a mask is only meaningful against the index it was drawn
+# over.
+_MASKS_FILE = "masks.json"
+
 LOGGER = logging.getLogger("cfs.generate")
 
 
@@ -45,9 +52,28 @@ class OrganismShards:
     paths: list[Path]
 
 
-def _row(genome_id, index_hash, medium_id, medium, sol, ex_order):
-    """One solve -> one flat row; vectors aligned to ``ex_order`` (this organism's M_i)."""
-    return {
+def _row(
+    genome_id,
+    index_hash,
+    medium_id,
+    medium,
+    sol,
+    ex_order,
+    mask_id=None,
+    knockouts=None,
+    mu_base=None,
+):
+    """One solve -> one flat row; vectors aligned to ``ex_order`` (this organism's M_i).
+
+    ``mask_id``/``knockouts`` are present only in a §14 mask run, which is therefore
+    a *different label root* with a wider schema — the same rule as ``--inhibition``.
+    The knocked-out ids are stored rather than the dense ``z`` bit vector: ``k <= 5``
+    strings beat ~2000 floats a row, and the dense mask is rebuilt at load time from
+    the hashed index in ``masks.json``. ``mu_base`` is the unmasked control on the
+    *same* medium (:func:`cfs.groundtruth.solve.mu_unmasked`) — without it a mask row
+    cannot distinguish "this edit did nothing" from "this medium is poor".
+    """
+    row = {
         "genome_id": genome_id,
         "index_hash": index_hash,
         "medium_id": medium_id,
@@ -59,6 +85,11 @@ def _row(genome_id, index_hash, medium_id, medium, sol, ex_order):
         "z": [float(sol.z.get(ex, 0.0)) for ex in ex_order],
         "shadow": [float(sol.shadow_prices.get(ex, 0.0)) for ex in ex_order],
     }
+    if mask_id is not None:
+        row["mask_id"] = int(mask_id)
+        row["knockouts"] = list(knockouts or [])
+        row["mu_unmasked"] = float("nan") if mu_base is None else float(mu_base)
+    return row
 
 
 def generate_organism(
@@ -75,6 +106,8 @@ def generate_organism(
     round_idx: int = 0,
     media: list[dict] | None = None,
     ceq: dict[str, float] | None = None,
+    mask_candidates: Sequence[str] | None = None,
+    mask_k_max: int = 5,
 ) -> OrganismShards:
     """Generate all label shards for one organism (plan §4.5).
 
@@ -101,6 +134,16 @@ def generate_organism(
     :func:`cfs.surrogate.data.load_ceq` reads it back. ``None`` is plain FBA, bit
     for bit.
 
+    ``mask_candidates`` turns on §14's reaction-presence labels (M19): each medium is
+    paired with one **thin-shell** mask drawn over those candidate reactions, and the
+    row records which reactions were knocked out. The pairing is 1:1 and cycling, not
+    the ``media x masks`` product — the product is the combinatorial object the
+    surrogate exists to avoid, and spending the budget on it here would buy one
+    organism's corner of it. Like ``ceq``, this makes a **different label root** (two
+    extra columns), recorded in ``masks.json`` beside the shards. P18: a uniform draw
+    over every reaction is nearly information-free, which is why candidates are
+    required rather than defaulted to the whole index.
+
     ``media`` bypasses the whole design: label exactly these media instead of
     sampling them. That is how the media §8.1 actually visits get labelled — the
     dFBA states are a point set no design produces, and Head B's residual is
@@ -108,7 +151,7 @@ def generate_organism(
     (nothing here chose the media, so there is no band to record, and the base
     run's sidecars must not be overwritten by a round).
     """
-    from cfs.groundtruth.solve import load_km_defaults, solve
+    from cfs.groundtruth.solve import load_km_defaults, mu_unmasked, solve
 
     cfg = cfg if cfg is not None else SamplingConfig()
     km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
@@ -157,6 +200,38 @@ def generate_organism(
         bands = {ex: {"scale": scales[ex], "source": sources[ex]} for ex in sampled}
         write_subspaces([subspace], outdir / f"{genome_id}.subspace.json", {genome_id: bands})
 
+    # §14/M19. Built per medium so the stratified eps subset carries the *same*
+    # (medium, mask) pair: scoring one eps against another otherwise compares two
+    # different networks and reads as a smoothing effect.
+    knock: list[list[str]] | None = None
+    if mask_candidates is not None:
+        from cfs.sampling.masks import (
+            index_hash as mask_index_hash,
+        )
+        from cfs.sampling.masks import (
+            mask_to_knockouts,
+            maskable_reactions,
+            sample_knockout_masks,
+        )
+
+        rxn_ids = maskable_reactions(model)
+        masks = sample_knockout_masks(
+            rxn_ids, mask_candidates, len(media), seed=cfg.seed, k_max=mask_k_max
+        )
+        knock = [mask_to_knockouts(rxn_ids, row) for row in masks]
+        (outdir / f"{genome_id}.{_MASKS_FILE}").write_text(
+            json.dumps(
+                {
+                    "mask_index_hash": mask_index_hash(rxn_ids),
+                    "n_reactions": len(rxn_ids),
+                    "candidates": list(mask_candidates),
+                    "k_max": mask_k_max,
+                    "reactions": rxn_ids,
+                },
+                indent=2,
+            )
+        )
+
     primary = cfg.eps_levels[cfg.eps_primary_idx]
     step = max(1, round(1.0 / cfg.subset_frac))
     subset = media[::step]  # deterministic stratified subset for the non-primary eps
@@ -166,14 +241,28 @@ def generate_organism(
     paths = []
     for eps in cfg.eps_levels:
         media_e = media if eps == primary else subset
+        knock_e = None if knock is None else (knock if eps == primary else knock[::step])
         rows = [
             _row(
                 genome_id,
                 index_hash,
                 mid0 + mid,
                 medium,
-                solve(model, medium, alpha, eps, km_cfg, ceq),
+                solve(
+                    model,
+                    medium,
+                    alpha,
+                    eps,
+                    km_cfg,
+                    ceq,
+                    None if knock_e is None else knock_e[mid],
+                ),
                 ex_order,
+                mask_id=None if knock_e is None else mid,
+                knockouts=None if knock_e is None else knock_e[mid],
+                mu_base=(
+                    None if knock_e is None else mu_unmasked(model, medium, km_cfg, ceq)
+                ),
             )
             for mid, medium in enumerate(media_e)
             for alpha in cfg.alphas
@@ -196,6 +285,8 @@ def generate_roster(
     round_idx: int = 0,
     media: list[dict] | None = None,
     ceq: dict[str, float] | None = None,
+    mask_candidates: dict[str, Sequence[str]] | None = None,
+    mask_k_max: int = 5,
 ) -> list[OrganismShards]:
     """Run :func:`generate_organism` for every roster model (serial; see module doc).
 
@@ -242,6 +333,10 @@ def generate_roster(
                 round_idx=round_idx,
                 media=media,
                 ceq=ceq,
+                mask_candidates=(
+                    None if mask_candidates is None else mask_candidates.get(gm.genome_id)
+                ),
+                mask_k_max=mask_k_max,
             )
         )
     if ceq is not None:

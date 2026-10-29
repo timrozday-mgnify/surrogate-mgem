@@ -222,3 +222,22 @@ def test_mask_to_knockouts_round_trips():
     mask = np.ones(R, dtype=np.float32)
     mask[[2, 5]] = 0.0
     assert mask_to_knockouts(ids, mask) == ["R2", "R5"]
+
+
+def test_mu_unmasked_is_the_paired_control():
+    """A mask row needs the unedited solve on the *same* medium (§14, M19).
+
+    With one mask per medium there is no unedited row for that medium, so without
+    this column "the edit did nothing" cannot be told from "the medium is poor".
+    """
+    pytest.importorskip("cobra")
+    from cfs.groundtruth.solve import mu_unmasked, solve
+
+    m = _toy_model()
+    conc = {"EX_a_e": 1e3}
+    base = solve(m, conc, alpha=1.0, eps=1e-3).mu_max
+    assert mu_unmasked(m, conc) == pytest.approx(base, rel=1e-6)
+    # It is the control, so it must NOT see the knockouts the masked solve gets.
+    killed = solve(m, conc, alpha=1.0, eps=1e-3, knockouts=["T", "T2"]).mu_max
+    assert killed == pytest.approx(0.0, abs=1e-9)
+    assert mu_unmasked(m, conc) > killed
