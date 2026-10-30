@@ -8456,3 +8456,70 @@ role, and the guide role turns out not to need one for single organisms. Where l
 could still earn its place is amortisation — across the 20 genomes, community contexts,
 and very large candidate sets — and that is a question for after V13 measures the exact
 pipeline's real cost.
+
+### 17.13 V13, first run: the exact-structure proposal, measured end to end (2026-10-30)
+
+`v13_sampler.py`, `v13.json`. Posterior over 24 pool reactions given one phenotype,
+independent prior (`pi` = 0.9 for draft reactions, 0.05 otherwise — benchmark
+assumptions standing in for the calibrated evidence prior), noise `eps` = 0.01.
+**Exact marginals** come from the minimal completions (FBA is monotone in the reaction
+set, so growth is upward-closed) by inclusion-exclusion; the completion sets agreed with
+direct LPs on 300 random states in **all 12 tasks, 0 mismatches**.
+
+Tasks, 3 each, planted on media where the unedited model grows: **growth** observed with
+the draft lacking k = 1 or 2 essential reactions (completion, bottom-up hard), and **no
+growth** observed with the draft wrongly containing a cut set of size 1 (an essential
+reaction) or 2 (a synthetic-lethal pair, either deletion alone a no-op) — the
+direction that is hard when starting from the universe. Each started from the draft and
+from the full pool (the universe-like top). Arms: uniform single flips; `r1`, locally
+balanced weights (Zanella 2020) from exact structure at the current state, with a 0.2
+uniform floor; `reach`, r1 plus one network expansion per candidate (option C's gate —
+with a binary likelihood C's learned magnitudes cannot move the acceptance ratio, so the
+C arm reduces to this). 3 seeds; 216 chains; one LP = one FBA or pFBA of a new state.
+
+**Correctness.** All arms converge on the exact marginals: mean absolute error at 2000
+LPs 0.011 (r1), 0.012 (reach), 0.023 (uniform).
+
+| mean marginal error at 1000 LPs | uniform | r1 | reach |
+| --- | --- | --- | --- |
+| growth, k=1, draft / full | 0.030 / 0.031 | 0.021 / 0.025 | 0.021 / 0.026 |
+| growth, k=2, draft / full | 0.031 / 0.034 | 0.018 / 0.018 | 0.021 / 0.021 |
+| no growth, k=1, draft / full | 0.029 / 0.030 | 0.014 / 0.017 | 0.012 / 0.012 |
+| no growth, k=2, draft / full | 0.034 / 0.036 | 0.019 / 0.020 | 0.017 / 0.019 |
+
+| LPs to the first state matching the observation (median) | uniform | r1 | reach |
+| --- | --- | --- | --- |
+| growth k=2 from draft (multi-edit completion) | 235 | **33** | 70 |
+| growth k=1 from draft | 14 | 4 | 4 |
+| no growth k=2 from full (cut set from the top) | 23 | 23 | 19 |
+| no growth k=1 from full | 25 | 31 | 31 |
+
+| cost | uniform | r1 | reach |
+| --- | --- | --- | --- |
+| ms per LP, guide included | **3.0** | 17.4 | 35.5 |
+
+1. **Per LP the guide is worth about 2x in effective samples** (error falls as
+   1/sqrt(n), and r1's error at 1000 LPs is ~0.6-0.7x uniform's), and **7x in reaching a
+   first valid completion bottom-up**.
+2. **Per second, uniform wins at this pool size.** A GLPK solve costs 3 ms; the guide
+   (a pFBA plus Python over the candidates) costs ~15 ms more per state, which exceeds the
+   LPs it saves on 24 candidates.
+3. **Cut sets from the top get no help.** Starting from the full pool with no-growth
+   evidence, no arm reaches a consistent state faster than uniform. This is the
+   universe-start direction: deleting one of two parallel routes changes nothing, so
+   every exact first-order signal is zero, and the reach flag fires only when a *single*
+   deletion disconnects a precursor. It is the mirror of the two-short completion problem
+   and needs its own move: proposing a **minimal cut set** as one move (computable by
+   MCS enumeration, Klamt's duality with completions).
+4. **The reach arm buys nothing over r1** per LP and doubles the cost. Drop it.
+
+**What would change the wall-clock verdict** — both untested, both cheap:
+
+- **Drop the pFBA.** The no-op theorem needs *some* optimal solution with zero flux, not
+  the parsimonious one; the FBA solution already computed for the likelihood qualifies.
+  That removes r1's second LP per state (pFBA only finds more zero-flux reactions).
+- **Pool size.** Uniform's hit rate falls as 1/n while r1's per-state overhead is mostly
+  fixed, so the guide should win at universe scale (hundreds to thousands of candidates),
+  not at 24. This is the question V13 has to answer next.
+
+**Next:** r1 without pFBA; pools of 100 and 400; a cut-set move for no-growth evidence.
