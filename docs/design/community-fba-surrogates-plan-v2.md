@@ -8564,3 +8564,73 @@ candidates and favour the guide above that. Unmeasured until V13 is rerun on it.
 a step). A compiled loop only pays if that dominates, and it would need the LP inside it
 (the `highs` crate), so it is a later step, decided by a profile.
 
+### 17.15 V13 rerun: HiGHS + sparse guide, pools of 24 / 100 / 400 (2026-10-30)
+
+`v13b_sampler.py`, `v13b.json`. Changes from §17.13: one HiGHS LP per task (warm-started
+bound changes); r1 reads fluxes and reduced costs from the same solve, so one LP per
+state, no pFBA; scipy-sparse reachability, batched for `reach`; the objective, ATPM,
+demands and sinks excluded from pools (§17.13's pools contained `Growth`); gap cores
+planned once with **nested pools 24 ⊂ 100 ⊂ 400** that grow by universe candidates only
+(6 draft reactions in every pool). 2 cores per task type, 24 tasks, 3 seeds, 432 chains
+planned.
+
+**Exact side.** Enumerating minimal completions fails once completions are large (they
+exceeded k+3 even at n=24 when draft reactions came in redundant pairs). Replaced by a
+**decision tree over the growth oracle**: monotonicity makes a node a leaf when its
+all-undecided-on state fails or its all-undecided-off state grows, so P(grows) and every
+marginal come from one pass with no completion sets. It matched enumeration to ~1e-15
+where both ran, and showed that a 300-probe check had passed an enumeration that missed a
+completion (8e-4 off). Subtrees under prior mass delta are dropped with their mass
+tracked, giving a **certified bound** on every marginal. Certified to <= 1e-2: **8/8
+tasks at n=24, 8/8 at n=100, 2/8 at n=400** (both growth k=1); the other six are
+excluded and reported, not approximated. Chain errors are scored only where they exceed
+3x the task's bound. FVA-blocked pool reactions (most of a large pool) have posterior
+equal to prior exactly.
+
+| time to marginal error <= 0.03 over unblocked reactions (median s; share of chains that got there within 20k LPs) | uniform | **r1** | reach |
+| --- | --- | --- | --- |
+| n = 24 | 3.4 s | **1.1 s** | 4.4 s |
+| n = 100 | 15.6 s (88%) | **5.3 s** | 66.6 s |
+| n = 400 (2 tasks) | never (0%) | **8.6 s (92%)** | 359 s |
+
+| LPs to the same | uniform | r1 | reach |
+| --- | --- | --- | --- |
+| n = 24 / 100 / 400 | 2000 / 10000 / >20000 | **500 / 5000 / 10000** | 500 / 5000 / 15000 |
+
+At error <= 0.015 (tasks certified to 0.005): n = 100, r1 reaches it in 83% of chains
+(6.4 s), uniform in 8%.
+
+| LPs to the first state matching the observation (median) | uniform | r1 |
+| --- | --- | --- |
+| growth k=2 from draft (multi-edit completion), n = 24 / 100 | 222 / 887 | **25 / 399** |
+| no growth k=1 from full (cut set from the top), n = 24 / 100 | 51 / 481 | **22 / 129** |
+| no growth k=2 from full (synthetic-lethal pair), n = 24 / 100 | 42 / 165 | **16 / 83** |
+
+| ms per LP, guide included | uniform | r1 | reach |
+| --- | --- | --- | --- |
+| n = 24 / 100 / 400 | 1.8 / 1.0 / 0.8 | 2.5 / 1.2 / 0.9 | 9 / 23 / 23 |
+
+1. **With the overhead removed, r1 wins on wall-clock as well as LPs**: 3x faster to a
+   given accuracy at n = 24 and 100, and at n = 400 it converges where uniform does not
+   within budget. Its cost per LP is now 1.1-1.4x uniform's (from ~6x in §17.13).
+2. **The advantage grows with pool size**, as predicted: uniform's chance of proposing a
+   relevant flip falls as 1/n while r1 puts its mass on the flips that matter.
+3. **§17.13's "cut sets from the top get no help" was an artefact** of `Growth` being in
+   the pool: deleting the objective was a size-1 cut set equally available to uniform.
+   With it excluded, r1 reaches a consistent state 2-4x sooner top-down too — the
+   zero-flux rule prunes no-op deletions, so proposals concentrate on reactions that
+   carry flux. A dedicated cut-set move is still the open improvement there.
+4. **The reach arm (option C's gate) matches r1 per LP and costs 10-30x more** per LP.
+   It is dropped; with binary phenotype data the learned surrogate has no role in this
+   proposal.
+
+**Limits.** One organism; n = 400 rests on 2 tasks of one type, because the exact
+reference — not the sampler — is what stops scaling: certified trees take 10^5 LPs at
+30-40 relevant reactions. Beyond that the reference has to be long r1 chains validated
+against the certified tasks. Priors are fixed benchmark values, not the calibrated
+evidence prior.
+
+**Next**: a cut-set move for no-growth evidence (MCS duality); r1 as the proposal in the
+uncertainty-aware reconstruction sampler; a reference-chain protocol for pools beyond
+~40 relevant reactions.
+
