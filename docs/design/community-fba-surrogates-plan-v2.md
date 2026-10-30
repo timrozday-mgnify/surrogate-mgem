@@ -8369,3 +8369,90 @@ pair/triple additions from states one or two reactions short of a completion. C'
 capacities are per-precursor reachability-and-yield, which is the right kind of
 information for "which set of additions reconnects a starved precursor", but that is
 untested; this result says it does not help for single flips.
+
+### 17.11 Gap-filling neighbourhoods: what finds the rescue (2026-10-30)
+
+Planted gaps (`additions_neighbourhood.py`, `additions.json`), on media where the unedited
+model grows. **One short**: one essential base reaction removed; ~190 single-addition
+candidates per state (the removed reaction, universe reactions touching its non-currency
+metabolites, 150 shared random universe distractors). **Two short**: two essential
+reactions removed, so no single addition can rescue; all pairs from the two plus 20 near
+universe reactions around each (~530 pairs per state). 24 + 16 states, 13 092 candidates,
+every one solved exactly; every state is lethal (`mu = 0`). "Universe only" drops
+candidates containing a removed base reaction, leaving true alternative routes. Metric:
+the rank of the first rescue in score order — the LPs a sampler spends testing candidates
+in that order — against the random expectation.
+
+| first-rescue speedup vs random | one short | one short, universe only (15 states) | two short | two short, universe only (5 states) |
+| --- | --- | --- | --- | --- |
+| oracle | 60x | 64x | 90x | 52x |
+| one-LP (reduced cost at the lethal state) | 14.9x | 14.3x | **0.8x** | **0.7x** |
+| reachability (precursors reachable, exact) | 4.2x | 8.5x | 14.6x | 8.4x |
+| C, paired, with computed gate | 5.6x | 6.2x | **17.9x** | 15.4x |
+| rank mean reach + one-LP | **45x** | 53x | 3.2x | 2.0x |
+| rank mean reach + C | 5.7x | 24x | 13.7x | **26x** |
+| lexicographic reach, then one-LP | 39x | 44x | 4.7x | 2.4x |
+
+Within-state AUROC for "rescues" tells the same story (one-LP 0.98 / 0.61 one/two short;
+reach 0.92 / 0.89; C 0.92 / 0.89).
+
+1. **One reaction short, first-order sensitivity works.** Reduced cost at the lethal
+   state ranks the rescue near the top, and reachability fixes its tail: reach + one-LP
+   finds a rescue in ~1.3 LPs on average against ~60 in random order. No learning needed.
+2. **Two reactions short, first-order sensitivity is useless** — worse than random — as it
+   must be: no single addition changes the optimum, so reduced costs carry no information
+   about pairs. Every score that helps here is **structural**: reachability (exact,
+   unlearned) gets 8-15x and C 15-18x.
+3. **C's discrimination is mostly its gate.** Its AUROC equals reachability's to three
+   decimals in several subsets; the learned capacities add a modest margin in the
+   two-short case (17.9x vs 14.6x), on 16 states (5 universe-only), within the noise of
+   this sample.
+4. **No fixed combination wins both regimes.** Each score that helps one hurts the other.
+   The regime is visible at the state, though: if any candidate has a non-zero reduced
+   cost, first order applies; if all are zero, the gap is multi-edit.
+
+Limits: one organism; gaps planted by deleting essential reactions are easier than real
+annotation gaps (the deleted reaction is itself a candidate, and universe-only rescues
+exist in only 15 and 5 states); pairs only, not triples.
+
+Engineering notes: network expansion was rewritten as counter-based (linear) —
+identical output, 6.6 s -> 12 ms per call on the 2145-reaction model, which makes it
+cheaper than the LP it filters. The labeller now sets a state's bounds once and toggles
+only the candidate's reactions.
+
+### 17.12 Rethink: what §14-§17 say about the guide
+
+The goal set in §14 was a differentiable surrogate of `mu(medium, mask)` serving as the
+proposal of a sampler over reaction presence, with exact LPs verifying every step.
+Measured against that role:
+
+- **A learned predictor of `mu` is not where the proposal's power comes from.** For
+  removals the state's pFBA is exact by a theorem (§17.10); for single-addition gaps
+  reduced costs plus reachability reach 45-53x of a possible 60-64x (§17.11); for
+  multi-edit gaps the strongest signal is exact network expansion, with learned
+  capacities adding a margin that is not yet distinguishable from noise.
+- **What does the work is exact, cheap structure**: one LP of the current state (16 ms)
+  and network expansion (12 ms). Both are unlearned, need no training labels, and
+  transfer to any organism and any universe reaction by construction — exactly what the
+  learned models struggled with (§17.1, §17.5).
+- **This converges on the uncertainty-aware reconstruction doc's own plan** (its §5):
+  topological completion (Meneco-style answer-set enumeration of reachability-restoring
+  addition sets) generates candidates, and LPs verify and weight them. §17.11 is a
+  measurement that the topological half is the right proposal for multi-edit gaps.
+
+**Options from here:**
+
+| | Option | Basis | Cost |
+| --- | --- | --- | --- |
+| **R1** | **Exact-structure proposal, no learning**: removals by state pFBA (zero flux = no-op), additions by reduced cost when any is non-zero, else by reachability gain; uniform floor. Build the V13 sampler (§17.8) around it now | Every component measured here; 15-45x on planted gaps | Small: all parts exist |
+| **R2** | **Topological enumeration for multi-edit gaps**: Meneco (ASP) or an in-house set-cover over network expansion, to propose whole addition *sets* rather than pairs | Pairs already need 530 candidates per state; triples are 10^4-10^5, so enumeration has to be targeted | Medium; Meneco is an existing tool |
+| **R3** | **Keep C as a yield ranker** among topologically valid completions | Adds 15.4x vs 8.4x on universe-only pairs, 5 states | Small, but evidence thin; re-test inside V13 |
+| **R4** | **Learn the proposal from the sampler's own experience** (adaptive proposals, or a GFlowNet over addition sequences, rewarded by exact LPs) | Trains on the distribution the chain visits (§17.8's distribution-shift point) instead of random masks | Large; only once V13 exists and shows where exact structure falls short |
+| **D** | Graph network | Its main promise — seeing alternative routes — is now delivered exactly by reachability + LP | Deprioritised |
+
+**Recommendation: R1 then R2, with R3 re-tested inside V13.** The surrogate-of-`mu` thread
+(§14 M20/M21) should be re-scoped rather than pushed: its gates assumed the predictor
+role, and the guide role turns out not to need one for single organisms. Where learning
+could still earn its place is amortisation — across the 20 genomes, community contexts,
+and very large candidate sets — and that is a question for after V13 measures the exact
+pipeline's real cost.
