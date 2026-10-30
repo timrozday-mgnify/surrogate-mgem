@@ -8319,3 +8319,53 @@ the metric):
 *all* single-edit neighbours labelled by `screen_single_edits` — so within-state ranking,
 the quantity a sampler actually uses, can be measured. Also open: the gate's missing 22%
 (lethal for stoichiometric, not reachability, reasons).
+
+### 17.10 Within-state ranking: the one-LP baseline wins, and §17.9's guide result was between-state (2026-10-30)
+
+The neighbourhood set (`neighbourhood.py`, `neighbourhood.json`): 50 states from the
+anchored roots (40 edited, 10 unedited controls), each with all 83 single-candidate
+flips solved exactly — 4150 neighbours; 12.7% lethal, 17.5% no-op, 45.8% partial, 24.0%
+helpful. C is paired (§17.9), trained on the leave-reaction-out train rows. The one-LP
+score is one pFBA *of the current state* (what a sampler has already solved to accept
+it). Every metric is computed within a state and averaged over states.
+
+**A metric check that mattered.** Pooled "helpful" AUROC read 0.99 for the one-LP score,
+but the trivial score "is this an addition" reads **0.98**: helpful can only be an
+addition, and 86.5% of live additions are helpful. So that number mostly measured
+add-vs-remove. Scored by direction instead:
+
+| within-state AUROC | removals: effect vs no-op | additions: helpful vs not | additions, held-out reactions (5 states) |
+| --- | --- | --- | --- |
+| oracle | 1.0 | 1.0 | 1.0 |
+| **one-LP (state pFBA / reduced cost)** | **0.924** | 0.632 | 1.0 |
+| C, paired | 0.566 | 0.538 | 0.6 |
+| rank mean of both | 0.885 | 0.616 | 0.8 |
+
+1. **For removals the one-LP score is close to exact, and part of it is a theorem**: if
+   some optimal solution carries zero flux through a reaction, removing it cannot lower
+   the optimum. Zero pFBA flux was a no-op in 368 of 368 cases. C adds nothing here and
+   the combination is worse than the one-LP score alone.
+2. **Additions are the open problem, and they are the gap-filling case.** Nothing ranks
+   them well: reduced cost 0.63 (degenerate LPs make reduced costs non-unique), C 0.54.
+   The held-out column has 5 states and cannot carry a conclusion.
+3. **C's §17.9 guide numbers were between-state.** Pooled across states, paired C ranked
+   effects at 0.66-0.73 and beat the one-LP score. Within a state it is at 0.54-0.57.
+   It had learned which *media and masks* are sensitive, not which *move* from a given
+   state matters. This is exactly the failure §17.8 item 4 warned of.
+
+**What this means for the guide.** For single-edit moves over 83 candidates a learned
+guide does not earn its place: the state's own LP ranks removals almost exactly, and
+solving every addition exactly costs ~83 x 3.5 ms = 0.3 s per state. A learned guide is
+needed only where exhaustive exact screening is too expensive:
+
+- **large candidate sets** — the full CarveMe universe is thousands of reactions, not 83;
+- **multi-edit moves** — bridging a gap that needs several additions at once, where no
+  single addition helps and first-order sensitivity is zero by construction (§5 of the
+  uncertainty-aware reconstruction doc).
+
+Both are the additions side, where the one-LP score is weakest. So the next evaluation
+should be built around them: neighbourhoods over a much larger universe sample, and
+pair/triple additions from states one or two reactions short of a completion. C's
+capacities are per-precursor reachability-and-yield, which is the right kind of
+information for "which set of additions reconnects a starved precursor", but that is
+untested; this result says it does not help for single flips.
