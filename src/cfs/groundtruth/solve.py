@@ -23,6 +23,7 @@ Imports are function-local so the module loads without the solver stack.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,6 +50,9 @@ class Solution:
     shadow_prices: dict[str, float]  # exchange_id -> dmu_max/d(lower bound)
     status: str  # "optimal" or a solver status string
     fluxes: np.ndarray = field(repr=False, default=None)  # full flux vector (model.reactions order)
+    # §16.3: reaction_id -> reduced cost, for the §14 candidate set only. A binding
+    # indicator, not a calibrated derivative -- see `solve`.
+    reduced_costs: dict[str, float] = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #
@@ -244,6 +248,38 @@ def mu_optimize(model, what: str = "") -> float:
         return 0.0
 
 
+def mu_unmasked(
+    model,
+    concentrations: dict[str, float],
+    km_cfg: dict | None = None,
+    ceq: dict[str, float] | None = None,
+    off: Sequence[str] | None = None,
+) -> float:
+    """``mu_max`` on this medium for the **base** network — the paired control for a
+    §14 mask row.
+
+    ``off`` is forced to zero flux: on a model extended with an addition pool
+    (:func:`cfs.sampling.masks.extend_with_additions`) the base network is the one
+    with every addition off, so without it each edit would be compared against a
+    network that already has every candidate addition in it.
+
+    Without it a mask label is uninterpretable: with one mask per medium there is no
+    unedited solve on the *same* medium, so "this edit did nothing" cannot be told
+    from "this medium is poor". It is also what makes P20 measurable per row — the
+    one-sided error that matters is over-predicting growth for a knocked-out
+    network, which needs the true ``delta mu``, not the absolute level.
+
+    Plain FBA only: no elastic-net QP, because the control needs ``mu`` and nothing
+    else. So the pairing costs an LP a row, not a QP.
+    """
+    km_cfg = km_cfg if km_cfg is not None else load_km_defaults()
+    with model:
+        apply_mm_bounds(model, concentrations, km_cfg, ceq)
+        for r_id in off or ():
+            model.reactions.get_by_id(r_id).bounds = (0.0, 0.0)
+        return float(mu_optimize(model, "unmasked control"))
+
+
 def solve(
     model,
     concentrations: dict[str, float],
@@ -251,12 +287,22 @@ def solve(
     eps: float,
     km_cfg: dict | None = None,
     ceq: dict[str, float] | None = None,
+    knockouts: Sequence[str] | None = None,
+    reduced_cost_for: Sequence[str] | None = None,
 ) -> Solution:
     """Ground-truth solve for one (medium, alpha, eps) (plan §3.2).
 
     Returns :class:`Solution` with ``mu_max``, exchange fluxes ``z`` (this
     organism's own exchanges only), and exchange shadow prices. The model is not
     mutated (bounds are applied inside a context).
+
+    ``knockouts`` are internal reaction ids forced to zero flux — the label side of
+    §14's mask-conditioned head. Deleting a column can only shrink the feasible set,
+    so ``mu_max`` is monotone non-increasing in the knockout set; that is the
+    invariant :func:`cfs.surrogate.masked.mask_monotonicity_violation_rate` holds the
+    head to. An id that is not in the model raises: a silently-ignored knockout is
+    indistinguishable from an edit that did nothing, which is the one failure this
+    label set cannot afford.
     """
     from cobra.exceptions import OptimizationError
 
@@ -271,6 +317,8 @@ def solve(
     model.solver.configuration.timeout = int(_QP_TIME_LIMIT)
     with model:
         apply_mm_bounds(model, concentrations, km_cfg, ceq)
+        for r_id in knockouts or ():
+            model.reactions.get_by_id(r_id).bounds = (0.0, 0.0)
 
         try:
             fba = model.optimize()
@@ -286,6 +334,24 @@ def solve(
         shadow = {
             ex.id: float(fba.shadow_prices[next(iter(ex.metabolites)).id]) for ex in model.exchanges
         }
+        # §16.3: a reaction's reduced cost is non-zero exactly when its own flux bound
+        # binds, so this is free information about which edits would have mattered on
+        # this medium. It is read as a *binding indicator*, never as a calibrated
+        # derivative: cobra's reduced costs carry a convention scaling (the same reason
+        # the exchange duals above are read off `shadow_prices` instead), and half the
+        # "non-zero" duals in this pipeline were O(1e-14) dust.
+        #
+        # It is exact for the ADDITION direction and only suggestive for removals: an
+        # addition sits at bounds (0, 0), so its bound binds by construction and its
+        # reduced cost is the marginal value of opening it. A present reaction carrying
+        # flux strictly inside its bounds has reduced cost 0 and may still be essential,
+        # because a knockout is not a marginal perturbation. `live_candidates` handles
+        # that direction with an FVA instead.
+        rcost = (
+            {r_id: float(fba.reduced_costs[r_id]) for r_id in reduced_cost_for}
+            if reduced_cost_for
+            else {}
+        )
 
         v, status = elastic_net_fluxes(model, alpha * mu_max, eps)
 
@@ -300,6 +366,7 @@ def solve(
         shadow_prices=shadow,
         status=status.lower(),
         fluxes=v,
+        reduced_costs=rcost,
     )
 
 

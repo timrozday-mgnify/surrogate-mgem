@@ -7472,6 +7472,659 @@ curve — growth falling monotonically with product concentration — and the su
 tracks the LP through it.* Without a gate of that shape the layer cannot be
 validated, only added.
 
+## 14. Phase 8 — reaction presence as an input (**in development, 2026-10-29**)
+
+Everything above conditions the heads on the **medium** for a **fixed** network: the
+input is `c` (444 exchanges, 888 with the §13.11 `theta` channel) and the
+stoichiometric matrix is a constant of the checkpoint. This section adds a second
+input, a **reaction-presence mask** `z ∈ {0,1}^R` over the organism's own reactions,
+so that internal edits — a candidate annotation, a knockout, a gap-fill candidate —
+can be screened without rebuilding the model.
+
+**Status.** §14.2 (option A) is what is being developed now. §14.3 (option B) is
+recorded as a later alternative, not started. §14.4 is the reason both exist.
+
+**Read §15 before spending more on this.** It benchmarks §14 against FlowGAT, FluxGAT and AMN and reaches two uncomfortable conclusions: single-knockout essentiality is already covered by published work and by exact FBA, and the mask index built here is over the organism's **own** reactions, so it can only *remove* — which means §14.4's gap-filling goal is not yet reachable. §15.4 says what to change (index the CarveMe universe instead).
+
+### 14.1 What a reaction is, in the value function
+
+Head A is a max-affine family: `mu_hat(w) = min_j [mu_j + pi_j·(w - w_j)]`
+(`groupmax.py`, and §8.5 for why it is an upper bound). The natural question is
+whether a reaction corresponds to one of those hyperplanes. It does not, and the
+correct mapping is what makes option B below well posed:
+
+| Object | In the value function |
+| --- | --- |
+| **Hyperplane** (one affine piece) | One optimal basis — a **vertex of the dual polytope**. A metabolic *strategy*, whose gradient `pi_j` is its shadow-price vector |
+| **Reaction** `r` | A **half-space** in dual space: one constraint `pi·S_r <= c_r` |
+
+A dual vertex is the intersection of many reaction constraints, so each reaction
+affects many hyperplanes and each hyperplane is fixed by a combination of reactions.
+Neither direction is one-to-one.
+
+**The direction of the effect is load-bearing.** Turning a reaction off deletes a
+column of `S`, which deletes a dual constraint, which *enlarges* the dual feasible
+set, so the min runs over more vertices and `mu` falls. A knockout therefore **adds
+pieces to the min**; it does not remove one. In the head's own sign convention
+(`out` convex, `mu_hat = -out`) a knockout **raises** a plane's offset, pushing it
+into the group max. Any mask conditioning that only ever *removes* capacity from the
+head has the mechanism backwards.
+
+### 14.2 Option A — mask enters through the plane parameters (in development)
+
+The head keeps its structure and its measured input map; `z` enters **only** through
+the parameters of the affine pieces, never through the max/min itself:
+
+```
+b_k(z)   = b_k  + Bb_k · e(z)          # per-unit offset, pre-activation
+wx_k(z)  = -softplus(wx_k + Bw_k · e(z))   # per-unit, pre-softplus
+e(z)     = MLP(E z)                    # small embedding of the mask
+```
+
+`e(z)` is zero at initialisation (final layer zero-init), so **at init the head is
+bit-identical to the unconditioned `GroupMaxHead`** and inherits every measured
+result above — the `--gm-init labels` tangent initialisation, `DEFAULT_TEMP = 0.01`,
+`W_CAP = 1e5`, the monotone output. That is the whole reason for this parameterisation
+rather than a redesign.
+
+**What survives structurally, for every `z`:**
+
+- **Concavity in `w`.** A min of affine-in-`w` functions is concave in `w` however
+  its coefficients were produced. `concavity_violation_rate` must still read
+  exactly 0, and it is still measured in `w`/`u`, never in the model's input space.
+- **Monotone non-decreasing in `w`.** The signs are structural: `softplus` on the
+  pass-through, `-softplus` on the input skips. An additive offset *inside* the
+  `softplus` cannot change a sign.
+- **Sobolev-on-duals.** `grad_w mu_hat` is still the active piece's `pi`, so §7's
+  per-row norm-relative term is unchanged. With a mask it also carries which piece
+  is active, which is extra signal rather than less.
+- **Newton / dFBA composition.** Needs concavity in `w` at fixed `z`, and `z` is
+  constant along a trajectory. §8 is untouched.
+
+**What is deliberately restricted.** The offsets are **per unit (per plane)**, not
+per (plane, input): `wx` is `(width*group, 444)` per layer, so full per-input offsets
+would be a hypernetwork with ~450k outputs per layer. Per-plane offsets let a mask
+lift, drop or rescale a strategy but not freely rotate it. Rotation is option B's
+job. **This is an assumption to be measured, not a saving** — the diagnostic is
+whether held-out masks need rotations the per-plane family cannot reach.
+
+**What is *not* structural, and therefore must be measured.** `mu_max` is monotone
+non-increasing under reaction removal, and option A does not enforce that. A new
+diagnostic `mask_monotonicity_violation_rate` — the fraction of nested mask pairs
+`z' <= z` with `mu_hat(w, z') > mu_hat(w, z) + tol` — joins
+`concavity_violation_rate` in the gate. Option B gets this for free, which is the
+main argument for it.
+
+### 14.3 Option B — learn the dual polytope, one constraint per reaction (later)
+
+```
+mu(u, z) = min { pi·u  :  A_r·pi <= b_r  for every r with z_r = 1 }
+```
+
+A small LP inside the model (a differentiable-optimisation layer), with `A_r, b_r`
+learned per reaction. Properties option A has to learn, this one has by construction:
+
+- **masking is linear in `z`** — it selects constraints;
+- **monotone in `z`**: more reactions means more constraints, a smaller dual feasible
+  set, a larger min, so more reactions can only mean more growth;
+- **the pathway AND-structure is native** — vertices depend jointly on constraints,
+  so "A alone does nothing, B alone does nothing, A+B completes a route" needs no
+  training data to be representable;
+- **`pi` has dimension 444** (the exchange index), not one component per metabolite,
+  so the learned LP is genuinely smaller than the GEM's own dual;
+- it supplies a usable `d(violation)/dz`, which is what the
+  `20hm-genome-collection` uncertainty plan §9 wants for gradient-informed discrete
+  samplers.
+
+This is the principled version and is **not started**. It is a different training
+story (implicit differentiation through an LP, Clarabel or `lineax` on the KKT
+system) and should not be attempted until option A has shown whether mask
+conditioning works at all.
+
+### 14.4 Why: approximating MILP reconstruction methods
+
+The target is to **approximate gap-filling and the other GSMM MILP methods** by
+replacing the inner LP feasibility oracle with a differentiable surrogate, then
+optimising or sampling over reaction-presence space:
+
+- **gap-filling** = find the minimal `z` extension making a set of phenotypes
+  feasible. With `mu_hat(w, z)` differentiable in the mask embedding, this becomes
+  continuous optimisation with a sparsity penalty, or MCMC/SMC over `z`.
+- **posterior sampling over networks** — the `20hm-genome-collection` plan
+  `gem/uncertainty-aware-reconstruction.md` §5 — needs many `(w, z)` evaluations per
+  move, which is exactly where a surrogate beats the LP.
+- **experiment design** (that plan §7) ranks candidate experiments by how much they
+  split a posterior over `z`, which needs the same bulk evaluation.
+
+**But note the measured baseline before claiming a speed-up:** a *warm* single-edit
+FBA solve on a carved GEM is **3.5 ms** (GLPK, one core, 1841 reactions; measured
+2026-10-28), and a cold solve 72 ms. So:
+
+- **single-member screening does not need a surrogate at all.** 2000 candidates ×
+  100 conditions × 24 genomes is ~5 CPU-hours of exact FBA, fully parallel.
+- The surrogate earns its place only for **community-level** phenotypes (each
+  candidate needs a composed solve) and for **combinatorial** search over many
+  simultaneous edits.
+- **The surrogate is a filter, not an oracle.** Every accepted edit is re-checked
+  with exact FBA. This is the same discipline as `--lp-repair` in §13.3, where the
+  true LP caught a synthetic-lethal set the surrogate could not see.
+
+### 14.5 Pitfalls specific to the mask (P18–P22)
+
+| # | Pitfall | Guard |
+| --- | --- | --- |
+| **P18** | **Random masks carry almost no signal.** A uniform draw over `R` reactions either hits redundant reactions (`mu` unchanged) or essential ones (`mu` = 0). Both are cheap to predict and teach nothing | Sample in the **thin shell**: masks differing from a carved model by `k ∈ {1..5}` reactions, drawn from the candidate set actually being screened. This matches the use case, but it means the head is only valid **near** the models it was trained around — not "network-editable" in general. State that limit whenever a number is quoted |
+| **P19** | **No smoothness in `z` to exploit.** `mu_max` is neither concave nor submodular in the mask; pathway completion is a step change. Interpolating between seen masks is unjustified | Hold out whole **edit types**, not rows: leave-pathway-out and leave-reaction-out. A random split over `(w, z)` rows will look far better than the real task |
+| **P20** | **The §8.5 over-prediction defect becomes systematic.** Max-affine is a min of tangents, so it is an upper bound and is loose where no tangent sits nearby. A mask moves the true function *down*; if the pieces do not follow, the head over-predicts growth for knocked-out networks — i.e. reports "this reaction is not needed", the exact error that matters for screening | Measure the **one-sided** error on knockout rows separately (`under_rate` on masks, not just on media), and keep §8.5's repair path. An over-predicting screen is worse than no screen |
+| **P21** | **Dead planes, mask edition** (cf. the init collapse in M3). A mask offset can push every plane a row needs out of the group max, leaving no active piece and no gradient | Zero-init `e(z)`, so training starts from the measured-good unconditioned head; keep the diverse-bias init; monitor active-plane counts per mask as well as per row |
+| **P22** | **Exchanges are reactions too.** The mask and the 444-wide `u` input overlap, and carved models differ in which exchanges they have | Mask only **internal** reactions in the first pass; an exchange edit must go through the medium input, not the mask, or the two inputs contradict each other |
+
+Also inherited and still live: **P13** (one `index_hash` per run — a mask index needs
+the same treatment, frozen and hashed), and the `W_CAP` rule from M17 — **a clip in
+an input map is a modelling assumption**: `min(w, cap)` preserves concavity and
+destroys injectivity, and an upper-bound invariant needs the second. Do not clip the
+mask embedding.
+
+### 14.6 Milestones
+
+**Gate order (set 2026-10-29).** M18 -> M19 -> M20 -> V9, then the §15 comparison.
+M21 is conditional on M20, not a gate in its own right: option B is only built if M20
+says per-plane conditioning is the limit. **§15's M22/M23 comparison work does not
+start until M20 and V9 are met** — a benchmark against FlowGAT and AMN is only
+meaningful once this head has a number of its own to compare, and running it earlier
+just measures an untrained model.
+
+
+| # | Milestone | Gate |
+| --- | --- | --- |
+| **M18** | Mask-conditioned Head A (option A) exists and its invariants hold | `concavity_violation_rate` exactly 0 over random masks; monotone in `w`; bit-identical to `GroupMaxHead` at init |
+| **M19** | Knockout labels: `(medium, mask) -> mu_max, duals` on one organism, thin-shell sampled | 100% optimal solves, one mask `index_hash`, and the label set's own `mu` distribution reported (how many masks are no-ops, how many lethal) |
+| **M20** | Held-out **edit** accuracy | Leave-reaction-out and leave-pathway-out R² and gradient cosine, plus `under_rate` on knockout rows. Compare against the trivial baseline "`mu` unchanged", which P18 says will be strong |
+| M21 | Option B (§14.3), only if M20 says per-plane conditioning is the limit | Conditional, not a gate |
+
+**M19 attempt 2 (2026-10-29): the screen, and the medium problem.** Attempt 1 failed its
+own gate (62.7% lethal / 26.5% no-op / 10.8% partial), so candidates are now chosen by
+a **measured single-edit screen** rather than the "carries flux" proxy — one warm LP per
+candidate classifies it lethal / partial / noop / helpful, and the selection is built to
+a target class mix (`make_mask_candidates2.py`). On `CP009913.1` over all 853 removals
+plus a 240-reaction universe addition pool, on a rich screen medium:
+
+| edit direction | screen result |
+| --- | --- |
+| removals (853) | **708 noop, 88 partial, 57 lethal** |
+| additions (240 random universe reactions) | **235 noop, 5 helpful** |
+
+Two things follow. First, the removal screen works: there are enough `partial` reactions
+to build a shell out of, and "carries flux" was simply the wrong filter. Second, and more
+important: **only 5 of 240 additions do anything at all on a rich medium, and none can do
+more than nothing when the organism is already at its maximum.** An addition is
+informative only where something is *missing* — which is exactly gap-filling's own
+setting, growth observed where the model predicts none. So the addition arm needs
+**deficient media** (drop a nutrient, see which addition rescues), not the sampling
+design's rich ones. Until that is built, the addition half of the mask is representable
+but untestable, and `k > 1` is where the removal half's signal has to come from.
+
+`V9`: on a toy network whose essential reactions are known by construction, the head
+reproduces the full knockout ranking. Without a gate of that shape the layer can be
+added but not validated.
+
+## 15. Benchmarking §14 against the published alternatives — and what is redundant
+
+**The honest summary first: one of §14's two use cases is already covered by published
+work, and the one that is not is the one the current label set does not test.** This
+section says which is which, how to run the comparators, and what would have to be
+true for §14 to be worth finishing.
+
+### 15.1 What each method actually takes as input
+
+| Method | Input | Output | Edits it can represent |
+| --- | --- | --- | --- |
+| **§14 masked Head A** | medium `u` (444) **+** reaction mask `z` | `mu_max`, concave in `u`, with duals | **removals only** — see 15.4 |
+| **AMN** (Faure 2023) | medium **+** binary reaction-knockout vector `R_KO` | growth, via soft `SV=0` penalties | removals |
+| **FlowGAT** (Hasibi, Michoel & Oyarzún 2024) | a **mass-flow graph built from one wild-type FBA solution** per condition; node features are flow-profile encodings | binary essentiality label **per reaction node**, semi-supervised | **none as input** — knockouts are the *labels*, not an input |
+| **FluxGAT** (Sharma 2024) | a graph from **flux sampling** (no objective function) | binary gene essentiality | none as input |
+| exact FBA | medium + any edit | `mu_max` + duals, exactly | removals *and* additions |
+
+The distinction that decides redundancy: **FlowGAT and FluxGAT are node classifiers on
+a fixed graph.** They answer "which reactions in this network are essential in this
+condition". They do not take an edit as input, they return a label rather than a growth
+rate, and FlowGAT trains a separate model per condition graph. §14's head answers a
+different question — `mu` for an arbitrary `(medium, edit)` pair — and the two only
+meet on **single-knockout essentiality**.
+
+FlowGAT does not address adding a reaction at all. Its discussion proposes other flux
+descriptions (elementary flux modes, extreme pathways, flux sampling) as extensions;
+additions are not among them.
+
+### 15.2 Where §14 is redundant
+
+**On single-reaction essentiality, §14 adds nothing.** FBA already answers it exactly in
+3.5 ms warm, FlowGAT reaches "close to FBA" on *E. coli* iML1515, and FluxGAT does the
+mammalian case. A surrogate that predicts single knockouts is a slower, less accurate
+route to a question with an exact 3.5 ms answer.
+
+**This is a problem for the M19 label set as it stands.** Measured: **62.7% of its rows
+are lethal and 26.5% are no-ops** — that is, ~89% of the labels are essentiality
+questions, exactly the published territory. The thin shell was pointed at the redundant
+part of the space. The fix is in the candidates, not the architecture (M19's own
+conclusion): choose reactions that **have alternatives**, so the informative `partial`
+class dominates.
+
+### 15.3 Where no precedent was found
+
+- **`mu` as a function of `(medium, edit)` jointly**, rather than essentiality at one
+  medium. FlowGAT needs a new graph and a new trained model per condition.
+- **Concavity in the medium, with duals**, which is what §8's Newton composition and the
+  master problem consume. AMN embeds `S` only as a soft penalty: no concavity, no duals,
+  no composition. FlowGAT has no value function at all.
+- **Multi-reaction edits (`k > 1`)**, the pathway-AND case. No comparator takes a
+  combinatorial edit as input.
+- **Community-level** phenotypes under an edit, which is the one place a surrogate beats
+  exact FBA outright (each candidate otherwise needs a composed solve).
+- **Additions**, which is what gap-filling actually needs — and which §14 as built cannot
+  do either (15.4).
+
+### 15.4 A correction to §14: the mask is over the wrong set
+
+`cfs.sampling.masks.maskable_reactions` indexes **the organism's own internal
+reactions**, so a mask can only ever *remove*. §14.4's stated goal is approximating
+gap-filling, which is *addition*. These do not meet.
+
+To cover additions the mask index must be the **CarveMe universe**, with each carved
+model a subset of it: then `z` ranges over present *and* absent reactions, and an
+addition is a bit going 0 -> 1. That is what makes the universe the right index (every
+panel member is a subset of one shared matrix), and it is the gap between what is built
+and what §14.4 claims. Consequences, none of them free:
+
+- `R` goes from ~850 (one organism's internal reactions) to the universe's several
+  thousand, so the embedding and the label budget both grow;
+- the label solve must run on the **universe restricted to `z`**, not on the carved
+  model, which is a different and slower LP;
+- P13 again: one frozen universe index, hashed, shared across the roster.
+
+**Until this is done, §14 cannot be described as approximating gap-filling.** It
+approximates knockout screening, which is the redundant half.
+
+### 15.5 How to run the comparators
+
+Three mutually incompatible stacks (TensorFlow; PyG 2.3.1 + Lightning 1.8.6; torch
+2.8.0), so **one container each**, built locally and converted to Apptainer only if a
+run needs the cluster. None of the three benchmarks is big: FlowGAT's *E. coli* mass-flow
+graph is 444 nodes and its code archive is 286 kB. **A laptop with Docker is enough for
+the comparisons themselves.**
+
+| Method | Source | Stack | Container | HPC needed? |
+| --- | --- | --- | --- | --- |
+| **AMN** | `github.com/brsynth/amn_release`, **MIT** | conda, `environment_amn.yml` (versions pinned there; the README pins none and misnames the file `environment_amn.yaml`) | Write a Dockerfile over `continuumio/miniconda3` + that env file. No Dockerfile is provided | No. Tested on Ubuntu 22.04 / macOS |
+| **FlowGAT** | **Zenodo 10.5281/zenodo.10551318**, `FlowGAT.zip` 285.7 kB, **CC-BY-4.0**. No GitHub repo exists | Python ≥3.6, PyG 2.3.1, PyTorch Lightning 1.8.6, GraphGym; COBRApy 0.26.3 + glpk for the FBA step | Dockerfile over a pinned `pytorch` base. `python main.py --cfg configs/k_fold_gat.yaml --repeat 10 --k_fold` | No for the GNN. The paper's own runs used a national HPC facility but report no runtimes |
+| **FluxGAT** | `github.com/kierensharma/FluxGAT`, **no licence file found** | `requirements.txt` pins cobra 0.29.0, torch 2.8.0, torch_geometric 2.4.0, keras 3.13.2, networkx 2.8.8, node2vec 0.4.6, numpy 1.26.2, pandas 2.1.3, scikit-learn 1.5.0 | Dockerfile from that requirements.txt | **Yes for the flux sampling** — that stage, not the GNN, is the cost. Nextflow + Apptainer + SLURM, like `--stage labels` |
+
+**The licence matters.** AMN is MIT, so it can be vendored and containerised freely.
+FlowGAT's archive is CC-BY-4.0 — fine to use and modify with attribution, but it is a
+*documentation* licence applied to code, so check before redistributing an image.
+**FluxGAT has no licence file**, which means no permission to redistribute: run it from
+a local clone, do not ship an image of it, and treat it as a read-only reference.
+
+### 15.6 The benchmark that would actually settle it
+
+The comparators and §14 share exactly one task, so that is the one to run:
+
+**V10 — single-knockout essentiality on one GEM, one medium.** *E. coli* iML1515 on
+glucose, labels from the Monk et al. knockout growth data (3892 genes; FlowGAT's glucose
+graph has 444 nodes of which ~255 are labelled, ~75% of them essential). Report PRAUC
+against the no-skill floor, which is **74.9% precision** on that data — with that
+imbalance, accuracy is meaningless and must not be quoted. Entrants: exact FBA (the
+gold standard, and the one to beat on *cost*, not accuracy), FlowGAT, the §14 masked
+head, and the trivial "essential iff carrying flux" rule.
+
+**Expected outcome, stated in advance so the result cannot be rationalised afterwards:
+§14 will not beat FBA, and probably will not beat FlowGAT.** That is the point of running
+it — if §14 loses on the shared task, its case rests entirely on 15.3, and the work must
+move to the capabilities no comparator has (`k > 1`, additions over the universe,
+community composition, duals for the master problem) or stop.
+
+**V11 — the comparison nobody else can run**, and therefore the one that justifies the
+effort: `k > 1` edits and additions over the universe, scored against exact FBA, with
+the `partial` class separated from the lethal rows (M19). No published comparator can
+enter it, so FBA is the only baseline — which makes **cost per query** the metric, not
+accuracy, with accuracy as a constraint ("within x% of FBA at y× the throughput").
+
+### 15.7 Milestones
+
+| # | Milestone | Gate |
+| --- | --- | --- |
+| **M22** | Three containers that reproduce one published number each | A documented Dockerfile per method; FluxGAT run from a local clone only, no image shipped |
+| **M23** | V10 shared-task benchmark | PRAUC for all four entrants on the identical fold split, against the 74.9% no-skill floor |
+| **M24** | Universe-indexed mask (15.4) | A frozen, hashed universe index; a label solve on the universe restricted to `z`; additions representable |
+| **M25** | V11, the cost-per-query comparison on `k > 1` and additions | Accuracy within a stated tolerance of FBA, at a stated throughput multiple |
+
+## 16. Targeting informative rows on the mask axis
+
+M19 attempt 3 left **42% no-ops**. Heads A and B had the same problem on the medium
+axis and five mechanisms were built to solve it; none of them has a mask analogue yet.
+This section transfers them, then adds the methods the medium axis had no use for.
+
+### 16.1 What the medium axis already does
+
+| # | Mechanism | Where | What it buys |
+| --- | --- | --- | --- |
+| 1 | **Active subspace** `A_i` — vary only the exchanges that matter, hold the rest rich | `sampling/active_subspace.py` | Dimensions that cannot move `mu` are never sampled |
+| 2 | **Demand probe** — bisect `log10(c/Km)` for the point where `mu_max` has recovered `target_frac` of that metabolite's **own** range, before any labels | §4.7, `demand_probe` | Self-anchoring design: ~350 LPs and ~2 s per organism against ~32 000 labelled solves. A metabolite that never limits is **omitted, not defaulted** |
+| 3 | **Per-metabolite bands and strata** — `frac_focus` 0.50 straddling each onset, `frac_below_km` 0.40, `frac_low_mu` 0.15 (deliberately slow media), `frac_bg_perturb` 0.10 (the community regime) | §4.3, `sample_media` | The single biggest lever on M3. Without it a shared band leaves medians spanning 5107x unsampled, and the design lands on the plateau — 76% of media above 75% of max `mu` |
+| 4 | **Top-up** — weights `1 - grad_cosine` with a 0.25 floor, from the **measured** held-out error, spent as the next round's focus budget | §4.6, `topup_weights` | Budget goes where the head is wrong, not where a guess says it might be |
+| 5 | **Ensemble gradient disagreement** | `surrogate/ensemble.py` | Covers the cells diagnostics *cannot* see: metabolites that never limited have no measured error and no `u*` |
+
+Two cross-cutting lessons, both paid for: **coverage is the predictor** (held-out cosine
+tracks a cell's training row count at Spearman 0.72), and **the ruler must not move** —
+top-up media leaked into validation and three rounds were read as a trend before the
+retraction. Head B adds a sixth: its residual is coverage of the media the composition
+actually visits, so those get labelled directly (`--media`, `make_traj_pool.py`), and
+NN distance to its own training media predicts its error at Spearman +0.673.
+
+### 16.2 The transfer
+
+| Medium axis | Mask axis |
+| --- | --- |
+| exchange | reaction |
+| concentration `c` | the present/absent bit |
+| "where does this metabolite start limiting" | **"on which media does this reaction matter"** |
+| limiting scale `s` per metabolite | **limiting medium per reaction** |
+| metabolite that never limits → omitted | reaction that is a no-op everywhere → outside `A^mask` |
+| focus stratum straddling the onset | the mask paired with the medium where **that** edit bites |
+| `frac_low_mu`, deliberately slow media | deficient media (built, §14/M19) |
+| top-up weights `1 - cos` | per-**reaction** error weights |
+| ensemble gradient disagreement | ensemble disagreement over **masks** |
+| validation = round-0 media only | validation = round-0 masks **and** leave-reaction-out |
+
+The single-edit screen already built (`screen_single_edits`) is the mask's **demand
+probe**: a cheap label-free LP sweep that anchors the design, with the class mix playing
+the role of `target_frac`. What is missing is everything in rows 3–5 — and the row that
+matters most, the per-reaction *limiting medium*.
+
+### 16.3 The reduced cost is a free informativeness oracle
+
+The strongest transfer, and it costs nothing. `mu`'s sensitivity to a reaction's own
+flux bound is its **reduced cost**, which is non-zero exactly when that bound binds. So
+for any medium already being solved, the LP's duals say **which reactions would have
+mattered if edited** — the mask's `A_i`, at that medium, for free.
+
+The pipeline already stores exchange shadow prices for precisely this reason on the
+medium axis (`solve` reads `fba.shadow_prices`). Storing `reduced_costs` for the
+candidate reactions turns **every existing row into an informativeness measurement**,
+and the design becomes: sample the mask for reaction `r` on the media where `r`'s
+reduced cost is non-zero. That is row 2 of the table, implemented with no new solves.
+
+Two cautions, both already learned on this codebase. The duals are **solver output and
+carry dust**: half the "non-zero" exchange duals were O(1e-14), so a tolerance is
+needed, not a `!= 0` test. And a reduced cost is a *local* derivative at the optimum,
+so it predicts `partial` rows well and says nothing about a reaction whose removal only
+bites in combination — which is what 16.4 is for.
+
+### 16.4 Methods the medium axis had no use for
+
+A concentration is continuous and one-dimensional per metabolite; a mask is discrete and
+combinatorial, so three families apply here that have no media analogue.
+
+| Method | What it gives | Cost |
+| --- | --- | --- |
+| **Minimal cut sets** (MCS) | The minimal lethal reaction sets, exactly. A mask one reaction short of a cut is a no-op and the cut itself is lethal, so **sampling at a cut's boundary is maximally informative by construction** — it is the decision surface. Enumerating small MCSs is a dual/duality problem (Ballerstein, von Kamp) and relates directly to the Meneco enumeration in `20hm-genome-collection`'s uncertainty plan §5 | MILP/dual enumeration; small `k` only |
+| **Flux coupling analysis** (FCA, F2C2) | Which reactions are coupled, hence which `k`-subsets *interact*. Random `k`-subsets drawn across the network are independent, which is exactly why they come out no-op: coupling is the prior that says which pairs are worth drawing | LP-based, cheap |
+| **Covering arrays** | A guarantee that every pair (or triple) of candidates appears at least once, in far fewer rows than exhaustive: pairwise coverage of 60 candidates needs a few hundred rows, not `C(60,2)` = 1770 | Combinatorial construction, no solves |
+
+And three that are generic but fit the problem:
+
+- **Query by committee / BALD.** Train an ensemble, draw masks where members disagree.
+  The repo already has `gradient_disagreement`; the mask version is the same code on a
+  different input. Worth noting that this is **the same objective as the experiment
+  ranking** in `20hm-genome-collection`'s `gem/uncertainty-aware-reconstruction.md` §7 —
+  one implementation serves both, which is an argument for building it properly.
+- **Hard-negative mining.** Keep the no-op rows the head *predicts* as effects, discard
+  the ones it already gets right. This is the mask version of `inverse_density_weights`:
+  the no-op class is 42% of rows and defines the baseline, so **weight it, do not filter
+  it** — deleting the majority class is how a model learns that every edit matters.
+- **Curriculum on `k`.** Fit `k=1`, then let the head's own errors at `k` choose the
+  `k+1` rows. Cheap, and it gives the `k > 1` budget somewhere to point.
+
+### 16.5 Order, and the gate
+
+1. **Store internal reduced costs** for the candidate set (16.3). No new solves, and it
+   makes every row say which edits would have mattered. Do this first.
+2. **Per-reaction limiting-medium anchor**: pair each candidate with media where its
+   reduced cost is non-zero, as `frac_focus` does for metabolites. This is the direct
+   attack on the 42%.
+3. **FCA for the `k > 1` draws** (16.4): draw multi-edit masks from coupled sets rather
+   than uniformly.
+4. **Mask top-up** from measured per-reaction error, with the floor — and **validation
+   masks frozen to round 0**, or this repeats the retracted top-up experiment on a
+   moving ruler.
+5. MCS and covering arrays only if 1–4 leave the no-op share high.
+
+**V12.** The share of rows that are `partial`, `helpful` or multi-edit `lethal` exceeds
+**70%** on two organisms, with the no-op share **weighted rather than filtered**, and
+the per-reaction coverage table reported the way §4.6 reports per-metabolite coverage.
+Until the coverage table exists, "informative share" is a single number hiding the same
+~1137:9:1 skew the medium axis had.
+
+## 17. Why M20 fails, and what to model instead (explored 2026-10-29)
+
+M20's best run beat "the edit does nothing" on unseen edits but stayed below zero R2
+(-0.212). Before building more, four cheap experiments asked whether that is a shortage
+of labels, unsuitable labels, or the wrong thing being modelled. A random forest is the
+probe throughout, as in `cfs baseline-rf`: it has no concavity, monotonicity or init
+problem, so where it also fails, the failure is in what the inputs say.
+
+All on `CP009913.1`, three concatenated roots, 4512 rows. Scripts and outputs in
+`~/Documents/surrogate-mgems_runs/20hm_masks/` (`explore_reprs.py`,
+`explore_precursors.py`, and their `.json`).
+
+### 17.1 Not a label-count problem
+
+Leave-reaction-out R2 for a forest on the one-hot mask, against training fraction:
+
+| fraction | 10% | 25% | 50% | 100% |
+| --- | --- | --- | --- | --- |
+| one-hot | -0.084 | -0.029 | -0.025 | **-0.007** |
+| stoich + orphan | -0.075 | 0.063 | 0.176 | 0.135 |
+
+**One-hot is flat.** That is not an empirical accident; it is forced. Under
+leave-reaction-out, a held-out reaction's bit is never varied in training, so *no* model
+of any kind can learn what flipping it does. An atomic reaction identity carries no
+transferable information. More labels of the same kind cannot fix this.
+
+### 17.2 Representation matters, but local features stop at lethality
+
+Forest R2 (and lethality AUROC) by representation and split:
+
+| representation | by medium | leave-reaction-out | **pure unseen** (448 rows) | leave-module-out |
+| --- | --- | --- | --- | --- |
+| one-hot | 0.689 | -0.007 | -1.57 (AUROC 0.977) | 0.498 |
+| stoich deltas | 0.644 | **0.137** | -1.17 (0.927) | 0.338 |
+| orphaned metabolites | **0.711** | -0.019 | **-0.25 (0.997)** | 0.373 |
+| module deltas | 0.512 | -0.011 | -0.91 (0.913) | 0.471 |
+
+"Pure unseen" rows are the ones whose *only* edits are held-out reactions, so they test
+transfer and nothing else; mixed rows let a one-hot model lean on seen co-edits.
+
+Three findings:
+
+1. **Lethality transfers; effect size does not.** "Did this edit leave a metabolite with
+   no producer" ranks lethality on never-seen edits at AUROC 0.997, with no training
+   needed to define it. But R2 stays negative everywhere on the pure split.
+2. **No representation can tell a no-op from a partial loss**: effect-vs-no-op AUROC is
+   0.43-0.56 on every split, *including the easy one*. The reason is mechanistic.
+   Whether removing a reaction costs growth depends on whether an *equally efficient
+   alternative route* exists — a global, flux-level property. Two edits that each
+   remove one of two parallel routes look identical locally; one is a no-op and the
+   other a partial loss depending on the routes' yields. Local structure cannot see it.
+3. **CarveMe models carry no subsystem annotation** — every candidate was `unassigned`,
+   so pathway features from that field are empty. The modules above are Louvain
+   communities of the reaction graph with currency metabolites removed (degree > 15);
+   a curated pathway map would be a better test of the pathway idea.
+
+Separately: the forest scores **0.689** by medium where the trained masked head scored
+**0.375** on the same data. So there is *also* an architecture/optimisation deficit,
+the same shape as the ICNN-vs-forest gap recorded for Head A.
+
+### 17.3 The fundamental decomposition: growth is a min over subgraph capacities
+
+The hypothesis: each biomass precursor `p` is made by some subgraph of the network. Its
+capacity under a medium and an edit is the most of `p` the network can make *alone*,
+divided by its biomass coefficient. Then
+
+```
+mu_liebig = min_p cap_p(u, z)
+```
+
+Measured on 600 rows, 53 precursors, one LP per precursor per row, **no learning**:
+
+| | first attempt | ATP as hydrolysis |
+| --- | --- | --- |
+| R2 against true `mu` | 0.154 | **0.897** |
+| Spearman | 0.859 | **0.877** |
+| lethality agreement | 1.0 | **1.0** |
+| distinct binding precursors | 22 | 23 |
+
+**The first attempt was wrong about ATP, and the fix is the finding.** In the biomass
+reaction ATP is mostly *hydrolysed* (maintenance: `atp + h2o -> adp + pi + h`), not
+consumed, so a plain ATP demand measures de-novo adenine synthesis. Modelled as
+hydrolysis, the decomposition goes from explaining 15% of the variance to 90%.
+
+What it means:
+
+- **Lethality is exact and local**: `mu = 0` iff some precursor's subgraph is
+  disconnected. That is a reachability question, which is why the orphan features of
+  17.2 rank it so well.
+- **The composition is a min**, the same structure as Head A's max-affine family. So
+  the answer to the original "does each reaction correspond to a hyperplane?" is: no,
+  but each **biosynthetic subgraph corresponds to a group of hyperplanes**.
+- **The latent is small**: 23 of 53 precursors ever bind, and five of them (ATP, Ca2+,
+  CoA, UDP-MurNAc-pentapeptide, SAM) bind in over two thirds of rows.
+
+Two honest limits. It is **not yet a valid upper bound** — 144 of 600 rows read *below*
+the true `mu` (median ratio 0.80), because other cofactors (CoA, SAM, GTP) are also
+partly recycled rather than consumed, and some ATP is incorporated into RNA rather than
+hydrolysed. Fixing those should tighten it. And it is **weakest on the partial class**
+(Spearman 0.33), where co-limitation means precursors compete for shared resources and
+independent capacities stop composing by a plain min.
+
+**It is a representation, not a speed-up.** Fifty-three LPs per row is more work than
+one FBA. Its value is that it says *what to learn*: each precursor's capacity is a
+per-subgraph problem, and the open question is whether those transfer to unseen edits
+better than `mu` does.
+
+### 17.4 Options
+
+| | Option | Evidence | What would decide it |
+| --- | --- | --- | --- |
+| **C** | **Subgraph factorisation** — learn per-precursor capacity `cap_p(u, z)` and compose by min | Decomposition explains R2 0.90 with no learning; lethality exact; 23-dimensional latent; same min structure as Head A | Does `cap_p` transfer to pure unseen edits? It is a smaller, more local problem than `mu`, so it should, but that is untested |
+| **A'** | Option A with a **structural mask embedding** (orphan + stoich features instead of one-hot) | Lifts leave-reaction-out 0.007 -> 0.137 in a forest, and transfers lethality at AUROC 0.997 | Cheap to try. Cannot fix the no-op/partial blindness of 17.2, so its ceiling is low |
+| **D** | **Graph network** over the reaction-metabolite bipartite graph, conditioned on medium and mask — **the preferred backup if C fails** (set 2026-10-29, replacing B in that role) | The one learned representation that can in principle see alternative routes, since message passing approximates flux propagation | The most expensive to build; closest published relative is FlowGAT, which is a node classifier and not conditioned on edits |
+| **B** | Option B, the dual polytope, but with constraints **computed from stoichiometry** | A *learned* per-reaction constraint has exactly one-hot's transfer problem; computed from `S_r` it is a reduced LP | Only worth building if it is genuinely smaller than the LP it replaces |
+| **E** | Reframe as a **guide**, not a predictor: gate on ranking, with exact FBA verifying | Lethality ranks well; effect-vs-no-op is at chance | As a guide today, it can *prune lethal candidates* but cannot *find effective ones* |
+| **F** | Stop the surrogate for single organisms: exact FBA (3.5 ms) plus the **orphan rule as a free lethality filter** | The orphan rule needs no training and ranks unseen lethality at 0.997 | Is the remaining need (community-level, combinatorial) large enough to justify a surrogate at all? |
+
+**Order set 2026-10-29: A' first (cheap interim), then C; D is the backup if C fails.** B is no longer the backup. **Recommendation: C, with F as the baseline it has to beat.** C is the only option
+backed by a representation that explains most of the variance before any learning, and
+it inherits Head A's structure rather than fighting it. A' is a cheap interim worth one
+run. B and D are not worth building until C has been tried.
+
+### 17.5 A' is measured: the features help the fit and break the transfer
+
+Same rows, same splits, same head, 400 epochs, only the edit descriptor varies
+(`run_aprime.py`, `aprime.json`). Baselines 0.1026 / -0.6224 / -0.6025.
+
+| descriptor | width | by medium | leave-reaction-out | pure unseen | `under_rate` (by medium) |
+| --- | --- | --- | --- | --- | --- |
+| one-hot | 917 | 0.3745 | **-0.212** | **-0.741** | 0.446 |
+| orphan | 420 | 0.059 | -0.251 | -0.752 | 0.375 |
+| stoich | 280 | 0.471 | -1.089 | -4.836 | 0.232 |
+| stoich + orphan | 700 | **0.512** | -1.599 | -6.824 | **0.179** |
+
+**It splits cleanly, and not the way §17.2 predicted.** On seen edits the structural
+descriptors are better on both axes that matter: R2 0.375 -> 0.512, and `under_rate`
+0.446 -> 0.179, which is the P20 direction — over-predicting growth is the error that
+would waste wet-lab effort, and halving it is a real gain. On *unseen* edits they are
+much worse: -0.212 -> -1.599, and -0.741 -> -6.824 on the pure split.
+
+**The forest did the opposite** (§17.2: one-hot -0.007, stoich +0.137 on the same
+split), and that contrast is the diagnosis. The features carry transferable information
+— a forest extracts it — but this head cannot use it, because a min of affine pieces is
+*unbounded*: a continuous descriptor whose unseen combinations land off the training
+manifold gets extrapolated linearly and without limit, where a one-hot bit at least
+stays in [0, 1]. A tree partitions and therefore saturates; max-affine does not.
+
+So A' is half a result: **adopt the structural descriptors for anything scored on seen
+edits, and do not expect them to fix transfer in this family.** It also sharpens the
+case for C and D — the problem is not what the features say but that this hypothesis
+class extrapolates them unboundedly.
+
+**Status, 2026-10-29.** A' is implemented (`run_aprime.py`) and measured above: the same
+`MaskedGroupMaxHead` with `z` replaced by the structural descriptors, which needs no
+change to the head because `z` enters only through a linear embedding — concavity and
+monotonicity in the medium never depended on it being binary. It scores one-hot,
+orphan, stoich and stoich+orphan on three splits against `0_baseline`'s 0.3745 /
+-0.212. **No result yet.** C's stage 1 is implemented (`run_option_c.py`) and not yet
+run; its cofactor table extends §17.3's ATP fix to GTP, CTP, UTP, CoA and SAM as
+turnover rather than drain, and `bound_violations` is the check that it worked.
+
+### 17.6 C, first iteration: the factorisation transfers, the composition is the problem
+
+> **Retracted 2026-10-30 (see §17.7).** The capacity labels were joined to feature rows
+> on `medium_id`, which repeats 8x within a root and again across roots, so most
+> capacities below were scored against a different mask than the one they were computed
+> for. Only root 0 matched at all. The per-capacity and composed numbers in this section
+> are invalid; the structural conclusions (hard zeros, worst-factor dominance) were
+> re-tested in §17.7.
+
+2000 rows with capacity labels (1504 usable), 53 precursors, ATP/GTP/CTP/UTP/CoA/SAM as
+turnover demands. Forest per binding precursor on the `stoich+orphan` descriptor, then
+composed (`run_option_c.py`, `option_c2.json`).
+
+**Individual capacities transfer, and that is the result worth having.** R2 for
+`cap_p` on *unseen* edits: `ca2_c` **0.960**, `mql8_c` 0.625, `fad_c` 0.619,
+`datp_c` 0.080, `atp_c` **-0.852**. Set against `mu` itself on the same split — the
+head at -0.212, a forest at 0.137 — several capacities are an order of magnitude more
+learnable than growth. **A per-subgraph problem is the easier problem**, which is what
+§17.3 predicted and the reason to prefer C.
+
+**Composing them is where it goes wrong**, in two separable ways:
+
+| | by medium | leave-reaction-out |
+| --- | --- | --- |
+| `min_p cap_p`, learned | -0.098 | -0.373 |
+| gated on predicted lethality | **0.390** | -0.241 |
+| **live rows only** (growth survives) | **0.573** | **0.493** |
+| lethality agreement, learned min | 0.571 | 0.524 |
+
+1. **A regression cannot produce a hard zero**, so a min of *learned* capacities is
+   never lethal: the no-learning decomposition agreed with lethality in **every** row
+   and the learned one agrees in about half. Gating on lethality separately recovers
+   most of it (-0.098 -> 0.390 by medium), and on live rows alone the composed
+   capacities reach **0.493 on unseen edits**.
+2. **The min is dominated by its worst factor.** `atp_c` is both the most frequently
+   binding precursor (440 of 1504 rows) and the only badly-learned one (-0.852),
+   because its capacity is energy turnover and spans decades. An error in any single
+   factor passes straight through the min.
+
+**And a correction to §17.2's headline.** The orphan rule ranks unseen lethality at
+AUROC 0.997, but a classifier on those features at its default threshold has recall
+**0.5 by medium and 0.2 on unseen edits**. Good ranking is not good hard
+classification: the classes are imbalanced and 0.5 is the wrong cut. More to the point,
+**orphaning should not be learned at all** — "did this edit leave some precursor with no
+producer" is a deterministic function of the mask and the stoichiometry, so the gate can
+be *computed* exactly and for free, as it was in §17.3 where agreement was 1.0.
+
+**So C survives its first test, with its shape changed:** a computed lethality gate, a
+log-scale or ratio target for the energy factors, and per-precursor capacities as the
+learned part. The pure-unseen split could not be scored here — only 1504 of 4512 rows
+carry capacity labels and none of the pure rows were sampled, so that gap needs more
+label rows before C can be compared with A' on the hardest split.
+
+**First C experiment**: tighten the bound (cofactor recycling), then train one small
+model per binding precursor on `cap_p` and score leave-reaction-out and pure-unseen
+against the forest numbers in 17.2. If `cap_p` transfers where `mu` did not, the
+factorisation is the architecture.
+
 ## Appendix — repository layout
 
 ```
@@ -7511,3 +8164,505 @@ community-fba-surrogates/
 ├── tests/
 └── notebooks/
 ```
+
+### 17.7 C rebuilt: positional labels, computed gate, log targets (2026-10-30)
+
+All 4512 rows labelled (53 LPs each, in `train_masked.load` order, asserted against
+`mu`). Lethality gate **computed** by network expansion from the medium plus carrier
+seeds (ATP/NAD/CoA/quinones/thioredoxin), with no LP and no training. Capacities fit on
+log10 over live rows only. Same forest, descriptor and splits as before
+(`run_option_c.py`, `option_c3.json`; one-LP baseline in `guide_baseline.py`).
+
+**No learning:** `min_p cap_p` R2 0.851, lethality agreement 0.952, but **1096 bound
+violations** — it is still not an upper bound.
+
+**Computed gate:** precision **0.9995**, recall **0.775** over 2487 lethal rows. A 120-row
+check had read 1.0/1.0; the full set shows 22% of lethal rows have every precursor
+reachable and are lethal for a stoichiometric reason (balance or regeneration) that
+reachability cannot see. So the gate is safe for pruning (it almost never calls a live
+edit lethal) and incomplete.
+
+| R2 against `mu` | by medium | leave-reaction-out | **pure unseen** |
+| --- | --- | --- | --- |
+| edit does nothing (baseline) | 0.103 | -0.622 | -0.603 |
+| learned min, no gate | 0.310 | -0.139 | -0.335 |
+| **computed gate** | **0.644** | **0.688** | **0.531** |
+| oracle gate (ceiling) | 0.884 | 0.917 | 0.915 |
+| A' best (§17.5), for reference | 0.512 | -1.599 | -6.824 |
+
+C with a computed gate is the first model in §14–§17 with **positive R2 on pure unseen
+edits**, and the oracle row says the remaining error is mostly the gate's missing 22%,
+not the capacities. Per-capacity log-R2 on live unseen rows: `ca2_c` 0.994, `mql8_c`
+0.763, `uaagmda_c` 0.710, `fad_c` 0.369, `datp_c` 0.220; `atp_c` 0.152 on
+leave-reaction-out (pure split has no live ATP-bound rows).
+
+**But as a guide it does not yet work**, and the reason is a scale mismatch, not a
+metric bug. Edit effects are ~1%: true `mu/base` has median 0.991 for partial edits and
+1.003 for helpful ones. The *exact* decomposition reads both at ~0.71x base, because one
+capacity under-reads by a near-constant factor in the anchored roots (the bound
+violations). A 30% systematic bias swamps a 1% signal, so:
+
+| live rows | effect-vs-no-op AUROC (C / one-LP) | top-10% enrichment (C / one-LP) | Spearman rel. dmu (C / one-LP) |
+| --- | --- | --- | --- |
+| by medium | 0.471 / 0.569 | 0.00 / 0.35 | 0.111 / 0.326 |
+| leave-reaction-out | 0.814 / 0.367 | 0.39 / 0.35 | 0.022 / 0.019 |
+
+Neither beats chance convincingly at the top of the ranking, which is where a sampler
+draws from. (The pure split has 48 live rows, all with an effect, so only Spearman is
+defined there.)
+
+**Next:** a **paired target**, `cap_p(edited) / cap_p(unedited)` under the same medium,
+so the constant bias cancels and the model learns the 1% that matters. One unedited
+capacity vector per distinct medium (~564 x 53 LPs). Separately, find which precursor
+causes the 0.71 plateau and fix its demand, which should remove most bound violations.
+
+
+### 17.8 Evaluating a guide: what to measure, and checking the measures (V13)
+
+The surrogate's intended role is a **proposal distribution** for a sampler whose
+acceptance uses the exact LP. That changes what has to be measured. A guide cannot make
+the answer wrong — with a uniform floor on every proposal and the proposal
+probabilities in the acceptance ratio, any guide targets the same posterior — it can
+only waste LP calls or slow mixing. So R2 on `mu` is at best a proxy, and the proxies
+need checking against the thing they stand in for.
+
+**Cheap proxies, every iteration** (in `_guide_metrics`):
+
+- **within-state ranking**: AUROC of "edit changes growth" computed *within* each
+  (medium, root) group and averaged. A sampler ranks candidate moves from one state; a
+  pooled AUROC can look good by separating easy media from hard ones while ranking
+  inside a state stays at chance;
+- **helpful vs rest**, signed: moving towards a completion needs helpful edits above
+  both partial losses and no-ops, which "effect vs no-op" does not distinguish;
+- top-10% enrichment alongside AUROC, because a sampler draws from the top of the
+  ranking and §17.7 showed the two disagreeing (AUROC 0.81, enrichment 0.39);
+- every proxy scored for the **one-LP baseline** too (`guide_baseline.py`: pFBA flux
+  through removed reactions, reduced cost of additions, on the unedited model). A
+  learned guide is worth having only if it beats that, not uniform.
+
+**V13, the end-to-end benchmark, at milestones only** (a new representation, a new
+composition, an M-gate), because it is slow:
+
+1. **Task**: planted gaps. Delete k known reactions from the base model and sample
+   completions over the universe. The truth is known, and for small k the minimal
+   completions can be enumerated, so the exact posterior is known too.
+2. **Arms**: uniform proposals; the one-LP baseline; each learned guide mixed with a
+   uniform floor; an **oracle** guide (true dmu) as the ceiling.
+3. **Measures**: LP calls *and wall-clock including guide evaluation* to the first valid
+   completion; effective samples per LP call on the inclusion indicators; LP calls to
+   recover a fixed fraction of the enumerated posterior mass.
+4. **Correctness**: guided and unguided chains must agree with the enumeration (total
+   variation on inclusion probabilities). A guide that changes the answer means a bug in
+   the acceptance ratio, not a weak guide.
+5. **Tail**: the lowest proposal rank/probability the guide gives any edit in a true
+   completion. This is the mixing hazard — in the guide role *under*-prediction is the
+   dangerous error, the reverse of P20 for a predictor — and the uniform floor bounds but
+   does not remove it.
+
+**Checking the proxies:**
+
+- **Noised oracles.** Build a ladder of synthetic guides — true dmu plus noise at
+  controlled levels, some biased towards under-prediction — and run V13 on each. That
+  gives a curve from each proxy to actual speedup without training many real guides, and
+  replaces the guessed thresholds (AUROC >= 0.75, Spearman >= 0.5) with measured ones.
+- **The right distribution.** Proxies are scored on sampled/anchored masks; the chain
+  proposes single-edit neighbours of the states it actually visits, which concentrate
+  near feasibility. Log visited states from V13 runs and re-score the proxies on their
+  neighbours. Any gap is distribution shift that no current number shows.
+
+### 17.9 The plateau was a flux cap; paired targets make C a usable guide (2026-10-30)
+
+**The 0.71 plateau was a bug in the capacity LP, not biology.** Every precursor's demand
+reaction had upper bound 1000, the model's default flux cap, so each capacity was clipped
+at `1000 / coeff`. For ATP (coeff ~54) that is 18.48 in every medium, below true growth;
+water too. That single cap was **all 1096** bound violations of §17.7, and part of
+§17.3's (which I had put down to cofactor recycling). With the demand bound at 1e6
+(finite, so an unbounded LP cannot return `error_value=0` and read as lethal):
+`min_p cap_p` R2 **0.866**, **0 bound violations** — it is now a true upper bound.
+
+**Paired target.** Each capacity learned as `log10(cap_p(edited) / cap_p(unedited))`
+under the same medium, then multiplied back by the exact unedited capacities, which a
+sampler pays for once per medium (53 LPs). Computed gate unchanged (recall 0.775,
+precision 0.9995).
+
+| R2 against `mu`, computed gate | by medium | leave-reaction-out | pure unseen |
+| --- | --- | --- | --- |
+| absolute capacities | 0.526 | 0.578 | 0.510 |
+| **paired capacities** | **0.724** | **0.713** | **0.610** |
+| oracle gate (absolute) | 0.937 | 0.946 | 0.917 |
+
+**As a guide** (live rows; the oracle scores 1.0 and the maximum enrichment, which checks
+the metric):
+
+| | effect AUROC (medium / LRO) | top-10% enrichment | helpful AUROC | Spearman rel. dmu |
+| --- | --- | --- | --- | --- |
+| oracle | 1.0 / 1.0 | 1.62 / 1.79 (max) | 1.0 / 1.0 | 1.0 / 1.0 |
+| exact decomposition, no learning | 0.672 / 0.633 | 1.62 / 1.44 | 0.659 / 0.625 | 0.713 / 0.646 |
+| C, absolute vs true base | 0.385 / 0.580 | 0.00 / 0.39 | 0.548 / 0.683 | 0.241 / 0.341 |
+| **C, paired** | **0.659 / 0.729** | **1.40 / 1.44** | 0.705 / 0.640 | 0.675 / 0.446 |
+| one-LP baseline | 0.569 / 0.367 | 0.35 / 0.35 | **0.796 / 0.888** | 0.546 / 0.517 |
+
+- **Pairing is what made C a guide**: effect ranking goes from at or below chance to
+  0.66-0.73, and the top decile is 1.4x enriched against the oracle's 1.6-1.8.
+- **Learned C is at its own ceiling**: it matches the exact decomposition, so the
+  remaining gap to the oracle is the decomposition's (a min of independent capacities
+  cannot see co-limitation), not the learning.
+- **The two are complementary.** Paired C wins on "will this edit change growth"; the
+  one-LP baseline wins clearly on "will it help" (reduced costs are exactly a first-order
+  gain signal). A proposal built from both is the obvious next arm for V13.
+- Every number is still pooled across states. **Within-state metrics could not be
+  computed**: each medium carries exactly one mask, labelled at 8 values of `alpha`, so
+  no state has two candidate edits to rank. That also means the effective sample is 188
+  edits per root, not 1504. The splits stay honest (a medium's rows never straddle them).
+
+**Next for the guide**: a neighbourhood evaluation set — a few dozen states, each with
+*all* single-edit neighbours labelled by `screen_single_edits` — so within-state ranking,
+the quantity a sampler actually uses, can be measured. Also open: the gate's missing 22%
+(lethal for stoichiometric, not reachability, reasons).
+
+### 17.10 Within-state ranking: the one-LP baseline wins, and §17.9's guide result was between-state (2026-10-30)
+
+The neighbourhood set (`neighbourhood.py`, `neighbourhood.json`): 50 states from the
+anchored roots (40 edited, 10 unedited controls), each with all 83 single-candidate
+flips solved exactly — 4150 neighbours; 12.7% lethal, 17.5% no-op, 45.8% partial, 24.0%
+helpful. C is paired (§17.9), trained on the leave-reaction-out train rows. The one-LP
+score is one pFBA *of the current state* (what a sampler has already solved to accept
+it). Every metric is computed within a state and averaged over states.
+
+**A metric check that mattered.** Pooled "helpful" AUROC read 0.99 for the one-LP score,
+but the trivial score "is this an addition" reads **0.98**: helpful can only be an
+addition, and 86.5% of live additions are helpful. So that number mostly measured
+add-vs-remove. Scored by direction instead:
+
+| within-state AUROC | removals: effect vs no-op | additions: helpful vs not | additions, held-out reactions (5 states) |
+| --- | --- | --- | --- |
+| oracle | 1.0 | 1.0 | 1.0 |
+| **one-LP (state pFBA / reduced cost)** | **0.924** | 0.632 | 1.0 |
+| C, paired | 0.566 | 0.538 | 0.6 |
+| rank mean of both | 0.885 | 0.616 | 0.8 |
+
+1. **For removals the one-LP score is close to exact, and part of it is a theorem**: if
+   some optimal solution carries zero flux through a reaction, removing it cannot lower
+   the optimum. Zero pFBA flux was a no-op in 368 of 368 cases. C adds nothing here and
+   the combination is worse than the one-LP score alone.
+2. **Additions are the open problem, and they are the gap-filling case.** Nothing ranks
+   them well: reduced cost 0.63 (degenerate LPs make reduced costs non-unique), C 0.54.
+   The held-out column has 5 states and cannot carry a conclusion.
+3. **C's §17.9 guide numbers were between-state.** Pooled across states, paired C ranked
+   effects at 0.66-0.73 and beat the one-LP score. Within a state it is at 0.54-0.57.
+   It had learned which *media and masks* are sensitive, not which *move* from a given
+   state matters. This is exactly the failure §17.8 item 4 warned of.
+
+**What this means for the guide.** For single-edit moves over 83 candidates a learned
+guide does not earn its place: the state's own LP ranks removals almost exactly, and
+solving every addition exactly costs ~83 x 3.5 ms = 0.3 s per state. A learned guide is
+needed only where exhaustive exact screening is too expensive:
+
+- **large candidate sets** — the full CarveMe universe is thousands of reactions, not 83;
+- **multi-edit moves** — bridging a gap that needs several additions at once, where no
+  single addition helps and first-order sensitivity is zero by construction (§5 of the
+  uncertainty-aware reconstruction doc).
+
+Both are the additions side, where the one-LP score is weakest. So the next evaluation
+should be built around them: neighbourhoods over a much larger universe sample, and
+pair/triple additions from states one or two reactions short of a completion. C's
+capacities are per-precursor reachability-and-yield, which is the right kind of
+information for "which set of additions reconnects a starved precursor", but that is
+untested; this result says it does not help for single flips.
+
+### 17.11 Gap-filling neighbourhoods: what finds the rescue (2026-10-30)
+
+Planted gaps (`additions_neighbourhood.py`, `additions.json`), on media where the unedited
+model grows. **One short**: one essential base reaction removed; ~190 single-addition
+candidates per state (the removed reaction, universe reactions touching its non-currency
+metabolites, 150 shared random universe distractors). **Two short**: two essential
+reactions removed, so no single addition can rescue; all pairs from the two plus 20 near
+universe reactions around each (~530 pairs per state). 24 + 16 states, 13 092 candidates,
+every one solved exactly; every state is lethal (`mu = 0`). "Universe only" drops
+candidates containing a removed base reaction, leaving true alternative routes. Metric:
+the rank of the first rescue in score order — the LPs a sampler spends testing candidates
+in that order — against the random expectation.
+
+| first-rescue speedup vs random | one short | one short, universe only (15 states) | two short | two short, universe only (5 states) |
+| --- | --- | --- | --- | --- |
+| oracle | 60x | 64x | 90x | 52x |
+| one-LP (reduced cost at the lethal state) | 14.9x | 14.3x | **0.8x** | **0.7x** |
+| reachability (precursors reachable, exact) | 4.2x | 8.5x | 14.6x | 8.4x |
+| C, paired, with computed gate | 5.6x | 6.2x | **17.9x** | 15.4x |
+| rank mean reach + one-LP | **45x** | 53x | 3.2x | 2.0x |
+| rank mean reach + C | 5.7x | 24x | 13.7x | **26x** |
+| lexicographic reach, then one-LP | 39x | 44x | 4.7x | 2.4x |
+
+Within-state AUROC for "rescues" tells the same story (one-LP 0.98 / 0.61 one/two short;
+reach 0.92 / 0.89; C 0.92 / 0.89).
+
+1. **One reaction short, first-order sensitivity works.** Reduced cost at the lethal
+   state ranks the rescue near the top, and reachability fixes its tail: reach + one-LP
+   finds a rescue in ~1.3 LPs on average against ~60 in random order. No learning needed.
+2. **Two reactions short, first-order sensitivity is useless** — worse than random — as it
+   must be: no single addition changes the optimum, so reduced costs carry no information
+   about pairs. Every score that helps here is **structural**: reachability (exact,
+   unlearned) gets 8-15x and C 15-18x.
+3. **C's discrimination is mostly its gate.** Its AUROC equals reachability's to three
+   decimals in several subsets; the learned capacities add a modest margin in the
+   two-short case (17.9x vs 14.6x), on 16 states (5 universe-only), within the noise of
+   this sample.
+4. **No fixed combination wins both regimes.** Each score that helps one hurts the other.
+   The regime is visible at the state, though: if any candidate has a non-zero reduced
+   cost, first order applies; if all are zero, the gap is multi-edit.
+
+Limits: one organism; gaps planted by deleting essential reactions are easier than real
+annotation gaps (the deleted reaction is itself a candidate, and universe-only rescues
+exist in only 15 and 5 states); pairs only, not triples.
+
+Engineering notes: network expansion was rewritten as counter-based (linear) —
+identical output, 6.6 s -> 12 ms per call on the 2145-reaction model, which makes it
+cheaper than the LP it filters. The labeller now sets a state's bounds once and toggles
+only the candidate's reactions.
+
+### 17.12 Rethink: what §14-§17 say about the guide
+
+The goal set in §14 was a differentiable surrogate of `mu(medium, mask)` serving as the
+proposal of a sampler over reaction presence, with exact LPs verifying every step.
+Measured against that role:
+
+- **A learned predictor of `mu` is not where the proposal's power comes from.** For
+  removals the state's pFBA is exact by a theorem (§17.10); for single-addition gaps
+  reduced costs plus reachability reach 45-53x of a possible 60-64x (§17.11); for
+  multi-edit gaps the strongest signal is exact network expansion, with learned
+  capacities adding a margin that is not yet distinguishable from noise.
+- **What does the work is exact, cheap structure**: one LP of the current state (16 ms)
+  and network expansion (12 ms). Both are unlearned, need no training labels, and
+  transfer to any organism and any universe reaction by construction — exactly what the
+  learned models struggled with (§17.1, §17.5).
+- **This converges on the uncertainty-aware reconstruction doc's own plan** (its §5):
+  topological completion (Meneco-style answer-set enumeration of reachability-restoring
+  addition sets) generates candidates, and LPs verify and weight them. §17.11 is a
+  measurement that the topological half is the right proposal for multi-edit gaps.
+
+**Options from here:**
+
+| | Option | Basis | Cost |
+| --- | --- | --- | --- |
+| **R1** | **Exact-structure proposal, no learning**: removals by state pFBA (zero flux = no-op), additions by reduced cost when any is non-zero, else by reachability gain; uniform floor. Build the V13 sampler (§17.8) around it now | Every component measured here; 15-45x on planted gaps | Small: all parts exist |
+| **R2** | **Topological enumeration for multi-edit gaps**: Meneco (ASP) or an in-house set-cover over network expansion, to propose whole addition *sets* rather than pairs | Pairs already need 530 candidates per state; triples are 10^4-10^5, so enumeration has to be targeted | Medium; Meneco is an existing tool |
+| **R3** | **Keep C as a yield ranker** among topologically valid completions | Adds 15.4x vs 8.4x on universe-only pairs, 5 states | Small, but evidence thin; re-test inside V13 |
+| **R4** | **Learn the proposal from the sampler's own experience** (adaptive proposals, or a GFlowNet over addition sequences, rewarded by exact LPs) | Trains on the distribution the chain visits (§17.8's distribution-shift point) instead of random masks | Large; only once V13 exists and shows where exact structure falls short |
+| **D** | Graph network | Its main promise — seeing alternative routes — is now delivered exactly by reachability + LP | Deprioritised |
+
+**Recommendation: R1 then R2, with R3 re-tested inside V13.** The surrogate-of-`mu` thread
+(§14 M20/M21) should be re-scoped rather than pushed: its gates assumed the predictor
+role, and the guide role turns out not to need one for single organisms. Where learning
+could still earn its place is amortisation — across the 20 genomes, community contexts,
+and very large candidate sets — and that is a question for after V13 measures the exact
+pipeline's real cost.
+
+### 17.13 V13, first run: the exact-structure proposal, measured end to end (2026-10-30)
+
+> **Caveat found 2026-10-30 (§17.14):** the planner drew "draft reactions near the core"
+> from `base_present`, which includes the biomass reaction `Growth`; it is in the pool of
+> 9 of the 12 tasks. The exact posteriors are still exact (it becomes a forced reaction),
+> but for no-growth tasks deleting the objective is a trivial size-1 cut set, so the
+> cut-set rows below are contaminated and the rest are suspect. Rerun pending.
+
+`v13_sampler.py`, `v13.json`. Posterior over 24 pool reactions given one phenotype,
+independent prior (`pi` = 0.9 for draft reactions, 0.05 otherwise — benchmark
+assumptions standing in for the calibrated evidence prior), noise `eps` = 0.01.
+**Exact marginals** come from the minimal completions (FBA is monotone in the reaction
+set, so growth is upward-closed) by inclusion-exclusion; the completion sets agreed with
+direct LPs on 300 random states in **all 12 tasks, 0 mismatches**.
+
+Tasks, 3 each, planted on media where the unedited model grows: **growth** observed with
+the draft lacking k = 1 or 2 essential reactions (completion, bottom-up hard), and **no
+growth** observed with the draft wrongly containing a cut set of size 1 (an essential
+reaction) or 2 (a synthetic-lethal pair, either deletion alone a no-op) — the
+direction that is hard when starting from the universe. Each started from the draft and
+from the full pool (the universe-like top). Arms: uniform single flips; `r1`, locally
+balanced weights (Zanella 2020) from exact structure at the current state, with a 0.2
+uniform floor; `reach`, r1 plus one network expansion per candidate (option C's gate —
+with a binary likelihood C's learned magnitudes cannot move the acceptance ratio, so the
+C arm reduces to this). 3 seeds; 216 chains; one LP = one FBA or pFBA of a new state.
+
+**Correctness.** All arms converge on the exact marginals: mean absolute error at 2000
+LPs 0.011 (r1), 0.012 (reach), 0.023 (uniform).
+
+| mean marginal error at 1000 LPs | uniform | r1 | reach |
+| --- | --- | --- | --- |
+| growth, k=1, draft / full | 0.030 / 0.031 | 0.021 / 0.025 | 0.021 / 0.026 |
+| growth, k=2, draft / full | 0.031 / 0.034 | 0.018 / 0.018 | 0.021 / 0.021 |
+| no growth, k=1, draft / full | 0.029 / 0.030 | 0.014 / 0.017 | 0.012 / 0.012 |
+| no growth, k=2, draft / full | 0.034 / 0.036 | 0.019 / 0.020 | 0.017 / 0.019 |
+
+| LPs to the first state matching the observation (median) | uniform | r1 | reach |
+| --- | --- | --- | --- |
+| growth k=2 from draft (multi-edit completion) | 235 | **33** | 70 |
+| growth k=1 from draft | 14 | 4 | 4 |
+| no growth k=2 from full (cut set from the top) | 23 | 23 | 19 |
+| no growth k=1 from full | 25 | 31 | 31 |
+
+| cost | uniform | r1 | reach |
+| --- | --- | --- | --- |
+| ms per LP, guide included | **3.0** | 17.4 | 35.5 |
+
+1. **Per LP the guide is worth about 2x in effective samples** (error falls as
+   1/sqrt(n), and r1's error at 1000 LPs is ~0.6-0.7x uniform's), and **7x in reaching a
+   first valid completion bottom-up**.
+2. **Per second, uniform wins at this pool size.** A GLPK solve costs 3 ms; the guide
+   (a pFBA plus Python over the candidates) costs ~15 ms more per state, which exceeds the
+   LPs it saves on 24 candidates.
+3. **Cut sets from the top get no help.** Starting from the full pool with no-growth
+   evidence, no arm reaches a consistent state faster than uniform. This is the
+   universe-start direction: deleting one of two parallel routes changes nothing, so
+   every exact first-order signal is zero, and the reach flag fires only when a *single*
+   deletion disconnects a precursor. It is the mirror of the two-short completion problem
+   and needs its own move: proposing a **minimal cut set** as one move (computable by
+   MCS enumeration, Klamt's duality with completions).
+4. **The reach arm buys nothing over r1** per LP and doubles the cost. Drop it.
+
+**What would change the wall-clock verdict** — both untested, both cheap:
+
+- **Drop the pFBA.** The no-op theorem needs *some* optimal solution with zero flux, not
+  the parsimonious one; the FBA solution already computed for the likelihood qualifies.
+  That removes r1's second LP per state (pFBA only finds more zero-flux reactions).
+- **Pool size.** Uniform's hit rate falls as 1/n while r1's per-state overhead is mostly
+  fixed, so the guide should win at universe scale (hundreds to thousands of candidates),
+  not at 24. This is the question V13 has to answer next.
+
+**Next:** r1 without pFBA; pools of 100 and 400; a cut-set move for no-growth evidence.
+
+### 17.14 Where r1's overhead goes, and what replaces it (2026-10-30)
+
+`bench_guide.py`, one V13 task (1110 reactions), a lethal and a growing state, each fast
+path checked against the current one before its time counted.
+
+| per call | current | replacement | speed-up |
+| --- | --- | --- | --- |
+| LP + pool fluxes and reduced costs, lethal state | cobra `optimize()` 4.1 ms | optlang `slim_optimize` + per-reaction reads 1.9 ms; **highspy 0.18 ms** | 23x |
+| same, growing state (with pFBA) | cobra `optimize()` + `pfba()` 40.9 ms | **highspy 0.18 ms** (FBA vertex, no pFBA) | 230x |
+| network expansion, one state | Python counter 1.2 ms | **scipy sparse 0.28 ms** | 4x |
+| expansion for every candidate (16-23) | Python, one by one, 19-28 ms | **scipy sparse, batched 1.2-2.0 ms** | 15x |
+
+Checks: growth calls agree; non-zero reduced-cost counts identical (6 / 0); reachable
+sets identical, single and batched. Zero-flux counts differ by solution (pFBA 17, GLPK
+vertex 18, HiGHS vertex 15 of 23): all are valid optimal solutions, so the no-op theorem
+holds for each, but HiGHS's vertex certifies slightly fewer no-ops. A pFBA in HiGHS would
+recover them at ~0.2 ms if that matters.
+
+**What the overhead was**: cobra and optlang wrappers (pandas `Solution` objects, pFBA's
+model context), not numerical work. Torch and JAX have nothing to offer here — no
+gradients, no dense tensors, a sparse LP and a graph traversal. HiGHS (warm-started,
+numpy in and out) and scipy cover every function the guide needs: objective, primal
+fluxes, reduced costs, bound changes, expansion. What is lost is cobra's convenience
+layer and pFBA as a one-liner.
+
+**Projected per state**: r1 from ~35 ms to ~0.6-0.8 ms; uniform from 3 ms to ~0.2 ms per
+LP. The guide's relative overhead falls from ~6x an LP to ~3x, against a 2x (and in
+multi-edit completions 7x) saving in LPs, so wall-clock should break even at 24
+candidates and favour the guide above that. Unmeasured until V13 is rerun on it.
+
+**Rust**: not yet. After HiGHS + scipy, the floor is the Python MH loop itself (~0.1 ms
+a step). A compiled loop only pays if that dominates, and it would need the LP inside it
+(the `highs` crate), so it is a later step, decided by a profile.
+
+### 17.15 V13 rerun: HiGHS + sparse guide, pools of 24 / 100 / 400 (2026-10-30)
+
+`v13b_sampler.py`, `v13b.json`. Changes from §17.13: one HiGHS LP per task (warm-started
+bound changes); r1 reads fluxes and reduced costs from the same solve, so one LP per
+state, no pFBA; scipy-sparse reachability, batched for `reach`; the objective, ATPM,
+demands and sinks excluded from pools (§17.13's pools contained `Growth`); gap cores
+planned once with **nested pools 24 ⊂ 100 ⊂ 400** that grow by universe candidates only
+(6 draft reactions in every pool). 2 cores per task type, 24 tasks, 3 seeds, 432 chains
+planned.
+
+**Exact side.** Enumerating minimal completions fails once completions are large (they
+exceeded k+3 even at n=24 when draft reactions came in redundant pairs). Replaced by a
+**decision tree over the growth oracle**: monotonicity makes a node a leaf when its
+all-undecided-on state fails or its all-undecided-off state grows, so P(grows) and every
+marginal come from one pass with no completion sets. It matched enumeration to ~1e-15
+where both ran, and showed that a 300-probe check had passed an enumeration that missed a
+completion (8e-4 off). Subtrees under prior mass delta are dropped with their mass
+tracked, giving a **certified bound** on every marginal. Certified to <= 1e-2: **8/8
+tasks at n=24, 8/8 at n=100, 2/8 at n=400** (both growth k=1); the other six are
+excluded and reported, not approximated. Chain errors are scored only where they exceed
+3x the task's bound. FVA-blocked pool reactions (most of a large pool) have posterior
+equal to prior exactly.
+
+| time to marginal error <= 0.03 over unblocked reactions (median s; share of chains that got there within 20k LPs) | uniform | **r1** | reach |
+| --- | --- | --- | --- |
+| n = 24 | 3.4 s | **1.1 s** | 4.4 s |
+| n = 100 | 15.6 s (88%) | **5.3 s** | 66.6 s |
+| n = 400 (2 tasks) | never (0%) | **8.6 s (92%)** | 359 s |
+
+| LPs to the same | uniform | r1 | reach |
+| --- | --- | --- | --- |
+| n = 24 / 100 / 400 | 2000 / 10000 / >20000 | **500 / 5000 / 10000** | 500 / 5000 / 15000 |
+
+At error <= 0.015 (tasks certified to 0.005): n = 100, r1 reaches it in 83% of chains
+(6.4 s), uniform in 8%.
+
+| LPs to the first state matching the observation (median) | uniform | r1 |
+| --- | --- | --- |
+| growth k=2 from draft (multi-edit completion), n = 24 / 100 | 222 / 887 | **25 / 399** |
+| no growth k=1 from full (cut set from the top), n = 24 / 100 | 51 / 481 | **22 / 129** |
+| no growth k=2 from full (synthetic-lethal pair), n = 24 / 100 | 42 / 165 | **16 / 83** |
+
+| ms per LP, guide included | uniform | r1 | reach |
+| --- | --- | --- | --- |
+| n = 24 / 100 / 400 | 1.8 / 1.0 / 0.8 | 2.5 / 1.2 / 0.9 | 9 / 23 / 23 |
+
+1. **With the overhead removed, r1 wins on wall-clock as well as LPs**: 3x faster to a
+   given accuracy at n = 24 and 100, and at n = 400 it converges where uniform does not
+   within budget. Its cost per LP is now 1.1-1.4x uniform's (from ~6x in §17.13).
+2. **The advantage grows with pool size**, as predicted: uniform's chance of proposing a
+   relevant flip falls as 1/n while r1 puts its mass on the flips that matter.
+3. **§17.13's "cut sets from the top get no help" was an artefact** of `Growth` being in
+   the pool: deleting the objective was a size-1 cut set equally available to uniform.
+   With it excluded, r1 reaches a consistent state 2-4x sooner top-down too — the
+   zero-flux rule prunes no-op deletions, so proposals concentrate on reactions that
+   carry flux. A dedicated cut-set move is still the open improvement there.
+4. **The reach arm (option C's gate) matches r1 per LP and costs 10-30x more** per LP.
+   It is dropped; with binary phenotype data the learned surrogate has no role in this
+   proposal.
+
+**Limits.** One organism; n = 400 rests on 2 tasks of one type, because the exact
+reference — not the sampler — is what stops scaling: certified trees take 10^5 LPs at
+30-40 relevant reactions. Beyond that the reference has to be long r1 chains validated
+against the certified tasks. Priors are fixed benchmark values, not the calibrated
+evidence prior.
+
+**Next**: a cut-set move for no-growth evidence (MCS duality); r1 as the proposal in the
+uncertainty-aware reconstruction sampler; a reference-chain protocol for pools beyond
+~40 relevant reactions.
+
+### 17.16 Next steps (as of 2026-10-30)
+
+In order. The first two are the product; the rest are evidence the first two need.
+
+1. **A cut-set move for no-growth evidence.** r1 proposes single flips; a no-growth
+   observation from the top needs a whole minimal cut set deleted at once. Compute
+   MCSs over the state's flux-carrying reactions (Klamt's duality with completions) and
+   propose one as a single move, with its reverse probability in the acceptance ratio.
+   Rerun V13's no-growth tasks against r1 alone. *Done when* LPs to a consistent
+   top-down state fall clearly below r1's 2-4x over uniform.
+2. **r1 as the proposal of the uncertainty-aware reconstruction sampler**
+   (`20hm-genome-collection/gem/uncertainty-aware-reconstruction.md` §5, §10 U-steps):
+   the calibrated evidence prior instead of V13's fixed 0.9 / 0.05, several phenotypes
+   at once (the likelihood is a product; the guide scores each observation's state), and
+   the ranked-experiment output (§7 there). *Done when* it reproduces V13's numbers on
+   a single phenotype and runs on one real 20HM genome with its Biolog / growth data.
+3. **Move the sampler into `src/`** (`cfs.sampling.structure`): `Task` (HiGHS),
+   sparse reachability, r1, the certified decision-tree reference, with one small test
+   that a chain matches the tree on a toy model. The V13 scripts stay in the runs
+   directory as the benchmark.
+4. **A reference protocol beyond ~40 relevant reactions**: the certified tree needs
+   ~10^5 LPs at 30-40 relevant reactions, so n = 400 has only 2 certified tasks. Use
+   long r1 chains from both starts, accepted only when they agree with each other and
+   with the tree on every task the tree can certify.
+5. **More than one organism**: V13 on 3-4 of the 20HM genomes.
+6. **Learning, only where exact structure is shown to fall short**: quantitative growth
+   rates (where C's capacities could enter the likelihood), community contexts, or
+   amortising across genomes. Not before 1-5.
+
+Housekeeping: the universe SBML used throughout lives in a session scratchpad and needs a
+permanent copy; exact results in V13 should be cached so a run can resume; per-chain
+progress logging.

@@ -126,6 +126,63 @@ def build_parser() -> argparse.ArgumentParser:
         "and a pH controller. Any finite c^eq puts their secretion bound at zero, "
         "which is an infeasible model rather than inhibition.",
     )
+    gen.add_argument(
+        "--mask-candidates",
+        type=Path,
+        help="JSON {genome_id: [reaction_id, ...]} — §14/M19 reaction-presence "
+        "labels. Each medium is paired with one thin-shell mask over that organism's "
+        "candidates (not the media x masks product), and the row records which "
+        "reactions were knocked out. Candidates are required rather than defaulted "
+        "to every reaction: a uniform mask draw either hits a redundant reaction (mu "
+        "unchanged) or an essential one (mu = 0) and teaches the head nothing (P18). "
+        "This makes a *different label root* — two extra columns, recorded in "
+        "<genome>.masks.json beside the shards.",
+    )
+    gen.add_argument(
+        "--mask-universe",
+        type=Path,
+        help="Universe SBML (e.g. carvemegut's bigg_universe.xml) to copy addition "
+        "candidates from. Required when --mask-candidates lists reactions the carved "
+        "model lacks: a mask over the organism's own reactions can only REMOVE, and "
+        "gap-filling is addition (\u00a715.4). Every carved model is a subset of the "
+        "universe, which is what lets one index cover both directions.",
+    )
+    gen.add_argument(
+        "--mask-k-min",
+        type=int,
+        default=1,
+        help="Smallest number of edits in one mask (default 1). Raising it is how the "
+        "label set is pushed toward the synthetic-lethal and pathway-AND cases a "
+        "single-edit screen cannot see, and away from the single knockouts exact FBA "
+        "already answers in 3.5 ms.",
+    )
+    gen.add_argument(
+        "--mask-deficient",
+        type=float,
+        default=0.0,
+        help="Share of media stripped of 1-2 nutrients (default 0 = all rich). An "
+        "addition can only raise mu where something is MISSING -- M19 attempt 2 came "
+        "out 58.9%% no-op because 235 of 240 additions did nothing on a rich medium. "
+        "The rest stay rich on purpose.",
+    )
+    gen.add_argument(
+        "--mask-anchor",
+        action="store_true",
+        help="Draw each medium's mask from the candidates that can actually bite THERE "
+        "(\u00a716.5 step 2): additions by non-zero reduced cost, free from the solve; "
+        "removals by an FVA that asks whether the flux can go to zero while growth "
+        "holds. The mask analogue of the per-metabolite focus stratum, and the direct "
+        "attack on M19's 42%% no-ops. Costs two extra LPs per removal candidate per "
+        "medium, so it is opt-in.",
+    )
+    gen.add_argument(
+        "--mask-k-max",
+        type=int,
+        default=5,
+        help="Largest number of reactions removed in one mask (default 5). k > 1 is "
+        "what carries the pathway-AND structure single knockouts cannot show: a route "
+        "needs two steps and neither alone moves mu.",
+    )
     gen.add_argument("--seed", type=int, default=0)
 
     tu = sub.add_parser(
@@ -1466,6 +1523,24 @@ def main(argv: list[str] | None = None) -> int:
             ceq = ceq_map(
                 json.loads(args.inhibition.read_text()), ex_all, keep_mask(ex_all, buffered)
             )
+        mask_cands = mask_adds = mask_drops = None
+        universe = None
+        if args.mask_candidates:
+            raw = json.loads(args.mask_candidates.read_text())
+            # Two accepted shapes: {genome: [ids]} for removals only, and
+            # {genome: {"candidates": [...], "additions": [...]}} from the screened
+            # selection, whose `additions` are grafted in from the universe.
+            mask_cands = {
+                g: (v["candidates"] if isinstance(v, dict) else v) for g, v in raw.items()
+            }
+            mask_adds = {g: v.get("additions", []) for g, v in raw.items() if isinstance(v, dict)}
+            mask_drops = {g: v.get("drops", []) for g, v in raw.items() if isinstance(v, dict)}
+            if any(mask_adds.values()):
+                if not args.mask_universe:
+                    raise SystemExit("--mask-candidates lists additions: --mask-universe needed")
+                import cobra
+
+                universe = cobra.io.read_sbml_model(str(args.mask_universe))
         shards = generate_roster(
             roster,
             args.index,
@@ -1476,6 +1551,14 @@ def main(argv: list[str] | None = None) -> int:
             round_idx=args.round_idx,
             media=media,
             ceq=ceq,
+            mask_candidates=mask_cands,
+            mask_k_max=args.mask_k_max,
+            mask_additions=mask_adds,
+            universe=universe,
+            mask_k_min=args.mask_k_min,
+            mask_deficient=args.mask_deficient,
+            mask_drops=mask_drops,
+            mask_anchor=args.mask_anchor,
         )
         print(
             json.dumps(
