@@ -8069,6 +8069,13 @@ turnover rather than drain, and `bound_violations` is the check that it worked.
 
 ### 17.6 C, first iteration: the factorisation transfers, the composition is the problem
 
+> **Retracted 2026-10-30 (see §17.7).** The capacity labels were joined to feature rows
+> on `medium_id`, which repeats 8x within a root and again across roots, so most
+> capacities below were scored against a different mask than the one they were computed
+> for. Only root 0 matched at all. The per-capacity and composed numbers in this section
+> are invalid; the structural conclusions (hard zeros, worst-factor dominance) were
+> re-tested in §17.7.
+
 2000 rows with capacity labels (1504 usable), 53 precursors, ATP/GTP/CTP/UTP/CoA/SAM as
 turnover demands. Forest per binding precursor on the `stoich+orphan` descriptor, then
 composed (`run_option_c.py`, `option_c2.json`).
@@ -8157,3 +8164,55 @@ community-fba-surrogates/
 ├── tests/
 └── notebooks/
 ```
+
+### 17.7 C rebuilt: positional labels, computed gate, log targets (2026-10-30)
+
+All 4512 rows labelled (53 LPs each, in `train_masked.load` order, asserted against
+`mu`). Lethality gate **computed** by network expansion from the medium plus carrier
+seeds (ATP/NAD/CoA/quinones/thioredoxin), with no LP and no training. Capacities fit on
+log10 over live rows only. Same forest, descriptor and splits as before
+(`run_option_c.py`, `option_c3.json`; one-LP baseline in `guide_baseline.py`).
+
+**No learning:** `min_p cap_p` R2 0.851, lethality agreement 0.952, but **1096 bound
+violations** — it is still not an upper bound.
+
+**Computed gate:** precision **0.9995**, recall **0.775** over 2487 lethal rows. A 120-row
+check had read 1.0/1.0; the full set shows 22% of lethal rows have every precursor
+reachable and are lethal for a stoichiometric reason (balance or regeneration) that
+reachability cannot see. So the gate is safe for pruning (it almost never calls a live
+edit lethal) and incomplete.
+
+| R2 against `mu` | by medium | leave-reaction-out | **pure unseen** |
+| --- | --- | --- | --- |
+| edit does nothing (baseline) | 0.103 | -0.622 | -0.603 |
+| learned min, no gate | 0.310 | -0.139 | -0.335 |
+| **computed gate** | **0.644** | **0.688** | **0.531** |
+| oracle gate (ceiling) | 0.884 | 0.917 | 0.915 |
+| A' best (§17.5), for reference | 0.512 | -1.599 | -6.824 |
+
+C with a computed gate is the first model in §14–§17 with **positive R2 on pure unseen
+edits**, and the oracle row says the remaining error is mostly the gate's missing 22%,
+not the capacities. Per-capacity log-R2 on live unseen rows: `ca2_c` 0.994, `mql8_c`
+0.763, `uaagmda_c` 0.710, `fad_c` 0.369, `datp_c` 0.220; `atp_c` 0.152 on
+leave-reaction-out (pure split has no live ATP-bound rows).
+
+**But as a guide it does not yet work**, and the reason is a scale mismatch, not a
+metric bug. Edit effects are ~1%: true `mu/base` has median 0.991 for partial edits and
+1.003 for helpful ones. The *exact* decomposition reads both at ~0.71x base, because one
+capacity under-reads by a near-constant factor in the anchored roots (the bound
+violations). A 30% systematic bias swamps a 1% signal, so:
+
+| live rows | effect-vs-no-op AUROC (C / one-LP) | top-10% enrichment (C / one-LP) | Spearman rel. dmu (C / one-LP) |
+| --- | --- | --- | --- |
+| by medium | 0.471 / 0.569 | 0.00 / 0.35 | 0.111 / 0.326 |
+| leave-reaction-out | 0.814 / 0.367 | 0.39 / 0.35 | 0.022 / 0.019 |
+
+Neither beats chance convincingly at the top of the ranking, which is where a sampler
+draws from. (The pure split has 48 live rows, all with an effect, so only Spearman is
+defined there.)
+
+**Next:** a **paired target**, `cap_p(edited) / cap_p(unedited)` under the same medium,
+so the constant bias cancels and the model learns the 1% that matters. One unedited
+capacity vector per distinct medium (~564 x 53 LPs). Separately, find which precursor
+causes the 0.71 plateau and fix its demand, which should remove most bound violations.
+
