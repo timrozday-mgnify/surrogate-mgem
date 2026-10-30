@@ -8269,3 +8269,53 @@ composition, an M-gate), because it is slow:
   proposes single-edit neighbours of the states it actually visits, which concentrate
   near feasibility. Log visited states from V13 runs and re-score the proxies on their
   neighbours. Any gap is distribution shift that no current number shows.
+
+### 17.9 The plateau was a flux cap; paired targets make C a usable guide (2026-10-30)
+
+**The 0.71 plateau was a bug in the capacity LP, not biology.** Every precursor's demand
+reaction had upper bound 1000, the model's default flux cap, so each capacity was clipped
+at `1000 / coeff`. For ATP (coeff ~54) that is 18.48 in every medium, below true growth;
+water too. That single cap was **all 1096** bound violations of §17.7, and part of
+§17.3's (which I had put down to cofactor recycling). With the demand bound at 1e6
+(finite, so an unbounded LP cannot return `error_value=0` and read as lethal):
+`min_p cap_p` R2 **0.866**, **0 bound violations** — it is now a true upper bound.
+
+**Paired target.** Each capacity learned as `log10(cap_p(edited) / cap_p(unedited))`
+under the same medium, then multiplied back by the exact unedited capacities, which a
+sampler pays for once per medium (53 LPs). Computed gate unchanged (recall 0.775,
+precision 0.9995).
+
+| R2 against `mu`, computed gate | by medium | leave-reaction-out | pure unseen |
+| --- | --- | --- | --- |
+| absolute capacities | 0.526 | 0.578 | 0.510 |
+| **paired capacities** | **0.724** | **0.713** | **0.610** |
+| oracle gate (absolute) | 0.937 | 0.946 | 0.917 |
+
+**As a guide** (live rows; the oracle scores 1.0 and the maximum enrichment, which checks
+the metric):
+
+| | effect AUROC (medium / LRO) | top-10% enrichment | helpful AUROC | Spearman rel. dmu |
+| --- | --- | --- | --- | --- |
+| oracle | 1.0 / 1.0 | 1.62 / 1.79 (max) | 1.0 / 1.0 | 1.0 / 1.0 |
+| exact decomposition, no learning | 0.672 / 0.633 | 1.62 / 1.44 | 0.659 / 0.625 | 0.713 / 0.646 |
+| C, absolute vs true base | 0.385 / 0.580 | 0.00 / 0.39 | 0.548 / 0.683 | 0.241 / 0.341 |
+| **C, paired** | **0.659 / 0.729** | **1.40 / 1.44** | 0.705 / 0.640 | 0.675 / 0.446 |
+| one-LP baseline | 0.569 / 0.367 | 0.35 / 0.35 | **0.796 / 0.888** | 0.546 / 0.517 |
+
+- **Pairing is what made C a guide**: effect ranking goes from at or below chance to
+  0.66-0.73, and the top decile is 1.4x enriched against the oracle's 1.6-1.8.
+- **Learned C is at its own ceiling**: it matches the exact decomposition, so the
+  remaining gap to the oracle is the decomposition's (a min of independent capacities
+  cannot see co-limitation), not the learning.
+- **The two are complementary.** Paired C wins on "will this edit change growth"; the
+  one-LP baseline wins clearly on "will it help" (reduced costs are exactly a first-order
+  gain signal). A proposal built from both is the obvious next arm for V13.
+- Every number is still pooled across states. **Within-state metrics could not be
+  computed**: each medium carries exactly one mask, labelled at 8 values of `alpha`, so
+  no state has two candidate edits to rank. That also means the effective sample is 188
+  edits per root, not 1504. The splits stay honest (a medium's rows never straddle them).
+
+**Next for the guide**: a neighbourhood evaluation set — a few dozen states, each with
+*all* single-edit neighbours labelled by `screen_single_edits` — so within-state ranking,
+the quantity a sampler actually uses, can be measured. Also open: the gate's missing 22%
+(lethal for stoichiometric, not reachability, reasons).
