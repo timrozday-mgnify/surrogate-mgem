@@ -8634,3 +8634,38 @@ evidence prior.
 uncertainty-aware reconstruction sampler; a reference-chain protocol for pools beyond
 ~40 relevant reactions.
 
+
+
+### 17.16 Next steps (as of 2026-10-30)
+
+In order. The first two are the product; the rest are evidence the first two need.
+
+1. **A cut-set move for no-growth evidence.** r1 proposes single flips; a no-growth
+   observation from the top needs a whole minimal cut set deleted at once. Compute
+   MCSs over the state's flux-carrying reactions (Klamt's duality with completions) and
+   propose one as a single move, with its reverse probability in the acceptance ratio.
+   Rerun V13's no-growth tasks against r1 alone. *Done when* LPs to a consistent
+   top-down state fall clearly below r1's 2-4x over uniform.
+2. **r1 as the proposal of the uncertainty-aware reconstruction sampler**
+   (`20hm-genome-collection/gem/uncertainty-aware-reconstruction.md` §5, §10 U-steps):
+   the calibrated evidence prior instead of V13's fixed 0.9 / 0.05, several phenotypes
+   at once (the likelihood is a product; the guide scores each observation's state), and
+   the ranked-experiment output (§7 there). *Done when* it reproduces V13's numbers on
+   a single phenotype and runs on one real 20HM genome with its Biolog / growth data.
+3. **Move the sampler into `src/`** (`cfs.sampling.structure`): `Task` (HiGHS),
+   sparse reachability, r1, the certified decision-tree reference, with one small test
+   that a chain matches the tree on a toy model. The V13 scripts stay in the runs
+   directory as the benchmark.
+4. **A reference protocol beyond ~40 relevant reactions**: the certified tree needs
+   ~10^5 LPs at 30-40 relevant reactions, so n = 400 has only 2 certified tasks. Use
+   long r1 chains from both starts, accepted only when they agree with each other and
+   with the tree on every task the tree can certify.
+5. **More than one organism**: V13 on 3-4 of the 20HM genomes.
+6. **Learning, only where exact structure is shown to fall short**: quantitative growth
+   rates (where C's capacities could enter the likelihood), community contexts, or
+   amortising across genomes. Not before 1-5.
+
+Housekeeping: the universe SBML used throughout lives in a session scratchpad and needs a
+permanent copy; exact results in V13 should be cached so a run can resume; per-chain
+progress logging.
+
