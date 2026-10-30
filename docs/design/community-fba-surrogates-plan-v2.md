@@ -8459,6 +8459,12 @@ pipeline's real cost.
 
 ### 17.13 V13, first run: the exact-structure proposal, measured end to end (2026-10-30)
 
+> **Caveat found 2026-10-30 (§17.14):** the planner drew "draft reactions near the core"
+> from `base_present`, which includes the biomass reaction `Growth`; it is in the pool of
+> 9 of the 12 tasks. The exact posteriors are still exact (it becomes a forced reaction),
+> but for no-growth tasks deleting the objective is a trivial size-1 cut set, so the
+> cut-set rows below are contaminated and the rest are suspect. Rerun pending.
+
 `v13_sampler.py`, `v13.json`. Posterior over 24 pool reactions given one phenotype,
 independent prior (`pi` = 0.9 for draft reactions, 0.05 otherwise — benchmark
 assumptions standing in for the calibrated evidence prior), noise `eps` = 0.01.
@@ -8523,3 +8529,38 @@ LPs 0.011 (r1), 0.012 (reach), 0.023 (uniform).
   not at 24. This is the question V13 has to answer next.
 
 **Next:** r1 without pFBA; pools of 100 and 400; a cut-set move for no-growth evidence.
+
+### 17.14 Where r1's overhead goes, and what replaces it (2026-10-30)
+
+`bench_guide.py`, one V13 task (1110 reactions), a lethal and a growing state, each fast
+path checked against the current one before its time counted.
+
+| per call | current | replacement | speed-up |
+| --- | --- | --- | --- |
+| LP + pool fluxes and reduced costs, lethal state | cobra `optimize()` 4.1 ms | optlang `slim_optimize` + per-reaction reads 1.9 ms; **highspy 0.18 ms** | 23x |
+| same, growing state (with pFBA) | cobra `optimize()` + `pfba()` 40.9 ms | **highspy 0.18 ms** (FBA vertex, no pFBA) | 230x |
+| network expansion, one state | Python counter 1.2 ms | **scipy sparse 0.28 ms** | 4x |
+| expansion for every candidate (16-23) | Python, one by one, 19-28 ms | **scipy sparse, batched 1.2-2.0 ms** | 15x |
+
+Checks: growth calls agree; non-zero reduced-cost counts identical (6 / 0); reachable
+sets identical, single and batched. Zero-flux counts differ by solution (pFBA 17, GLPK
+vertex 18, HiGHS vertex 15 of 23): all are valid optimal solutions, so the no-op theorem
+holds for each, but HiGHS's vertex certifies slightly fewer no-ops. A pFBA in HiGHS would
+recover them at ~0.2 ms if that matters.
+
+**What the overhead was**: cobra and optlang wrappers (pandas `Solution` objects, pFBA's
+model context), not numerical work. Torch and JAX have nothing to offer here — no
+gradients, no dense tensors, a sparse LP and a graph traversal. HiGHS (warm-started,
+numpy in and out) and scipy cover every function the guide needs: objective, primal
+fluxes, reduced costs, bound changes, expansion. What is lost is cobra's convenience
+layer and pFBA as a one-liner.
+
+**Projected per state**: r1 from ~35 ms to ~0.6-0.8 ms; uniform from 3 ms to ~0.2 ms per
+LP. The guide's relative overhead falls from ~6x an LP to ~3x, against a 2x (and in
+multi-edit completions 7x) saving in LPs, so wall-clock should break even at 24
+candidates and favour the guide above that. Unmeasured until V13 is rerun on it.
+
+**Rust**: not yet. After HiGHS + scipy, the floor is the Python MH loop itself (~0.1 ms
+a step). A compiled loop only pays if that dominates, and it would need the LP inside it
+(the `highs` crate), so it is a later step, decided by a profile.
+
