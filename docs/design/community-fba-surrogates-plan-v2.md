@@ -8216,3 +8216,56 @@ so the constant bias cancels and the model learns the 1% that matters. One unedi
 capacity vector per distinct medium (~564 x 53 LPs). Separately, find which precursor
 causes the 0.71 plateau and fix its demand, which should remove most bound violations.
 
+
+### 17.8 Evaluating a guide: what to measure, and checking the measures (V13)
+
+The surrogate's intended role is a **proposal distribution** for a sampler whose
+acceptance uses the exact LP. That changes what has to be measured. A guide cannot make
+the answer wrong — with a uniform floor on every proposal and the proposal
+probabilities in the acceptance ratio, any guide targets the same posterior — it can
+only waste LP calls or slow mixing. So R2 on `mu` is at best a proxy, and the proxies
+need checking against the thing they stand in for.
+
+**Cheap proxies, every iteration** (in `_guide_metrics`):
+
+- **within-state ranking**: AUROC of "edit changes growth" computed *within* each
+  (medium, root) group and averaged. A sampler ranks candidate moves from one state; a
+  pooled AUROC can look good by separating easy media from hard ones while ranking
+  inside a state stays at chance;
+- **helpful vs rest**, signed: moving towards a completion needs helpful edits above
+  both partial losses and no-ops, which "effect vs no-op" does not distinguish;
+- top-10% enrichment alongside AUROC, because a sampler draws from the top of the
+  ranking and §17.7 showed the two disagreeing (AUROC 0.81, enrichment 0.39);
+- every proxy scored for the **one-LP baseline** too (`guide_baseline.py`: pFBA flux
+  through removed reactions, reduced cost of additions, on the unedited model). A
+  learned guide is worth having only if it beats that, not uniform.
+
+**V13, the end-to-end benchmark, at milestones only** (a new representation, a new
+composition, an M-gate), because it is slow:
+
+1. **Task**: planted gaps. Delete k known reactions from the base model and sample
+   completions over the universe. The truth is known, and for small k the minimal
+   completions can be enumerated, so the exact posterior is known too.
+2. **Arms**: uniform proposals; the one-LP baseline; each learned guide mixed with a
+   uniform floor; an **oracle** guide (true dmu) as the ceiling.
+3. **Measures**: LP calls *and wall-clock including guide evaluation* to the first valid
+   completion; effective samples per LP call on the inclusion indicators; LP calls to
+   recover a fixed fraction of the enumerated posterior mass.
+4. **Correctness**: guided and unguided chains must agree with the enumeration (total
+   variation on inclusion probabilities). A guide that changes the answer means a bug in
+   the acceptance ratio, not a weak guide.
+5. **Tail**: the lowest proposal rank/probability the guide gives any edit in a true
+   completion. This is the mixing hazard — in the guide role *under*-prediction is the
+   dangerous error, the reverse of P20 for a predictor — and the uniform floor bounds but
+   does not remove it.
+
+**Checking the proxies:**
+
+- **Noised oracles.** Build a ladder of synthetic guides — true dmu plus noise at
+  controlled levels, some biased towards under-prediction — and run V13 on each. That
+  gives a curve from each proxy to actual speedup without training many real guides, and
+  replaces the guessed thresholds (AUROC >= 0.75, Spearman >= 0.5) with measured ones.
+- **The right distribution.** Proxies are scored on sampled/anchored masks; the chain
+  proposes single-edit neighbours of the states it actually visits, which concentrate
+  near feasibility. Log visited states from V13 runs and re-score the proxies on their
+  neighbours. Any gap is distribution shift that no current number shows.
