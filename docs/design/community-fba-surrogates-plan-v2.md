@@ -8634,8 +8634,6 @@ evidence prior.
 uncertainty-aware reconstruction sampler; a reference-chain protocol for pools beyond
 ~40 relevant reactions.
 
-
-
 ### 17.16 Next steps (as of 2026-10-30)
 
 In order. The first two are the product; the rest are evidence the first two need.
