@@ -8638,7 +8638,7 @@ uncertainty-aware reconstruction sampler; a reference-chain protocol for pools b
 
 In order. The first two are the product; the rest are evidence the first two need.
 
-1. **A cut-set move for no-growth evidence.** r1 proposes single flips; a no-growth
+1. **A cut-set move for no-growth evidence.** *(Built and measured 2026-10-31, §17.17: met for k = 2, about 1.4x for k = 1.)* r1 proposes single flips; a no-growth
    observation from the top needs a whole minimal cut set deleted at once. Compute
    MCSs over the state's flux-carrying reactions (Klamt's duality with completions) and
    propose one as a single move, with its reverse probability in the acceptance ratio.
@@ -8666,3 +8666,79 @@ In order. The first two are the product; the rest are evidence the first two nee
 Housekeeping: the universe SBML used throughout lives in a session scratchpad and needs a
 permanent copy; exact results in V13 should be cached so a run can resume; per-chain
 progress logging.
+
+### 17.17 The cut-set move: built, made cheap, and what it buys (2026-10-31)
+
+`v13c_cutset.py`, `v13c_analyse.py`; runs `v13c.json` (first version), `v13c_a01.json`,
+`v13d_a{0.3,0.1}.json`, `v13e.json` (final, 5 seeds). Same plan, tasks and certified exact
+reference as §17.15 (references cached in `v13c_exact.pkl`; n = 400 tasks are still
+uncertified, so they are scored on first match only). The universe SBML now has a
+permanent copy at `~/Documents/surrogate-mgems_runs/reference/bigg_universe.xml`.
+
+**The move.** Per task, a fixed family F of minimal cut sets (size <= 3) of the full-pool
+and the draft states. A set move picks uniformly among the sets that are wholly present
+(delete them) or wholly absent (add them back). Because F is fixed, the move is valid MH
+whatever F contains: S -> S' toggles C, C is an option at S' too, and the proposal ratio
+counts every option that toggles the same reactions. The family affects how useful the
+move is, never the target. A set move is proposed with weight 0.1 while the state
+contradicts the observation and 0.03 once it agrees, with the reverse weights in both
+moves' ratios. Under deliberately extreme weights (0.9 / 0.01 and 0.01 / 0.9) every
+variant converges to the certified marginals at r1's error level.
+
+**Making the family cheap: support branching.** Brute-force enumeration over
+FVA-unblocked reactions cost 170-16 000 LPs per task (13 450 to find two single
+reactions in one case), which wiped out the gain. A cut set that extends a deleted set C
+must hit the support of *any* growing flux vector at X minus C, so the search branches
+only on that support, level by level, pruning supersets of cuts already found. It is
+exact for every minimal cut set up to K and needs no FVA. Branching on the HiGHS vertex
+saved only 10-60%, because vertices carry flux through many pool reactions. So each node
+first shrinks its support with one extra LP: growth >= mu/2, each active pool reaction
+held on its own side of zero, the other pool reactions fixed at 0, L1 minimised. The
+result is still a growing vector, so the search stays exact. **The families are identical
+to brute force on all 20 tasks, at 4-264 LPs per task instead of 170-16 000** (0.05-1.2 s),
+and task 14's size-3 level, which brute force had to skip, now completes.
+
+| LPs to the first state matching the observation, median of 10 chains, family cost charged (net of it) | r1 | r1 + cut-set move |
+| --- | --- | --- |
+| no growth k=2 from full, n = 100 / 400 | 113 / 411 | **52 (12) / 76 (12)** |
+| no growth k=1 from full, n = 100 / 400 | 87 / 530 | 130 (66) / 383 (246) |
+| growth k=2 from draft, n = 100 | 290 | 194 (159) |
+
+| mean marginal error at 20k LPs, relevant reactions | uniform | r1 | r1 + cut | r1 + cut + swap |
+| --- | --- | --- | --- | --- |
+| no growth, n = 24 / 100 | 0.0041 / 0.0203 | 0.0023 / 0.0111 | 0.0017 / **0.0090** | 0.0018 / **0.0086** |
+| growth, n = 24 / 100 | 0.0049 / 0.0235 | 0.0022 / 0.0120 | 0.0022 / 0.0112 | 0.0021 / 0.0106 |
+
+1. **Top-down no-growth with a cut set of size 2: met.** With the family's cost charged,
+   the first consistent state comes 2-5x sooner than with r1 (9-34x net of the family).
+   This is the case first-order signals cannot see: each deletion inside the cut set is a
+   no-op on its own.
+2. **k = 1 gains less**: about 1.4x at n = 400 and none at n = 100 once the family is
+   charged. r1 already ranks a single essential reaction well, and at n = 400 the planted
+   essential reaction is often not a cut from the full pool, because universe reactions
+   add alternatives.
+3. **Marginal accuracy improves modestly**: about 20% lower error at 20k LPs on no-growth
+   n = 100, and no loss on growth tasks. LPs to error 0.03 are unchanged (2000 at n = 100).
+   Wall-clock to 0.03 is about 20% slower (2.2 s vs 1.8 s), from per-step Python
+   (recomputing the set options twice per set step). Caching the options per state would
+   remove that.
+4. **The swap move does not earn its place.** Swapping an absent cut set for a present one
+   raises set-move acceptance (0.46 vs 0.29 on k = 1) but leaves error within noise
+   (0.0086 vs 0.0090). The cut-set move alone is the version to keep.
+5. **The first move's weight mattered less than its targeting**: a constant 0.3 spent
+   ~85% of set moves on rejected proposals. Weighting by agreement with the observation
+   fixed that.
+
+**Benchmark notes.** In tasks 18 and 19, one reaction of the planted "synthetic-lethal
+pair" is essential on its own in the task's background, so those are really k = 1. Runs
+before `v13d` drew one random number fewer per step, so their arm medians are not
+comparable to later runs except as noise estimates. That noise is large: uniform's median
+first match on one cell moved 481 -> 180 between runs from the RNG stream alone. Compare
+arms only within one run.
+
+**Next.** Move the sampler, including the cut-set move with support-branching families,
+into `src/` (§17.16 step 3), and cache set options per state when that happens. Step 2
+(the reconstruction sampler with calibrated priors and real 20HM data) is now the main
+open item. Multi-edit *completions* from the draft (growth k = 2) still take ~300 LPs at
+n = 100. Their dual is minimal completion sets, which is §17.12's R2, and the same
+fixed-family construction applies once those sets can be enumerated cheaply.
